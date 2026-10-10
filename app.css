@@ -292,3 +292,30 @@ code { font-size: .88em; background: var(--sunk); padding: .1em .35em; border-ra
   .search { min-width: 0; width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* ---------- Hábitos ---------- */
+.habits > h2 .hb-manage { margin-left: auto; font-size: 13px; color: var(--brand); font-weight: 600; }
+.hb-grid { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-m); padding: 10px 12px; }
+.hb-row { display: grid; grid-template-columns: minmax(0, 1fr) repeat(7, 26px) 40px; gap: 4px; align-items: center; }
+.hb-row + .hb-row { margin-top: 6px; }
+.hb-head span { font-size: 11px; color: var(--muted); text-align: center; font-weight: 600; }
+.hb-head .is-today { color: var(--ink); }
+.hb-name { border: 0; background: none; padding: 0; text-align: left; font-weight: 600; font-size: 14px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.hb-name:hover { color: var(--c); }
+.hb-cell { width: 22px; height: 22px; margin: 0 auto; border-radius: 6px; border: 2px solid color-mix(in srgb, var(--c) 45%, var(--line)); background: var(--surface); cursor: pointer; padding: 0; transition: transform .08s; }
+.hb-cell:hover { border-color: var(--c); }
+.hb-cell:active { transform: scale(.9); }
+.hb-cell.on { background: var(--c); border-color: var(--c); }
+.hb-cell.off:not(.on) { border-style: dashed; border-color: var(--line); background: transparent; }
+.hb-cell.is-today { width: 26px; height: 26px; box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px color-mix(in srgb, var(--c) 35%, transparent); }
+.hb-seq { font-size: 13px; font-weight: 700; text-align: right; white-space: nowrap; }
+.hb-days, .hb-colors { border: 1px solid var(--line); border-radius: var(--r-m); padding: 8px 12px 10px; margin: 0; display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+.hb-days legend, .hb-colors legend { font-size: 13px; font-weight: 600; color: var(--muted); padding: 0 4px; }
+.modal-body .chk { flex-direction: row; align-items: center; gap: 4px; font-weight: 500; color: var(--ink); }
+.modal-body .chk input { width: auto; }
+.hb-days .quick-dates { flex-basis: 100%; }
+.swatch { cursor: pointer; }
+.swatch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.swatch span { display: block; width: 26px; height: 26px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px transparent; }
+.swatch input:checked + span { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--c); }
+.swatch input:focus-visible + span { outline: 2px solid var(--brand); outline-offset: 4px; }

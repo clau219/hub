@@ -3,7 +3,7 @@ import * as db from './db.js';
 import { today, addDays, diffDays, localDate, hhmm, ABERTAS } from './util.js';
 import { CONFIG } from './config.js';
 
-export const TABLES = ['contacts', 'deals', 'quotes', 'tasks', 'properties', 'bookings', 'events', 'calendar_sources'];
+export const TABLES = ['contacts', 'deals', 'quotes', 'tasks', 'properties', 'bookings', 'events', 'calendar_sources', 'habits', 'habit_logs'];
 export const S = Object.fromEntries(TABLES.map(t => [t, []]));
 const listeners = new Set();
 export const onChange = fn => listeners.add(fn);

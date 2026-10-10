@@ -2,6 +2,7 @@ import { S, items, atencao, prop, ocupacao, save } from './store.js';
 import { h, today, addDays, fmtDate, relDate, weekdayShort, areaTag, brl, hhmm } from './util.js';
 import { openItem, dealDone, snooze, toggleTask, taskForm, dealForm, toast } from './ui.js';
 import { CONFIG } from './config.js';
+import * as habitos from './habitos.js';
 
 let bound = [];
 
@@ -99,6 +100,7 @@ export function render(el) {
       </section>
     </div>
     <aside class="col-side">
+      ${habitos.bloco()}
       <section class="block">
         <h2>Ocupação das casas</h2>
         ${ocupacaoStrip()}
@@ -119,6 +121,7 @@ export function render(el) {
 
   el.onclick = async ev => {
     const b = ev.target.closest('button'); if (!b) return;
+    if (await habitos.onClick(b)) return;
     if (b.dataset.open) return openItem(bound[+b.dataset.open]);
     if (b.dataset.done) {
       const it = bound[+b.dataset.done];
