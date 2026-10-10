@@ -1,5 +1,5 @@
 // Service worker: cache do app (abre rápido e offline) + notificações push
-const CACHE = 'hub-v2';
+const CACHE = 'hub-v3';
 const ASSETS = ['./', 'index.html', 'app.css', 'app.js', 'config.js', 'db.js', 'store.js', 'util.js', 'ui.js', 'push.js',
   'v-hoje.js', 'v-pipeline.js', 'v-agenda.js', 'v-alugueis.js', 'v-tarefas.js', 'v-contatos.js', 'v-ajustes.js',
   'manifest.webmanifest', 'icon.svg'];

@@ -3,10 +3,12 @@ import * as db from './db.js';
 import { h, fmtDate, localDate } from './util.js';
 import { modal, toast, confirmInline } from './ui.js';
 import { CONFIG } from './config.js';
-import { enablePush, pushStatus } from './push.js';
+import { enablePush, pushStatus, testPush } from './push.js';
 
 export async function render(el) {
   const push = await pushStatus();
+  let feed = 'SEU_FEED_TOKEN';
+  if (db.mode === 'supabase') { const { data } = await db.client().from('app_config').select('value').eq('key', 'feed_token').maybeSingle(); if (data) feed = data.value; }
   const fn = CONFIG.SUPABASE_URL ? CONFIG.SUPABASE_URL.replace(/\/$/, '') + '/functions/v1' : null;
   el.innerHTML = `
   <div class="view-head"><h1>Ajustes</h1></div>
@@ -29,15 +31,15 @@ export async function render(el) {
   <section class="block">
     <h2>Levar o Hub para o Google Agenda</h2>
     <p class="muted">Assine estes endereços no Google Agenda (Outras agendas, “Do URL”). Ficam dois calendários separados: Aluguéis (Airbnb + diretas) e Gigs do pipeline. O Google atualiza assinaturas a cada algumas horas.</p>
-    ${fn ? `<p><b>Aluguéis</b><br><code class="sel">${fn}/ical-feed?cal=alugueis&token=SEU_FEED_TOKEN</code></p>
-            <p><b>Gigs DJ</b><br><code class="sel">${fn}/ical-feed?cal=dj&token=SEU_FEED_TOKEN</code></p>`
+    ${fn ? `<p><b>Aluguéis</b><br><code class="sel">${fn}/ical-feed?cal=alugueis&token=${feed}</code></p>
+            <p><b>Gigs DJ</b><br><code class="sel">${fn}/ical-feed?cal=dj&token=${feed}</code></p>`
       : '<p class="muted">Disponível depois de conectar o Supabase.</p>'}
   </section>
 
   <section class="block">
     <h2>Notificações</h2>
     <p>${push}</p>
-    <button class="btn" id="pushOn">Ativar notificações neste aparelho</button>
+    <div class="row-btns"><button class="btn" id="pushOn">Ativar notificações neste aparelho</button><button class="btn" id="pushTest">Enviar teste</button></div>
     <p class="muted small">Resumo às 7h30 e fechamento às 18h, com o que está atrasado, gigs e check-ins.</p>
   </section>
 
@@ -76,6 +78,7 @@ export async function render(el) {
     } catch (e) { toast('Falha na leitura: ' + e.message); ev.target.disabled = false; ev.target.textContent = 'Ler agora'; }
   });
   el.querySelector('#pushOn').onclick = async () => { try { await enablePush(); toast('Notificações ativadas'); render(el); } catch (e) { toast(e.message); } };
+  el.querySelector('#pushTest').onclick = async () => { try { const r = await testPush(); toast(r?.enviados ? 'Teste enviado' : 'Nenhum aparelho com notificação ativa'); } catch (e) { toast('Falha: ' + e.message); } };
   el.querySelector('#exp').onclick = () => {
     const blob = new Blob([JSON.stringify(Object.fromEntries(TABLES.map(t => [t, S[t]])), null, 1)], { type: 'application/json' });
     const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `hub-backup-${new Date().toISOString().slice(0, 10)}.json` });
