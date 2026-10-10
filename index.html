@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hub</title>
+<meta name="theme-color" content="#0f5f5a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="login" class="login" hidden>
+  <form id="loginForm" class="login-box">
+    <h1>Hub</h1>
+    <label>E-mail<input name="email" type="email" required autocomplete="username"></label>
+    <label>Senha<input name="password" type="password" required autocomplete="current-password"></label>
+    <button class="btn primary" type="submit">Entrar</button>
+    <p class="login-err" id="loginErr"></p>
+  </form>
+</div>
+
+<div id="app" class="app" hidden>
+  <nav class="side" aria-label="Seções">
+    <a class="brand" href="#/hoje">Hub</a>
+    <a href="#/hoje" data-route="hoje"><span class="ico">◐</span>Hoje</a>
+    <a href="#/pipeline" data-route="pipeline"><span class="ico">▤</span>Pipeline</a>
+    <a href="#/agenda" data-route="agenda"><span class="ico">▦</span>Agenda</a>
+    <a href="#/alugueis" data-route="alugueis"><span class="ico">⌂</span>Aluguéis</a>
+    <a href="#/tarefas" data-route="tarefas"><span class="ico">☐</span>Tarefas</a>
+    <a href="#/contatos" data-route="contatos"><span class="ico">☺</span>Contatos</a>
+    <a href="#/ajustes" data-route="ajustes" class="push-end"><span class="ico">⚙</span>Ajustes</a>
+  </nav>
+
+  <div class="main">
+    <header class="top">
+      <form id="capture" class="capture" autocomplete="off">
+        <input id="captureInput" placeholder="Anotar algo…  ( / )   ex.: ligar p/ Guilherme amanhã #dj !" aria-label="Captura rápida">
+      </form>
+      <button class="btn" id="newDeal" type="button">Nova oportunidade</button>
+      <div class="clock" id="clock" aria-live="off"></div>
+    </header>
+    <div id="localBanner" class="banner" hidden>
+      Modo local: os dados ficam só neste navegador. Configure o Supabase em <code>js/config.js</code> para sincronizar.
+    </div>
+    <main id="view" tabindex="-1"></main>
+  </div>
+</div>
+
+<dialog id="modal" class="modal">
+  <form method="dialog" id="modalForm">
+    <header class="modal-head"><h2 id="modalTitle"></h2><button class="x" value="cancel" formnovalidate aria-label="Fechar">×</button></header>
+    <div id="modalBody" class="modal-body"></div>
+    <footer class="modal-foot" id="modalFoot"></footer>
+  </form>
+</dialog>
+<div id="toast" class="toast" role="status"></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
