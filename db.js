@@ -70,6 +70,33 @@ export async function update(table, id, patch) {
   return a[i];
 }
 
+// Insere várias linhas de uma vez (importação de CSV)
+export async function insertMany(table, rows) {
+  rows = rows.map(clean);
+  if (sb) {
+    const { error } = await sb.from(table).insert(rows);
+    if (error) throw error;
+    return;
+  }
+  const now = new Date().toISOString();
+  ls.set(table, ls.get(table).concat(rows.map(r => ({ id: crypto.randomUUID(), created_at: now, ...r }))));
+}
+
+// Insere ou atualiza pela coluna única `key` (ex.: um snapshot por dia)
+export async function upsert(table, row, key) {
+  row = clean(row);
+  if (sb) {
+    const { data, error } = await sb.from(table).upsert(row, { onConflict: key }).select().single();
+    if (error) throw error;
+    return data;
+  }
+  const a = ls.get(table);
+  const i = a.findIndex(r => r[key] === row[key]);
+  if (i < 0) a.push({ id: crypto.randomUUID(), created_at: new Date().toISOString(), ...row }); else a[i] = { ...a[i], ...row };
+  ls.set(table, a);
+  return a[i < 0 ? a.length - 1 : i];
+}
+
 export async function remove(table, id) {
   if (sb) {
     const { error } = await sb.from(table).delete().eq('id', id);

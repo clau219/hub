@@ -4,7 +4,8 @@ import { today, addDays, diffDays, localDate, hhmm, ABERTAS } from './util.js';
 import { CONFIG } from './config.js';
 import { acompanhada, pendentes, prazo } from './hospedagem.js';
 
-export const TABLES = ['contacts', 'deals', 'quotes', 'tasks', 'properties', 'bookings', 'events', 'calendar_sources', 'habits', 'habit_logs'];
+export const TABLES = ['contacts', 'deals', 'quotes', 'tasks', 'properties', 'bookings', 'events', 'calendar_sources', 'habits', 'habit_logs',
+  'crypto_watch', 'crypto_tx', 'crypto_snap'];
 export const S = Object.fromEntries(TABLES.map(t => [t, []]));
 const listeners = new Set();
 export const onChange = fn => listeners.add(fn);

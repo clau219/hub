@@ -8,9 +8,10 @@ import * as agenda from './v-agenda.js';
 import * as alugueis from './v-alugueis.js';
 import * as tarefas from './v-tarefas.js';
 import * as contatos from './v-contatos.js';
+import * as cripto from './v-cripto.js';
 import * as ajustes from './v-ajustes.js';
 
-const VIEWS = { hoje, pipeline, agenda, alugueis, tarefas, contatos, ajustes };
+const VIEWS = { hoje, pipeline, agenda, alugueis, tarefas, contatos, cripto, ajustes };
 const $ = s => document.querySelector(s);
 const route = () => (location.hash.replace(/^#\//, '') || 'hoje').split('?')[0];
 
