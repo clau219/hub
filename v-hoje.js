@@ -1,6 +1,6 @@
 import { S, items, atencao, prop, ocupacao, save } from './store.js';
 import { h, today, addDays, fmtDate, relDate, weekdayShort, areaTag, brl, hhmm } from './util.js';
-import { openItem, dealDone, snooze, toggleTask, taskForm, dealForm, toast } from './ui.js';
+import { openItem, dealDone, snooze, toggleTask, taskForm, dealForm, toast, etapaDone } from './ui.js';
 import { CONFIG } from './config.js';
 import * as habitos from './habitos.js';
 
@@ -8,16 +8,17 @@ let bound = [];
 
 function row(it, { late } = {}) {
   const idx = bound.push(it) - 1;
-  const done = it.kind === 'tarefa' || it.kind === 'acao';
+  const done = it.kind === 'tarefa' || it.kind === 'acao' || it.kind === 'etapa';
+  const canSnooze = it.kind === 'tarefa' || it.kind === 'acao';
   const icon = { acao: '●', tarefa: '○', gig: '♪', checkin: '↘', checkout: '↗', evento: '▪' }[it.kind];
   return `<li class="row ${late ? 'late' : ''} ${it.tentative ? 'tentative' : ''}" style="--c:var(--${areaVar(it.area)})">
-    ${done ? `<button class="tick" data-done="${idx}" title="${it.kind === 'acao' ? 'Feito, definir próximo passo' : 'Concluir'}" aria-label="Concluir"></button>` : `<span class="kind" aria-hidden="true">${icon}</span>`}
+    ${done ? `<button class="tick" data-done="${idx}" title="${it.kind === 'acao' ? 'Feito, definir próximo passo' : it.kind === 'etapa' ? 'Marcar etapa como feita' : 'Concluir'}" aria-label="Concluir"></button>` : `<span class="kind" aria-hidden="true">${icon}</span>`}
     <button class="row-main" data-open="${idx}">
       <span class="row-title">${it.time ? `<b class="time">${h(it.time)}</b>` : ''}${h(it.title)}${it.prio === 1 ? ' <span class="prio">alta</span>' : ''}</span>
       ${it.sub ? `<span class="row-sub">${h(it.sub)}</span>` : ''}
     </button>
     <span class="row-meta">${late ? `<span class="late-lbl">${it.motivo === 'atrasada' ? relDate(it.date) : it.motivo}</span>` : ''}${it.kind === 'gig' && it.ref.valor ? brl(it.ref.valor) : ''}</span>
-    ${done ? `<span class="row-act"><button class="mini" data-snz="${idx}:1">amanhã</button><button class="mini" data-snz="${idx}:3">+3d</button></span>` : ''}
+    ${canSnooze ? `<span class="row-act"><button class="mini" data-snz="${idx}:1">amanhã</button><button class="mini" data-snz="${idx}:3">+3d</button></span>` : ''}
   </li>`;
 }
 const areaVar = a => ({ dj: 'dj', alugueis: 'alug', aluguel: 'alug', consultoria: 'eng', flores: 'flores' }[a] || 'casa');
@@ -126,6 +127,7 @@ export function render(el) {
     if (b.dataset.done) {
       const it = bound[+b.dataset.done];
       if (it.kind === 'tarefa') return toggleTask(it.ref);
+      if (it.kind === 'etapa') return etapaDone(it.ref, it.etapa);
       return dealDone(it.ref);
     }
     if (b.dataset.snz) { const [i, n] = b.dataset.snz.split(':'); return snooze(bound[+i], +n); }

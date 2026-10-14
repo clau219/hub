@@ -319,3 +319,17 @@ code { font-size: .88em; background: var(--sunk); padding: .1em .35em; border-ra
 .swatch span { display: block; width: 26px; height: 26px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px transparent; }
 .swatch input:checked + span { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--c); }
 .swatch input:focus-visible + span { outline: 2px solid var(--brand); outline-offset: 4px; }
+
+/* Sequência da hospedagem */
+.hosp-steps { list-style: none; margin: 0 0 10px; padding: 0; counter-reset: st; }
+.hosp-steps li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; counter-increment: st; }
+.hosp-steps li + li { border-top: 1px solid var(--line); }
+.hosp-steps li[hidden] { display: none; }
+.hosp-steps .chk::before { content: counter(st) "."; color: var(--muted); font-size: 13px; min-width: 16px; }
+.hosp-steps label:has(input:checked) { color: var(--muted); text-decoration: line-through; }
+.hosp-when { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.hosp .link-btn { margin-top: 6px; }
+.seq { font-size: 13px; color: var(--muted); }
+.seq b { color: var(--ink); font-weight: 600; margin-right: 2px; }
+.seq.late, .seq.late b { color: var(--late); }
+.seq.ok { color: var(--alug); font-weight: 600; }

@@ -1,5 +1,6 @@
 import { h, today, addDays, ETAPAS, AREAS, ABERTAS, etapa, hhmm, localDate } from './util.js';
-import { S, save, del, ensureContact, byId, contactName } from './store.js';
+import { S, save, del, ensureContact, byId, contactName, prop } from './store.js';
+import { checklistHtml, bindChecklist, lerChecklist, alternar, ETAPAS_HOSP } from './hospedagem.js';
 
 const dlg = () => document.getElementById('modal');
 
@@ -172,9 +173,11 @@ export function bookingForm(b = {}) {
       <label>Valor total (R$)<input name="valor" type="number" step="0.01" value="${h(b.valor)}"></label>
       <label>Status<select name="status">${['confirmada', 'bloqueio', 'cancelada'].map(s => opt(s, s[0].toUpperCase() + s.slice(1), b.status || 'confirmada')).join('')}</select></label>
     </div>
+    ${checklistHtml(b)}
     <label>Notas<textarea name="notas" rows="2">${h(b.notas)}</textarea></label>`, {
     extra: b.id ? `<button type="button" class="btn danger" id="delBk">Excluir</button>` : '',
     onSubmit: async f => {
+      Object.assign(f, lerChecklist(f, b));
       if (f.checkout <= f.checkin) throw new Error('O check-out precisa ser depois do check-in.');
       const conflito = S.bookings.find(x => x.id !== b.id && x.property_id === f.property_id && x.status !== 'cancelada' && f.status !== 'cancelada' && x.checkin < f.checkout && x.checkout > f.checkin);
       if (conflito) throw new Error(`Conflito com a reserva de ${conflito.hospede || conflito.origem} (${conflito.checkin} a ${conflito.checkout}).`);
@@ -182,10 +185,17 @@ export function bookingForm(b = {}) {
       toast('Reserva salva');
     },
   });
+  bindChecklist(dlg(), () => prop(dlg().querySelector('[name=property_id]').value), b);
   dlg().querySelector('#delBk')?.addEventListener('click', async ev => {
     if (!confirmInline(ev.target)) return;
     await del('bookings', b.id); closeModal(); toast('Reserva excluída');
   });
+}
+
+// Marca uma etapa da hospedagem como feita (a partir da tela Hoje)
+export async function etapaDone(b, id) {
+  await save('bookings', { etapas: alternar(b, id, true) }, b.id);
+  toast(`${ETAPAS_HOSP.find(e => e.id === id).nome}: feito`);
 }
 
 // ---------- Evento manual na agenda ----------
@@ -227,7 +237,7 @@ export function confirmInline(btn) {
 // Abre o item certo a partir de um item unificado
 export function openItem(it) {
   if (it.kind === 'tarefa') return taskForm(it.ref);
-  if (it.kind === 'checkin' || it.kind === 'checkout') return bookingForm(it.ref);
+  if (it.kind === 'checkin' || it.kind === 'checkout' || it.kind === 'etapa') return bookingForm(it.ref);
   if (it.kind === 'evento') return eventForm(it.ref);
   return dealForm(it.ref);
 }

@@ -1,6 +1,7 @@
 import { S, prop, ocupacao } from './store.js';
 import { h, today, addDays, fmtDate, weekdayShort, brl, diffDays, relDate } from './util.js';
 import { bookingForm } from './ui.js';
+import { progresso, acompanhada, prazo } from './hospedagem.js';
 
 let offset = 0;
 
@@ -35,9 +36,9 @@ export function render(el) {
   <div class="cols">
     <section class="block col-main">
       <h2>Próximas reservas</h2>
-      ${fut.length ? `<table class="table"><thead><tr><th>Casa</th><th>Hóspede</th><th>Entrada</th><th>Saída</th><th>Noites</th><th>Origem</th><th class="num">Valor</th></tr></thead><tbody>
+      ${fut.length ? `<table class="table"><thead><tr><th>Casa</th><th>Hóspede</th><th>Entrada</th><th>Saída</th><th>Noites</th><th>Origem</th><th>Sequência</th><th class="num">Valor</th></tr></thead><tbody>
         ${fut.map(b => `<tr data-bk="${b.id}" tabindex="0"><td><span class="dot" style="--c:${prop(b.property_id).cor}"></span>${h(prop(b.property_id).nome)}</td><td>${h(b.hospede || (b.status === 'bloqueio' ? 'Bloqueio' : ''))}</td>
-          <td>${relDate(b.checkin)}</td><td>${fmtDate(b.checkout)}</td><td class="num">${diffDays(b.checkin, b.checkout)}</td><td>${h(b.origem)}</td><td class="num">${brl(b.valor)}</td></tr>`).join('')}
+          <td>${relDate(b.checkin)}</td><td>${fmtDate(b.checkout)}</td><td class="num">${diffDays(b.checkin, b.checkout)}</td><td>${h(b.origem)}</td><td>${seq(b)}</td><td class="num">${brl(b.valor)}</td></tr>`).join('')}
       </tbody></table>` : `<p class="empty">Nenhuma reserva futura. Cadastre as reservas diretas em “Nova reserva”. As do Airbnb entram sozinhas depois que você colar os links iCal em Ajustes.</p>`}
     </section>
     <aside class="col-side block">
@@ -54,4 +55,14 @@ export function render(el) {
   el.querySelectorAll('[data-o]').forEach(b => b.onclick = () => { offset = +b.dataset.o ? offset + +b.dataset.o : 0; render(el); });
   el.querySelector('#bkNew').onclick = () => bookingForm();
   el.querySelectorAll('[data-bk]').forEach(b => b.onclick = () => bookingForm(S.bookings.find(x => x.id === b.dataset.bk)));
+}
+
+// Progresso das etapas da hospedagem: "2/6 · Enviar contrato"
+function seq(b) {
+  if (b.status !== 'confirmada') return '';
+  const p = progresso(b);
+  if (!p.proxima) return `<span class="seq ok">${p.total}/${p.total} pronto</span>`;
+  if (!acompanhada(b)) return `<span class="seq">${p.feitas}/${p.total}</span>`;
+  const late = prazo(b, p.proxima) < today();
+  return `<span class="seq ${late ? 'late' : ''}"><b>${p.feitas}/${p.total}</b> ${h(p.proxima.nome)}${late ? ' (atrasada)' : ''}</span>`;
 }

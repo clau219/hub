@@ -2,6 +2,7 @@
 import * as db from './db.js';
 import { today, addDays, diffDays, localDate, hhmm, ABERTAS } from './util.js';
 import { CONFIG } from './config.js';
+import { acompanhada, pendentes, prazo } from './hospedagem.js';
 
 export const TABLES = ['contacts', 'deals', 'quotes', 'tasks', 'properties', 'bookings', 'events', 'calendar_sources', 'habits', 'habit_logs'];
 export const S = Object.fromEntries(TABLES.map(t => [t, []]));
@@ -68,6 +69,16 @@ export function items({ from, to, cals = ['dj', 'alugueis', 'pessoal'] } = {}) {
     if (!bloq && inR(b.checkin)) out.push({ kind: 'checkin', date: b.checkin, area: 'alugueis', title: `Check-in ${p.nome}`, sub: [b.hospede, b.origem].filter(Boolean).join(', '), ref: b });
     if (!bloq && inR(b.checkout)) out.push({ kind: 'checkout', date: b.checkout, area: 'alugueis', title: `Check-out ${p.nome}`, sub: b.hospede, ref: b });
   }
+  // Etapas pendentes das hospedagens (o que já venceu aparece em "Escapando")
+  const hoje = today();
+  for (const b of S.bookings) {
+    if (!acompanhada(b)) continue;
+    const p = prop(b.property_id);
+    for (const e of pendentes(b)) {
+      const d = prazo(b, e);
+      if (d >= hoje && inR(d)) out.push(etapaItem(b, e, d, p));
+    }
+  }
   for (const e of S.events) {
     if (!cals.includes(e.calendario)) continue;
     const d = e.dia_inteiro ? e.inicio.slice(0, 10) : localDate(e.inicio);
@@ -92,8 +103,20 @@ export function atencao() {
   }
   for (const t of S.tasks) if (!t.feito && t.prazo && t.prazo < hoje)
     out.push({ kind: 'tarefa', motivo: 'atrasada', date: t.prazo, area: t.area, title: t.titulo, ref: t });
+  // Hospedagem: só a etapa atrasada mais antiga de cada reserva, para não poluir
+  for (const b of S.bookings) {
+    if (!acompanhada(b)) continue;
+    const e = pendentes(b).find(e => prazo(b, e) < hoje);
+    if (e) out.push({ ...etapaItem(b, e, prazo(b, e), prop(b.property_id)), motivo: 'atrasada' });
+  }
   return out.sort((a, b) => a.date.localeCompare(b.date));
 }
+
+function etapaItem(b, e, d, p) {
+  return { kind: 'etapa', etapa: e.id, date: d, area: 'alugueis', title: `${e.nome} · ${p.nome}`,
+    sub: `${b.hospede || b.origem}, check-in ${fmtCheckin(b.checkin)}`, ref: b };
+}
+const fmtCheckin = d => d.split('-').reverse().slice(0, 2).join('/');
 
 export function ocupacao(propertyId, dia) {
   return S.bookings.find(b => b.property_id === propertyId && b.status !== 'cancelada' && b.checkin <= dia && b.checkout > dia);
