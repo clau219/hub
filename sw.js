@@ -1,17 +1,27 @@
 // Service worker: cache do app (abre rápido e offline) + notificações push
-const CACHE = 'hub-v6';
+const CACHE = 'hub-v7';
+const CDN = 'hub-cdn-v1'; // bibliotecas com versão fixa e fontes: não mudam, ficam em cache
 const ASSETS = ['./', 'index.html', 'app.css', 'app.js', 'config.js', 'db.js', 'store.js', 'util.js', 'ui.js', 'push.js', 'habitos.js', 'hospedagem.js',
   'v-hoje.js', 'v-pipeline.js', 'v-agenda.js', 'v-alugueis.js', 'v-tarefas.js', 'v-contatos.js', 'v-ajustes.js', 'cripto.js', 'v-cripto.js',
   'manifest.webmanifest', 'icon.svg'];
 
-self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting())); });
+// Um arquivo que falhe não impede a instalação (addAll falharia inteiro)
+self.addEventListener('install', e => {
+  e.waitUntil(caches.open(CACHE).then(c => Promise.allSettled(ASSETS.map(a => c.add(a)))).then(() => self.skipWaiting()));
+});
 self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE && k !== CDN).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
 // Rede primeiro (sempre a versão nova), cache como reserva
 self.addEventListener('fetch', e => {
   const u = new URL(e.request.url);
-  if (e.request.method !== 'GET' || u.origin !== location.origin) return;
+  if (e.request.method !== 'GET') return;
+  // Supabase JS (versão fixa no jsDelivr) e Google Fonts: cache primeiro, para o app abrir sem rede
+  if (u.hostname === 'cdn.jsdelivr.net' || u.hostname === 'fonts.googleapis.com' || u.hostname === 'fonts.gstatic.com') {
+    e.respondWith(caches.open(CDN).then(c => c.match(e.request).then(hit => hit || fetch(e.request).then(r => { if (r.ok || r.type === 'opaque') c.put(e.request, r.clone()); return r; }))));
+    return;
+  }
+  if (u.origin !== location.origin) return;
   e.respondWith(fetch(e.request).then(r => { const c = r.clone(); caches.open(CACHE).then(x => x.put(e.request, c)); return r; })
     .catch(() => caches.match(e.request)));
 });

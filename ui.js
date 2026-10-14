@@ -1,8 +1,26 @@
-import { h, today, addDays, ETAPAS, AREAS, ABERTAS, etapa, hhmm, localDate } from './util.js';
-import { S, save, del, ensureContact, byId, contactName, prop } from './store.js';
+import { h, today, addDays, ETAPAS, AREAS, ABERTAS, etapa, hhmm, localDate, waLink, msgDeal } from './util.js';
+import { S, save, del, ensureContact, byId, contactName, contatoPorNome, prop } from './store.js';
 import { checklistHtml, bindChecklist, lerChecklist, alternar, ETAPAS_HOSP } from './hospedagem.js';
 
 const dlg = () => document.getElementById('modal');
+
+// ---------- WhatsApp a partir de uma oportunidade ----------
+// Link com mensagem pronta para a etapa; null se o contato não tem telefone
+export function dealWa(d) {
+  const c = byId('contacts', d.contato_id);
+  return c?.telefone ? waLink(c.telefone, msgDeal(d, c.nome)) : null;
+}
+// Ao voltar para o Hub depois de abrir o WhatsApp, pergunta o próximo passo
+let aguardando = null;
+export function aposWhats(d) { aguardando = d.id; }
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || !aguardando) return;
+  const d = S.deals.find(x => x.id === aguardando);
+  aguardando = null;
+  if (d && ABERTAS.includes(d.etapa) && !dlg().open) setTimeout(() => dealDone(d, { titulo: 'Mensagem enviada? E agora?' }), 300);
+});
+const datasRapidas = () => `<div class="quick-dates">${[['Hoje', 0], ['Amanhã', 1], ['+3d', 3], ['+1 sem', 7]].map(([l, n]) => `<button type="button" class="chip" data-add="${n}">${l}</button>`).join('')}</div>`;
+const ligarDatas = m => m.querySelectorAll('[data-add]').forEach(b => b.onclick = () => (m.querySelector('[name=data_proxima_acao]').value = addDays(today(), +b.dataset.add)));
 
 export function toast(msg, ms = 2600) {
   const t = document.getElementById('toast');
@@ -47,6 +65,7 @@ export function dealForm(d = {}, preset = {}) {
     ${contactsList()}
     <div class="grid2">
       <label class="span2">Cliente / contratante<input name="contato" list="dlContatos" value="${h(contactName(d.contato_id))}" required autofocus></label>
+      <label>Telefone / WhatsApp<input name="telefone" type="tel" inputmode="tel" value="${h(byId('contacts', d.contato_id)?.telefone)}" placeholder="(84) 99999-0000"></label>
       <label>Negócio<select name="negocio">${['dj', 'consultoria', 'flores', 'aluguel'].map(n => opt(n, AREAS[n].nome, d.negocio)).join('')}</select></label>
       <label>Etapa<select name="etapa" id="fEtapa">${ETAPAS.map(x => opt(x.id, x.nome, d.etapa)).join('')}</select></label>
       <label>Valor (R$)<input name="valor" type="number" step="0.01" value="${h(d.valor)}"></label>
@@ -60,18 +79,19 @@ export function dealForm(d = {}, preset = {}) {
       <div class="grid2">
         <label class="span2 lbl-hide">O que fazer<input name="proxima_acao" value="${h(prox)}" placeholder="ex.: Enviar orçamento por WhatsApp"></label>
         <label>Quando<input name="data_proxima_acao" type="date" value="${h(proxData)}"></label>
-        <div class="quick-dates">${[['Hoje', 0], ['Amanhã', 1], ['+3d', 3], ['+1 sem', 7]].map(([l, n]) => `<button type="button" class="chip" data-add="${n}">${l}</button>`).join('')}</div>
+        ${datasRapidas()}
       </div>
     </fieldset>
     <label>Notas<textarea name="notas" rows="2">${h(d.notas)}</textarea></label>
     ${quotes.length ? `<div class="quotes"><b>Orçamentos</b>${quotes.map(q => `<div>${h(q.arquivo || q.versao || 'Orçamento')}${q.valor_total ? ': R$ ' + Number(q.valor_total).toLocaleString('pt-BR') : ''}${q.horas ? `, ${q.horas}h` : ''}</div>`).join('')}</div>` : ''}
   `, {
-    extra: d.id ? `<button type="button" class="btn danger" id="delDeal">Excluir</button>` : '',
+    extra: d.id ? `${dealWa(d) ? `<a class="btn wa" id="waDeal" href="${h(dealWa(d))}" target="_blank" rel="noopener">WhatsApp</a>` : ''}<button type="button" class="btn danger" id="delDeal">Excluir</button>` : '',
     onSubmit: async f => {
       const aberta = ABERTAS.includes(f.etapa);
       if (aberta && (!f.proxima_acao?.trim() || !f.data_proxima_acao))
         throw new Error('Defina a próxima ação e a data. Nada fica aberto sem um próximo passo.');
-      const contato_id = await ensureContact(f.contato, f.negocio === 'dj' ? 'contratante' : 'cliente');
+      if (f.telefone?.trim() && !waLink(f.telefone)) throw new Error('Telefone incompleto: use DDD + número.');
+      const contato_id = await ensureContact(f.contato, f.negocio === 'dj' ? 'contratante' : 'cliente', f.telefone);
       const titulo = d.titulo || `${AREAS[f.negocio].nome} — ${f.contato}`;
       const row = { titulo, negocio: f.negocio, etapa: f.etapa, contato_id, valor: f.valor, data_evento: f.data_evento,
         hora_inicio: f.hora_inicio, hora_fim: f.hora_fim, local: f.local, notas: f.notas,
@@ -90,7 +110,14 @@ export function dealForm(d = {}, preset = {}) {
     }
     sync();
   };
-  m.querySelectorAll('[data-add]').forEach(b => b.onclick = () => (m.querySelector('[name=data_proxima_acao]').value = addDays(today(), +b.dataset.add)));
+  ligarDatas(m);
+  // Contato já cadastrado: traz o telefone dele
+  m.querySelector('[name=contato]').addEventListener('change', ev => {
+    const tel = m.querySelector('[name=telefone]');
+    const c = contatoPorNome(ev.target.value);
+    if (c?.telefone && !tel.value) tel.value = c.telefone;
+  });
+  m.querySelector('#waDeal')?.addEventListener('click', () => { aposWhats(d); closeModal(); });
   m.querySelector('#delDeal')?.addEventListener('click', async () => {
     if (!confirmInline(m.querySelector('#delDeal'))) return;
     await del('deals', d.id); closeModal(); toast('Oportunidade excluída');
@@ -99,12 +126,13 @@ export function dealForm(d = {}, preset = {}) {
 }
 
 // Concluir a ação de um deal: pede a próxima (ou encerra)
-export function dealDone(d) {
-  modal('Ação feita. E agora?', `
+export function dealDone(d, { titulo = 'Ação feita. E agora?' } = {}) {
+  modal(titulo, `
     <p class="muted">${h(d.titulo)}: “${h(d.proxima_acao)}”</p>
     <div class="grid2">
       <label>Etapa<select name="etapa" id="fEtapa">${ETAPAS.map(x => opt(x.id, x.nome, d.etapa)).join('')}</select></label>
       <label>Quando<input name="data_proxima_acao" type="date" value="${addDays(today(), 3)}"></label>
+      ${datasRapidas()}
       <label class="span2" id="fNextLbl">Próxima ação<input name="proxima_acao" value="" placeholder="ex.: Cobrar resposta" autofocus></label>
     </div>`, {
     submit: 'Salvar próximo passo',
@@ -117,6 +145,7 @@ export function dealDone(d) {
     },
   });
   const m = dlg();
+  ligarDatas(m);
   m.querySelector('#fEtapa').onchange = ev => {
     const e2 = etapa(ev.target.value);
     m.querySelector('#fNextLbl').hidden = !e2.sug;

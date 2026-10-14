@@ -36,6 +36,15 @@
     <a href="#/ajustes" data-route="ajustes" class="push-end"><span class="ico">⚙</span>Ajustes</a>
   </nav>
 
+  <!-- Celular: 4 abas + botão de adicionar -->
+  <nav class="tabbar" aria-label="Seções">
+    <a href="#/hoje" data-route="hoje"><span class="ico">◐</span>Hoje</a>
+    <a href="#/pipeline" data-route="pipeline"><span class="ico">▤</span>Pipeline</a>
+    <button type="button" class="fab" id="fab" aria-label="Adicionar" aria-haspopup="dialog">+</button>
+    <a href="#/agenda" data-route="agenda"><span class="ico">▦</span>Agenda</a>
+    <button type="button" id="moreBtn" aria-haspopup="dialog"><span class="ico">⋯</span>Mais</button>
+  </nav>
+
   <div class="main">
     <header class="top">
       <form id="capture" class="capture" autocomplete="off">
@@ -47,6 +56,7 @@
     <div id="localBanner" class="banner" hidden>
       Modo local: os dados ficam só neste navegador. Configure o Supabase em <code>js/config.js</code> para sincronizar.
     </div>
+    <div id="syncBanner" class="banner warn" role="status" hidden></div>
     <main id="view" tabindex="-1"></main>
   </div>
 </div>
@@ -57,6 +67,25 @@
     <div id="modalBody" class="modal-body"></div>
     <footer class="modal-foot" id="modalFoot"></footer>
   </form>
+</dialog>
+<dialog id="sheetAdd" class="sheet" aria-label="Adicionar">
+  <form id="capture2" class="capture" autocomplete="off">
+    <input id="captureInput2" enterkeyhint="done" placeholder="Anotar algo…  ex.: ligar p/ Guilherme amanhã #dj !" aria-label="Captura rápida">
+  </form>
+  <div class="sheet-btns">
+    <button type="button" class="btn" data-add="deal">Oportunidade</button>
+    <button type="button" class="btn" data-add="reserva">Reserva</button>
+    <button type="button" class="btn" data-add="tarefa">Tarefa</button>
+  </div>
+</dialog>
+<dialog id="sheetMore" class="sheet" aria-label="Mais seções">
+  <nav class="sheet-links">
+    <a href="#/alugueis" data-route="alugueis"><span class="ico">⌂</span>Aluguéis</a>
+    <a href="#/tarefas" data-route="tarefas"><span class="ico">☐</span>Tarefas</a>
+    <a href="#/contatos" data-route="contatos"><span class="ico">☺</span>Contatos</a>
+    <a href="#/cripto" data-route="cripto"><span class="ico">₿</span>Cripto</a>
+    <a href="#/ajustes" data-route="ajustes"><span class="ico">⚙</span>Ajustes</a>
+  </nav>
 </dialog>
 <div id="toast" class="toast" role="status"></div>
 

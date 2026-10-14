@@ -1,5 +1,5 @@
 import { S, save, del } from './store.js';
-import { h, today, diffDays, fmtDate, brl, etapa } from './util.js';
+import { h, today, diffDays, fmtDate, brl, etapa, waLink } from './util.js';
 import { modal, toast, dealForm, confirmInline, closeModal } from './ui.js';
 
 let q = '';
@@ -38,7 +38,7 @@ export function render(el) {
 
 function contactForm(c = {}) {
   const ds = c.id ? S.deals.filter(d => d.contato_id === c.id) : [];
-  const wa = c.telefone ? 'https://wa.me/55' + c.telefone.replace(/\D/g, '').replace(/^55/, '') : null;
+  const wa = waLink(c.telefone);
   modal(c.id ? c.nome : 'Novo contato', `
     <div class="grid2">
       <label class="span2">Nome<input name="nome" value="${h(c.nome)}" required autofocus></label>

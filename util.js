@@ -72,6 +72,29 @@ export const ETAPAS = [
 export const etapa = id => ETAPAS.find(e => e.id === id) || { nome: id };
 export const ABERTAS = ['lead', 'orcamento', 'negociacao', 'fechado', 'realizado'];
 
+// ---------- WhatsApp ----------
+// Link wa.me com mensagem pronta. Aceita "(84) 99999-0000", "+55 84 9...", "084 9...".
+export function waLink(tel, txt = '') {
+  let n = String(tel || '').replace(/\D/g, '').replace(/^0+/, '');
+  if (n.length < 10) return null;
+  if (!(n.length >= 12 && n.startsWith('55'))) n = '55' + n;
+  return `https://wa.me/${n}${txt ? '?text=' + encodeURIComponent(txt) : ''}`;
+}
+// Mensagem sugerida conforme a etapa da oportunidade
+export function msgDeal(d, nome) {
+  const n = (nome || '').trim().split(/\s+/)[0] || '';
+  const oi = n ? `Oi, ${n}!` : 'Oi!';
+  const dj = d.negocio === 'dj';
+  const quem = dj ? 'Claudio (DJ CLAU)' : 'Claudio';
+  return {
+    lead: `${oi} Aqui é o ${quem}. ${dj ? 'Me passa a data, o local e o horário do evento que eu já te mando o orçamento?' : 'Me conta um pouco mais do que você precisa para eu te mandar uma proposta?'}`,
+    orcamento: `${oi} Tudo bem? Conseguiu ver ${dj ? 'o orçamento' : 'a proposta'}? Se quiser, ajusto o que precisar.`,
+    negociacao: `${oi} Para garantir a data, fechamos com um sinal. Posso te mandar o contrato?`,
+    fechado: `${oi} Passando para alinhar os detalhes${d.data_evento ? ` do dia ${fmtDate(d.data_evento)}` : ''}. Algum horário bom para conversarmos?`,
+    realizado: `${oi} Obrigado pela confiança! Segue a chave PIX para o pagamento do saldo:`,
+  }[d.etapa] || oi;
+}
+
 // ---------- Captura rápida: "ligar p/ Guilherme amanhã #dj !" ----------
 export function parseCapture(txt) {
   let t = ' ' + txt.trim() + ' ';

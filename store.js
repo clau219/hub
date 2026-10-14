@@ -16,9 +16,37 @@ const DEFAULT_PROPS = [
   { id: 'QS50', nome: 'Casa Terracota', cor: '#a16207' },
 ];
 
+// Situação da última carga: quando foi, o que falhou e se estamos usando a cópia guardada
+export const meta = { at: null, erro: null, offline: false, falhas: [] };
+const SNAP = 'hub:snap';
+let primeira = true;
+
 export async function load() {
-  const res = await Promise.all(TABLES.map(t => db.all(t).catch(e => { console.warn(t, e); return []; })));
-  TABLES.forEach((t, i) => (S[t] = res[i]));
+  const res = await Promise.allSettled(TABLES.map(t => db.all(t)));
+  const falhas = TABLES.filter((t, i) => res[i].status === 'rejected');
+  falhas.forEach(t => console.warn(t, res[TABLES.indexOf(t)].reason));
+  if (falhas.length === TABLES.length) {
+    // Nada veio (sem rede ou servidor fora): na primeira carga, usa o último estado bom; depois, mantém o que já está na tela
+    if (primeira) {
+      try {
+        const snap = JSON.parse(localStorage.getItem(SNAP) || 'null');
+        if (snap) { TABLES.forEach(t => (S[t] = snap.S[t] || [])); meta.at = snap.at; }
+      } catch {}
+    }
+    meta.offline = true;
+    meta.erro = res[0].reason?.message || 'Sem conexão';
+  } else {
+    // Tabela que falhou mantém o valor anterior em vez de virar lista vazia
+    TABLES.forEach((t, i) => { if (res[i].status === 'fulfilled') S[t] = res[i].value; });
+    meta.offline = false;
+    meta.erro = falhas.length ? `Não carregou: ${falhas.join(', ')}` : null;
+    meta.at = new Date().toISOString();
+    if (!falhas.length && db.mode === 'supabase') {
+      try { localStorage.setItem(SNAP, JSON.stringify({ at: meta.at, S: Object.fromEntries(TABLES.filter(t => t !== 'crypto_snap').map(t => [t, S[t]])) })); } catch {}
+    }
+  }
+  meta.falhas = falhas;
+  primeira = false;
   if (!S.properties.length && db.mode === 'local') {
     for (const p of DEFAULT_PROPS) await db.insert('properties', p);
     S.properties = await db.all('properties');
@@ -35,15 +63,20 @@ export async function del(table, id) { await db.remove(table, id); await load();
 
 export const byId = (t, id) => S[t].find(r => r.id === id);
 export const contactName = id => byId('contacts', id)?.nome || '';
+export const contatoPorNome = nome => S.contacts.find(c => c.nome.toLowerCase() === (nome || '').trim().toLowerCase());
 export const prop = id => S.properties.find(p => p.id === id) || { nome: id, cor: '#888' };
 
 // Garante um contato pelo nome (cria se não existir)
-export async function ensureContact(nome, tipo = 'cliente') {
+export async function ensureContact(nome, tipo = 'cliente', telefone = '') {
   nome = (nome || '').trim();
+  telefone = (telefone || '').trim();
   if (!nome) return null;
-  const c = S.contacts.find(c => c.nome.toLowerCase() === nome.toLowerCase());
-  if (c) return c.id;
-  const n = await db.insert('contacts', { nome, tipo, ultima_interacao: today() });
+  const c = contatoPorNome(nome);
+  if (c) {
+    if (telefone && telefone !== c.telefone) Object.assign(c, await db.update('contacts', c.id, { telefone }));
+    return c.id;
+  }
+  const n = await db.insert('contacts', { nome, tipo, telefone: telefone || null, ultima_interacao: today() });
   S.contacts.push(n);
   return n.id;
 }

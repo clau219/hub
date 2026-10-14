@@ -1,6 +1,6 @@
 import { S, contactName, save } from './store.js';
 import { h, ETAPAS, ABERTAS, AREAS, etapa, brl, relDate, today, fmtDate, addDays } from './util.js';
-import { dealForm, modal, toast } from './ui.js';
+import { dealForm, modal, toast, dealWa, aposWhats } from './ui.js';
 
 let filtro = 'todos';
 let mostrarFechados = false;
@@ -12,7 +12,7 @@ function card(d) {
     <header><b>${h(contactName(d.contato_id) || d.titulo)}</b>${d.valor ? `<span>${brl(d.valor)}</span>` : ''}</header>
     ${d.data_evento || d.local ? `<p class="card-ev">${d.data_evento ? fmtDate(d.data_evento) : ''}${d.data_evento && d.local ? ', ' : ''}${h((d.local || '').split(',')[0])}</p>` : ''}
     ${d.proxima_acao ? `<p class="card-next ${late ? 'late' : isToday ? 'today' : ''}"><span>${relDate(d.data_proxima_acao)}</span> ${h(d.proxima_acao)}</p>` : ''}
-    ${filtro === 'todos' ? `<span class="tag" style="--c:${AREAS[d.negocio]?.cor}">${AREAS[d.negocio]?.nome}</span>` : ''}
+    <footer>${filtro === 'todos' ? `<span class="tag" style="--c:${AREAS[d.negocio]?.cor}">${AREAS[d.negocio]?.nome}</span>` : ''}${dealWa(d) ? `<a class="mini wa" href="${h(dealWa(d))}" target="_blank" rel="noopener" data-wa="${d.id}" draggable="false">WhatsApp</a>` : ''}</footer>
   </article>`;
 }
 
@@ -51,7 +51,11 @@ export function render(el) {
   el.querySelector('#toggleClosed').onclick = () => { mostrarFechados = !mostrarFechados; render(el); };
   const open = id => dealForm(S.deals.find(d => d.id === id));
   el.querySelectorAll('.card, tr[data-id]').forEach(c => {
-    c.onclick = () => open(c.dataset.id);
+    c.onclick = e => {
+      const a = e.target.closest('a[data-wa]');
+      if (a) return aposWhats(S.deals.find(d => d.id === a.dataset.wa));
+      open(c.dataset.id);
+    };
     c.onkeydown = e => { if (e.key === 'Enter') open(c.dataset.id); };
   });
 

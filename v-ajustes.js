@@ -6,7 +6,8 @@ import { CONFIG } from './config.js';
 import { enablePush, pushStatus, testPush } from './push.js';
 
 export async function render(el) {
-  const push = await pushStatus();
+  // Se o service worker não responder, a tela não pode ficar em branco esperando
+  const push = await Promise.race([pushStatus().catch(e => e.message), new Promise(r => setTimeout(() => r('Não foi possível verificar agora.'), 3000))]);
   let feed = 'SEU_FEED_TOKEN';
   if (db.mode === 'supabase') { const { data } = await db.client().from('app_config').select('value').eq('key', 'feed_token').maybeSingle(); if (data) feed = data.value; }
   const fn = CONFIG.SUPABASE_URL ? CONFIG.SUPABASE_URL.replace(/\/$/, '') + '/functions/v1' : null;
@@ -52,7 +53,7 @@ export async function render(el) {
     <p class="muted small">Use a importação para carregar o arquivo <code>seed.json</code> com seus orçamentos antigos.</p>
   </section>`;
 
-  el.querySelector('#logout')?.addEventListener('click', async () => { await db.auth.signOut(); location.reload(); });
+  el.querySelector('#logout')?.addEventListener('click', async () => { await db.auth.signOut(); try { localStorage.removeItem('hub:snap'); } catch {} location.reload(); });
   el.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => { if (!confirmInline(b)) return; await del('calendar_sources', b.dataset.del); toast('Link removido'); });
   el.querySelector('#srcNew').onclick = () => modal('Adicionar link iCal', `
     <label>Nome<input name="nome" placeholder="ex.: Google DJ, Airbnb Casa Azul" required autofocus></label>

@@ -1,7 +1,7 @@
 import * as db from './db.js';
-import { load, onChange, save } from './store.js';
-import { parseCapture, fmtDate, relDate, AREAS } from './util.js';
-import { toast, dealForm } from './ui.js';
+import { load, onChange, save, meta, atencao } from './store.js';
+import { parseCapture, fmtDate, relDate, AREAS, hhmm } from './util.js';
+import { toast, dealForm, bookingForm, taskForm } from './ui.js';
 import * as hoje from './v-hoje.js';
 import * as pipeline from './v-pipeline.js';
 import * as agenda from './v-agenda.js';
@@ -14,11 +14,16 @@ import * as ajustes from './v-ajustes.js';
 const VIEWS = { hoje, pipeline, agenda, alugueis, tarefas, contatos, cripto, ajustes };
 const $ = s => document.querySelector(s);
 const route = () => (location.hash.replace(/^#\//, '') || 'hoje').split('?')[0];
+const NO_MAIS = ['alugueis', 'tarefas', 'contatos', 'cripto', 'ajustes'];
 
 function render() {
   const r = VIEWS[route()] ? route() : 'hoje';
-  document.querySelectorAll('.side a[data-route]').forEach(a => a.classList.toggle('on', a.dataset.route === r));
+  document.querySelectorAll('a[data-route]').forEach(a => a.classList.toggle('on', a.dataset.route === r));
+  $('#moreBtn').classList.toggle('on', NO_MAIS.includes(r));
+  syncBanner();
+  try { navigator.setAppBadge?.(atencao().length).catch(() => {}); } catch {}
   const el = $('#view');
+  el.onclick = null; // o #view é compartilhado: o clique da tela anterior (Hoje) não pode valer na próxima
   const y = window.scrollY;
   VIEWS[r].render(el);
   window.scrollTo(0, y);
@@ -34,18 +39,34 @@ async function start() {
   window.addEventListener('hashchange', () => { render(); window.scrollTo(0, 0); });
   await load();
 
-  // Captura rápida
-  $('#capture').onsubmit = async ev => {
-    ev.preventDefault();
-    const inp = $('#captureInput');
-    if (!inp.value.trim()) return;
-    const t = parseCapture(inp.value);
-    if (!t.titulo) return;
-    await save('tasks', t);
-    inp.value = '';
-    toast(`Anotado${t.prazo ? ' para ' + relDate(t.prazo) : ' na caixa de entrada'}${t.area !== 'inbox' ? ` (${AREAS[t.area].nome})` : ''}`);
+  // Captura rápida (barra do topo no computador, folha "+" no celular)
+  const capturar = (form, inp) => {
+    form.onsubmit = async ev => {
+      ev.preventDefault();
+      if (!inp.value.trim()) return;
+      const t = parseCapture(inp.value);
+      if (!t.titulo) return;
+      await save('tasks', t);
+      inp.value = '';
+      form.closest('dialog')?.close();
+      toast(`Anotado${t.prazo ? ' para ' + relDate(t.prazo) : ' na caixa de entrada'}${t.area !== 'inbox' ? ` (${AREAS[t.area].nome})` : ''}`);
+    };
   };
+  capturar($('#capture'), $('#captureInput'));
+  capturar($('#capture2'), $('#captureInput2'));
   $('#newDeal').onclick = () => dealForm();
+
+  // Folhas do celular: tocar fora fecha; escolher um link ou botão também
+  for (const sh of [$('#sheetAdd'), $('#sheetMore')]) {
+    sh.addEventListener('click', e => { if (e.target === sh || e.target.closest('a')) sh.close(); });
+  }
+  $('#fab').onclick = () => { $('#sheetAdd').showModal(); setTimeout(() => $('#captureInput2').focus(), 50); };
+  $('#moreBtn').onclick = () => $('#sheetMore').showModal();
+  $('#sheetAdd').querySelectorAll('[data-add]').forEach(b => b.onclick = () => {
+    $('#sheetAdd').close();
+    ({ deal: () => dealForm(), reserva: () => bookingForm(), tarefa: () => taskForm({ area: 'inbox' }) })[b.dataset.add]();
+  });
+  $('#syncBanner').onclick = e => { if (e.target.closest('[data-reload]')) load(); };
 
   // Atalhos: "/" foca a captura, "n" nova oportunidade
   document.addEventListener('keydown', e => {
@@ -58,10 +79,30 @@ async function start() {
   const tick = () => ($('#clock').textContent = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' }).format(new Date()));
   tick(); setInterval(tick, 15000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden && !$('#modal').open) load(); });
+  window.addEventListener('online', () => load());
   setInterval(() => { if (!document.hidden && !$('#modal').open) load(); }, 5 * 60 * 1000);
 
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 }
+
+// Faixa de aviso: sem conexão (dados guardados) ou falha parcial na leitura
+function syncBanner() {
+  const b = $('#syncBanner');
+  if (meta.offline) {
+    b.innerHTML = meta.at
+      ? `Sem conexão. Mostrando os dados de ${fmtDate(meta.at.slice(0, 10))}, ${hhmm(meta.at)}: o que mudou depois não aparece. <button class="link-btn" data-reload>Tentar de novo</button>`
+      : `Sem conexão e sem dados guardados neste aparelho. <button class="link-btn" data-reload>Tentar de novo</button>`;
+  } else if (meta.erro) {
+    b.innerHTML = `${meta.erro}. O que depende disso pode estar incompleto. <button class="link-btn" data-reload>Tentar de novo</button>`;
+  }
+  b.hidden = !meta.offline && !meta.erro;
+}
+
+// Gravação que falhou fora de um formulário (concluir, adiar…) não pode passar em silêncio
+window.addEventListener('unhandledrejection', e => {
+  console.error(e.reason);
+  toast(navigator.onLine === false ? 'Sem conexão: a alteração não foi salva.' : 'Não foi possível salvar: ' + (e.reason?.message || 'erro'), 5000);
+});
 
 function showLogin() {
   $('#login').hidden = false;
