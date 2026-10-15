@@ -492,3 +492,18 @@ kbd { font: 600 11px/1 var(--f); border: 1px solid var(--line); border-bottom-wi
   .pal { margin: 0 auto auto; width: 100%; border-radius: 0 0 14px 14px; }
   .pal-foot { display: none; }
 }
+
+/* Consulta Airbnb */
+.grid3 { display: grid; grid-template-columns: 1fr 1fr 110px; gap: 10px 12px; }
+.grid3 > label, .grid3 input { min-width: 0; }
+@media (max-width: 560px) { .grid3 { grid-template-columns: 1fr 1fr; } }
+.ab-cab { font-size: 13px; margin: 14px 0 6px; }
+.ab-list { list-style: none; margin: 0 0 12px; padding: 0; }
+.ab-list li { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+.ab-nome { font-weight: 600; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+.ab-nome a { font-size: 12px; font-weight: 400; color: var(--muted); }
+.ab-st { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--sunk); color: var(--muted); }
+.ab-st.ok { color: var(--brand); }
+.ab-st.warn, .ab-st.no { color: var(--late); }
+.ab-det { grid-column: 2 / 4; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 14px; }
+.ab-det small { color: var(--muted); font-size: 13px; }
