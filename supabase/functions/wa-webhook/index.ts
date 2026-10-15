@@ -6,7 +6,7 @@
 // O robô só informa disponibilidade e valor: nunca confirma reserva, não negocia e não responde o que não entendeu.
 //
 // Segredos (supabase secrets set): WA_VERIFY_TOKEN, WA_APP_SECRET, WA_TOKEN, ANTHROPIC_API_KEY
-// Opcionais: WA_PHONE_ID (senão usa o do webhook), WA_GRAPH_VERSION (padrão v23.0)
+// Opcionais: WA_PHONE_ID (senão usa o do webhook), WA_GRAPH_VERSION (padrão v25.0)
 // Teste sem a Meta: POST com cabeçalho x-hub-cron e corpo { "teste": { "wa_id": "5584...", "nome": "Ana", "texto": "..." } }
 //   (acrescente "eco": true para simular uma mensagem sua). Nada é enviado ao WhatsApp no teste.
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
@@ -16,7 +16,7 @@ import { z } from 'npm:zod@4.6.7';
 
 const SB_URL = Deno.env.get('SUPABASE_URL')!;
 const SB_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-const GRAPH = `https://graph.facebook.com/${Deno.env.get('WA_GRAPH_VERSION') || 'v23.0'}`;
+const GRAPH = `https://graph.facebook.com/${Deno.env.get('WA_GRAPH_VERSION') || 'v25.0'}`;
 const ABERTAS = ['lead', 'orcamento', 'negociacao', 'fechado', 'realizado'];
 const ACAO_RESPONDER = 'Responder WhatsApp';
 
