@@ -1,6 +1,7 @@
 import { h, today, addDays, ETAPAS, AREAS, ABERTAS, etapa, hhmm, localDate, waLink, msgDeal } from './util.js';
 import { S, save, del, ensureContact, byId, contactName, contatoPorNome, prop } from './store.js';
 import { checklistHtml, bindChecklist, lerChecklist, alternar, ETAPAS_HOSP } from './hospedagem.js';
+import * as db from './db.js';
 
 const dlg = () => document.getElementById('modal');
 export const MOTIVOS_PERDA = ['Preço', 'Data já ocupada', 'Parou de responder', 'Escolheu outro', 'Evento cancelado', 'Fora do perfil', 'Outro'];
@@ -85,6 +86,7 @@ export function dealForm(d = {}, preset = {}) {
     </fieldset>
     <label id="fPerda">Motivo da perda<select name="motivo_perda">${['', ...MOTIVOS_PERDA].map(m => opt(m, m || 'Escolha…', '')).join('')}</select></label>
     <label>Notas<textarea name="notas" rows="2">${h(d.notas)}</textarea></label>
+    <div id="waConv"></div>
     ${quotes.length ? `<div class="quotes"><b>Orçamentos</b>${quotes.map(q => `<div>${h(q.arquivo || q.versao || 'Orçamento')}${q.valor_total ? ': R$ ' + Number(q.valor_total).toLocaleString('pt-BR') : ''}${q.horas ? `, ${q.horas}h` : ''}</div>`).join('')}</div>` : ''}
   `, {
     extra: d.id ? `${dealWa(d) ? `<a class="btn wa" id="waDeal" href="${h(dealWa(d))}" target="_blank" rel="noopener">WhatsApp</a>` : ''}<button type="button" class="btn danger" id="delDeal">Excluir</button>` : '',
@@ -134,6 +136,26 @@ export function dealForm(d = {}, preset = {}) {
     await del('deals', d.id); closeModal(); toast('Oportunidade excluída');
   });
   sync();
+  if (d.id) conversaWa(m.querySelector('#waConv'), d.id);
+}
+
+// Conversa do WhatsApp das casas ligada à oportunidade (wa-webhook), com pausa do robô só para esta pessoa
+async function conversaWa(el, dealId) {
+  if (db.mode !== 'supabase' || !el) return;
+  const sb = db.client();
+  const [{ data: msgs }, { data: wc }] = await Promise.all([
+    sb.from('wa_messages').select('autor,texto,enviado_em').eq('deal_id', dealId).order('enviado_em').limit(60),
+    sb.from('wa_contacts').select('wa_id,bot_pausado').eq('deal_id', dealId).maybeSingle(),
+  ]);
+  if (!msgs?.length) return;
+  const quem = { cliente: 'Cliente', robo: 'Robô', claudio: 'Você' };
+  el.innerHTML = `<div class="wa-conv"><div class="wa-head"><b>Conversa no WhatsApp</b>${wc ? `<label class="wa-pausa"><input type="checkbox" ${wc.bot_pausado ? 'checked' : ''}> Robô pausado com esta pessoa</label>` : ''}</div>
+    <ol>${msgs.map(x => `<li class="wa-${x.autor}"><small>${quem[x.autor] || x.autor} · ${h(localDate(x.enviado_em).split('-').reverse().slice(0, 2).join('/'))} ${hhmm(x.enviado_em)}</small>${h(x.texto || '')}</li>`).join('')}</ol></div>`;
+  const ol = el.querySelector('ol'); ol.scrollTop = ol.scrollHeight;
+  el.querySelector('.wa-pausa input')?.addEventListener('change', async ev => {
+    const { error } = await sb.from('wa_contacts').update({ bot_pausado: ev.target.checked }).eq('wa_id', wc.wa_id);
+    toast(error ? 'Não foi possível salvar' : ev.target.checked ? 'Robô pausado para esta pessoa' : 'Robô ativo para esta pessoa');
+  });
 }
 
 // Concluir a ação de um deal: pede a próxima (ou encerra)

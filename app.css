@@ -507,3 +507,16 @@ kbd { font: 600 11px/1 var(--f); border: 1px solid var(--line); border-bottom-wi
 .ab-st.warn, .ab-st.no { color: var(--late); }
 .ab-det { grid-column: 2 / 4; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 14px; }
 .ab-det small { color: var(--muted); font-size: 13px; }
+
+/* Conversa do WhatsApp no card e ajustes do robô */
+.wa-conv { background: var(--sunk); border-radius: var(--r-s); padding: 10px 12px; }
+.wa-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; align-items: center; font-size: 14px; }
+.modal-body .wa-pausa { flex-direction: row; align-items: center; gap: 6px; font-weight: 500; }
+.modal-body .wa-pausa input { width: auto; }
+.wa-conv ol { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
+.wa-conv li { max-width: 85%; padding: 6px 10px; border-radius: 10px; font-size: 14px; white-space: pre-wrap; background: var(--surface); border: 1px solid var(--line); }
+.wa-conv li small { display: block; font-size: 11px; color: var(--muted); }
+.wa-conv li.wa-robo, .wa-conv li.wa-claudio { align-self: flex-end; border-color: var(--brand); }
+.wa-switch { display: flex; align-items: center; gap: 8px; margin: 6px 0 10px; cursor: pointer; }
+.wa-lims label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.wa-lims input { padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-s); background: var(--bg); color: var(--ink); max-width: 120px; }

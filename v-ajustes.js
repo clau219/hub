@@ -37,6 +37,13 @@ export async function render(el) {
       : '<p class="muted">Disponível depois de conectar o Supabase.</p>'}
   </section>
 
+  <section class="block" id="waBlock">
+    <h2>WhatsApp das casas</h2>
+    <p class="muted">Cada mensagem recebida vira uma oportunidade em Aluguéis. Perguntas de disponibilidade e valor são respondidas sozinhas com os preços do Airbnb; o resto fica para você. O robô nunca confirma reserva e fica quieto quando você responde pelo celular.</p>
+    <div id="waCfg"><p class="muted small">${db.mode === 'supabase' ? 'Carregando…' : 'Disponível depois de conectar o Supabase.'}</p></div>
+    ${fn ? `<p class="small"><b>URL do webhook</b> (para o painel da Meta)<br><code class="sel">${fn}/wa-webhook</code></p>` : ''}
+  </section>
+
   <section class="block">
     <h2>Notificações</h2>
     <p>${push}</p>
@@ -78,6 +85,7 @@ export async function render(el) {
       await load(); toast(`Leitura concluída: ${data?.eventos ?? 0} eventos, ${data?.reservas ?? 0} reservas`);
     } catch (e) { toast('Falha na leitura: ' + e.message); ev.target.disabled = false; ev.target.textContent = 'Ler agora'; }
   });
+  if (db.mode === 'supabase') waConfig(el.querySelector('#waCfg'));
   el.querySelector('#pushOn').onclick = async () => { try { await enablePush(); toast('Notificações ativadas'); render(el); } catch (e) { toast(e.message); } };
   el.querySelector('#pushTest').onclick = async () => { try { const r = await testPush(); toast(r?.enviados ? 'Teste enviado' : 'Nenhum aparelho com notificação ativa'); } catch (e) { toast('Falha: ' + e.message); } };
   el.querySelector('#exp').onclick = () => {
@@ -90,4 +98,26 @@ export async function render(el) {
     try { await db.bulkImport(JSON.parse(await f.text())); await load(); toast('Importação concluída'); }
     catch (e) { toast('Falha ao importar: ' + e.message); }
   };
+}
+
+// Liga/desliga do robô e limites (tabela wa_settings)
+async function waConfig(el) {
+  const sb = db.client();
+  const [{ data: c, error }, { data: ult }] = await Promise.all([
+    sb.from('wa_settings').select('*').eq('id', 1).maybeSingle(),
+    sb.from('wa_messages').select('enviado_em').eq('autor', 'cliente').order('enviado_em', { ascending: false }).limit(1).maybeSingle(),
+  ]);
+  if (error || !c) { el.innerHTML = '<p class="muted small">Tabelas do WhatsApp ainda não criadas (supabase/2026-10-15_whatsapp.sql).</p>'; return; }
+  el.innerHTML = `
+    <label class="wa-switch"><input type="checkbox" name="bot_ativo" ${c.bot_ativo ? 'checked' : ''}> <b>Resposta automática ligada</b></label>
+    <div class="grid2 wa-lims">
+      <label>Silêncio depois que você responde (horas)<input type="number" name="horas_silencio" min="0" max="168" value="${c.horas_silencio}"></label>
+      <label>Máximo de respostas automáticas por conversa em 24 h<input type="number" name="max_respostas_dia" min="1" max="20" value="${c.max_respostas_dia}"></label>
+    </div>
+    <p class="muted small">${ult ? `Última mensagem recebida: ${fmtDate(localDate(ult.enviado_em))}.` : 'Nenhuma mensagem recebida ainda.'}</p>`;
+  el.querySelectorAll('input').forEach(i => i.onchange = async () => {
+    const v = i.type === 'checkbox' ? i.checked : Math.max(+i.min, Math.min(+i.max, Math.round(+i.value || 0)));
+    const { error: er } = await sb.from('wa_settings').update({ [i.name]: v, updated_at: new Date().toISOString() }).eq('id', 1);
+    toast(er ? 'Não foi possível salvar' : i.name === 'bot_ativo' ? (v ? 'Robô ligado' : 'Robô desligado') : 'Salvo');
+  });
 }
