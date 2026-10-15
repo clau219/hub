@@ -11,7 +11,9 @@ export function render(el) {
   const dias = Array.from({ length: 35 }, (_, i) => addDays(ini, i));
   const fut = S.bookings.filter(b => b.checkout >= hoje && b.status !== 'cancelada').sort((a, b) => a.checkin.localeCompare(b.checkin));
   const mesAtual = hoje.slice(0, 7);
-  const receitaMes = S.bookings.filter(b => b.status === 'confirmada' && b.checkin.slice(0, 7) === mesAtual).reduce((s, b) => s + (+b.valor || 0), 0);
+  const doMes = S.bookings.filter(b => b.status === 'confirmada' && b.checkin.slice(0, 7) === mesAtual);
+  const receitaMes = doMes.reduce((s, b) => s + (+b.valor || 0), 0);
+  const comValor = doMes.filter(b => +b.valor > 0).length; // o Airbnb não informa valor: avisar que o total está incompleto
 
   el.innerHTML = `
   <div class="view-head">
@@ -44,7 +46,7 @@ export function render(el) {
     <aside class="col-side block">
       <h2>Este mês</h2>
       <dl class="pipe-sum">
-        <div><dt>Receita com check-in no mês</dt><dd>${brl(receitaMes) || 'R$ 0'}</dd></div>
+        <div><dt>Receita com check-in no mês${comValor < doMes.length ? `<br><small class="late-lbl">só ${comValor} de ${doMes.length} reservas têm valor</small>` : ''}</dt><dd>${brl(receitaMes) || 'R$ 0'}</dd></div>
         ${S.properties.map(p => {
           const ocup = Array.from({ length: 30 }, (_, i) => ocupacao(p.id, addDays(hoje, i))).filter(b => b && b.status === 'confirmada').length;
           return `<div><dt>${h(p.nome)}, próximos 30 dias</dt><dd>${Math.round(ocup / 30 * 100)}%<small>${ocup} noites</small></dd></div>`;

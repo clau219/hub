@@ -3,6 +3,7 @@ import { S, save, del, ensureContact, byId, contactName, contatoPorNome, prop } 
 import { checklistHtml, bindChecklist, lerChecklist, alternar, ETAPAS_HOSP } from './hospedagem.js';
 
 const dlg = () => document.getElementById('modal');
+export const MOTIVOS_PERDA = ['Preço', 'Data já ocupada', 'Parou de responder', 'Escolheu outro', 'Evento cancelado', 'Fora do perfil', 'Outro'];
 
 // ---------- WhatsApp a partir de uma oportunidade ----------
 // Link com mensagem pronta para a etapa; null se o contato não tem telefone
@@ -64,7 +65,7 @@ export function dealForm(d = {}, preset = {}) {
   modal(d.id ? 'Oportunidade' : 'Nova oportunidade', `
     ${contactsList()}
     <div class="grid2">
-      <label class="span2">Cliente / contratante<input name="contato" list="dlContatos" value="${h(contactName(d.contato_id))}" required autofocus></label>
+      <label class="span2">Cliente / contratante<input name="contato" list="dlContatos" value="${h(contactName(d.contato_id) || d._contato)}" required autofocus></label>
       <label>Telefone / WhatsApp<input name="telefone" type="tel" inputmode="tel" value="${h(byId('contacts', d.contato_id)?.telefone)}" placeholder="(84) 99999-0000"></label>
       <label>Negócio<select name="negocio">${['dj', 'consultoria', 'flores', 'aluguel'].map(n => opt(n, AREAS[n].nome, d.negocio)).join('')}</select></label>
       <label>Etapa<select name="etapa" id="fEtapa">${ETAPAS.map(x => opt(x.id, x.nome, d.etapa)).join('')}</select></label>
@@ -82,6 +83,7 @@ export function dealForm(d = {}, preset = {}) {
         ${datasRapidas()}
       </div>
     </fieldset>
+    <label id="fPerda">Motivo da perda<select name="motivo_perda">${['', ...MOTIVOS_PERDA].map(m => opt(m, m || 'Escolha…', '')).join('')}</select></label>
     <label>Notas<textarea name="notas" rows="2">${h(d.notas)}</textarea></label>
     ${quotes.length ? `<div class="quotes"><b>Orçamentos</b>${quotes.map(q => `<div>${h(q.arquivo || q.versao || 'Orçamento')}${q.valor_total ? ': R$ ' + Number(q.valor_total).toLocaleString('pt-BR') : ''}${q.horas ? `, ${q.horas}h` : ''}</div>`).join('')}</div>` : ''}
   `, {
@@ -91,6 +93,11 @@ export function dealForm(d = {}, preset = {}) {
       if (aberta && (!f.proxima_acao?.trim() || !f.data_proxima_acao))
         throw new Error('Defina a próxima ação e a data. Nada fica aberto sem um próximo passo.');
       if (f.telefone?.trim() && !waLink(f.telefone)) throw new Error('Telefone incompleto: use DDD + número.');
+      // O motivo da perda vai para as notas: com o tempo mostra por que se perde negócio
+      if (f.etapa === 'perdido' && d.etapa !== 'perdido') {
+        if (!f.motivo_perda) throw new Error('Diga o motivo da perda. Em alguns meses isso mostra o que ajustar.');
+        f.notas = `[Perdido: ${f.motivo_perda}]${f.notas ? ' ' + f.notas : ''}`;
+      }
       const contato_id = await ensureContact(f.contato, f.negocio === 'dj' ? 'contratante' : 'cliente', f.telefone);
       const titulo = d.titulo || `${AREAS[f.negocio].nome} — ${f.contato}`;
       const row = { titulo, negocio: f.negocio, etapa: f.etapa, contato_id, valor: f.valor, data_evento: f.data_evento,
@@ -101,7 +108,11 @@ export function dealForm(d = {}, preset = {}) {
     },
   });
   const m = dlg();
-  const sync = () => { m.querySelector('#fNext').hidden = !ABERTAS.includes(m.querySelector('#fEtapa').value); };
+  const sync = () => {
+    const et = m.querySelector('#fEtapa').value;
+    m.querySelector('#fNext').hidden = !ABERTAS.includes(et);
+    m.querySelector('#fPerda').hidden = et !== 'perdido' || d.etapa === 'perdido';
+  };
   m.querySelector('#fEtapa').onchange = ev => {
     const e2 = etapa(ev.target.value);
     if (e2.sug) {
@@ -134,12 +145,18 @@ export function dealDone(d, { titulo = 'Ação feita. E agora?' } = {}) {
       <label>Quando<input name="data_proxima_acao" type="date" value="${addDays(today(), 3)}"></label>
       ${datasRapidas()}
       <label class="span2" id="fNextLbl">Próxima ação<input name="proxima_acao" value="" placeholder="ex.: Cobrar resposta" autofocus></label>
+      <label class="span2" id="fPerda" hidden>Motivo da perda<select name="motivo_perda">${['', ...MOTIVOS_PERDA].map(m => opt(m, m || 'Escolha…', '')).join('')}</select></label>
     </div>`, {
     submit: 'Salvar próximo passo',
     onSubmit: async f => {
       const aberta = ABERTAS.includes(f.etapa);
       if (aberta && (!f.proxima_acao.trim() || !f.data_proxima_acao)) throw new Error('Defina a próxima ação e a data.');
-      await save('deals', { etapa: f.etapa, proxima_acao: aberta ? f.proxima_acao : null, data_proxima_acao: aberta ? f.data_proxima_acao : null }, d.id);
+      const row = { etapa: f.etapa, proxima_acao: aberta ? f.proxima_acao : null, data_proxima_acao: aberta ? f.data_proxima_acao : null };
+      if (f.etapa === 'perdido') {
+        if (!f.motivo_perda) throw new Error('Diga o motivo da perda.');
+        row.notas = `[Perdido: ${f.motivo_perda}]${d.notas ? ' ' + d.notas : ''}`;
+      }
+      await save('deals', row, d.id);
       if (d.contato_id) await save('contacts', { ultima_interacao: today() }, d.contato_id);
       toast('Próximo passo salvo');
     },
@@ -149,6 +166,7 @@ export function dealDone(d, { titulo = 'Ação feita. E agora?' } = {}) {
   m.querySelector('#fEtapa').onchange = ev => {
     const e2 = etapa(ev.target.value);
     m.querySelector('#fNextLbl').hidden = !e2.sug;
+    m.querySelector('#fPerda').hidden = ev.target.value !== 'perdido';
     if (e2.sug) { m.querySelector('[name=proxima_acao]').value = e2.sug; m.querySelector('[name=data_proxima_acao]').value = addDays(today(), e2.dias); }
   };
 }

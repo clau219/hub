@@ -36,7 +36,7 @@ export function render(el) {
   });
 }
 
-function contactForm(c = {}) {
+export function contactForm(c = {}) {
   const ds = c.id ? S.deals.filter(d => d.contato_id === c.id) : [];
   const wa = waLink(c.telefone);
   modal(c.id ? c.nome : 'Novo contato', `

@@ -6,7 +6,7 @@
 
 create or replace function public.is_owner() returns boolean
 language sql stable as
-$$ select coalesce(auth.jwt() ->> 'email', '') = 'claudiobrg@me.com' $$;
+$$ select lower(coalesce(auth.jwt() ->> 'email', '')) = 'claudiobrg@me.com' $$;
 
 do $$
 declare t text;

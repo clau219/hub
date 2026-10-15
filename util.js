@@ -96,15 +96,26 @@ export function msgDeal(d, nome) {
 }
 
 // ---------- Captura rápida: "ligar p/ Guilherme amanhã #dj !" ----------
+// Começando com "+" vira oportunidade: "+dj Ana Souza casamento 12/12" (a data é a do evento)
 export function parseCapture(txt) {
+  const deal = /^\s*\+/.test(txt);
+  if (deal) txt = txt.replace(/^\s*\+\s*/, '').replace(/^(dj|eng|obra|consultoria|flores|aluguel|alugueis)(?=\s|$)/i, '#$1');
   let t = ' ' + txt.trim() + ' ';
-  let area = 'inbox', prazo = null, prioridade = 2;
+  let area = deal ? 'dj' : 'inbox', prazo = null, prioridade = 2;
   const tags = { dj: 'dj', aluguel: 'alugueis', alugueis: 'alugueis', casa: 'casa', eng: 'consultoria', obra: 'consultoria', consultoria: 'consultoria', flores: 'flores', pessoal: 'pessoal' };
   t = t.replace(/\s#(\w+)/g, (m, k) => { if (tags[k.toLowerCase()]) area = tags[k.toLowerCase()]; return ' '; });
   t = t.replace(/\s!(?=\s)/g, () => { prioridade = 1; return ' '; });
   const hoje = today();
   t = t.replace(/\s(hoje)\s/i, () => { prazo = hoje; return ' '; });
+  t = t.replace(/\s(depois de amanh[ãa])\s/i, () => { prazo = addDays(hoje, 2); return ' '; });
   t = t.replace(/\s(amanh[ãa])\s/i, () => { prazo = addDays(hoje, 1); return ' '; });
+  t = t.replace(/\sem (\d{1,3}) dias?\s/i, (m, n) => { prazo = addDays(hoje, +n); return ' '; });
+  t = t.replace(/\s(?:(?:na )?pr[óo]xima semana|semana que vem)\s/i, () => { prazo = addDays(hoje, ((8 - dow(hoje)) % 7) || 7); return ' '; });
+  t = t.replace(/\sdia (\d{1,2})\s/i, (m, d) => {
+    let iso = `${hoje.slice(0, 7)}-${d.padStart(2, '0')}`;
+    if (iso < hoje) { const [y, mo] = hoje.split('-').map(Number); iso = mo === 12 ? `${y + 1}-01-${d.padStart(2, '0')}` : `${y}-${String(mo + 1).padStart(2, '0')}-${d.padStart(2, '0')}`; }
+    prazo = iso; return ' ';
+  });
   t = t.replace(/\s(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\s/, (m, d, mo, y) => {
     let yy = y ? (y.length === 2 ? '20' + y : y) : hoje.slice(0, 4);
     let iso = `${yy}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}`;
@@ -117,5 +128,7 @@ export function parseCapture(txt) {
     let n = (target - dow(hoje) + 7) % 7 || 7;
     prazo = addDays(hoje, n); return ' ';
   });
-  return { titulo: t.replace(/\s+/g, ' ').trim(), area, prazo, prioridade };
+  const titulo = t.replace(/\s+/g, ' ').trim();
+  if (deal) return { tipo: 'deal', texto: titulo, negocio: area === 'alugueis' ? 'aluguel' : ['dj', 'consultoria', 'flores'].includes(area) ? area : 'dj', data_evento: prazo };
+  return { titulo, area, prazo, prioridade };
 }

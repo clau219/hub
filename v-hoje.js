@@ -1,25 +1,45 @@
-import { S, items, atencao, prop, ocupacao, save } from './store.js';
+import { S, items, atencao, prop, ocupacao, save, marcarCiente } from './store.js';
 import { h, today, addDays, fmtDate, relDate, weekdayShort, areaTag, brl, hhmm } from './util.js';
 import { openItem, dealDone, snooze, toggleTask, taskForm, dealForm, toast, etapaDone, dealWa, aposWhats } from './ui.js';
 import { CONFIG } from './config.js';
 import * as habitos from './habitos.js';
 
 let bound = [];
+const abertos = new Set(); // grupos do Escapando expandidos ("ver mais")
+const LIMITE = 5;
+
+// Escapando em 3 grupos, do que custa dinheiro ao que é só seu
+const GRUPOS = [
+  ['dinheiro', 'Dinheiro em jogo', it => it.kind === 'acao'],
+  ['terceiros', 'Compromissos com outras pessoas', it => it.kind === 'etapa' || it.kind === 'conflito'],
+  ['pessoal', 'Tarefas', it => it.kind === 'tarefa'],
+];
+function escapando(att) {
+  const gs = GRUPOS.map(([id, nome, f]) => [id, nome, att.filter(f)]).filter(g => g[2].length);
+  const sub = gs.length > 1;
+  return gs.map(([id, nome, l]) => {
+    const vis = abertos.has(id) ? l : l.slice(0, LIMITE);
+    return `${sub ? `<h3 class="esc-g">${nome} <span class="count">${l.length}</span></h3>` : ''}
+      <ul class="list">${vis.map(i => row(i, { late: true })).join('')}</ul>
+      ${l.length > LIMITE ? `<button class="link-btn" data-mais="${id}">${abertos.has(id) ? 'Mostrar menos' : `Ver mais ${l.length - LIMITE}`}</button>` : ''}`;
+  }).join('');
+}
 
 function row(it, { late } = {}) {
   const idx = bound.push(it) - 1;
-  const done = it.kind === 'tarefa' || it.kind === 'acao' || it.kind === 'etapa';
+  const done = it.kind === 'tarefa' || it.kind === 'acao' || it.kind === 'etapa' || it.kind === 'conflito';
   const canSnooze = it.kind === 'tarefa' || it.kind === 'acao';
   const icon = { acao: '●', tarefa: '○', gig: '♪', checkin: '↘', checkout: '↗', evento: '▪' }[it.kind];
   const wa = it.kind === 'acao' ? dealWa(it.ref) : null;
-  const dica = it.kind === 'acao' ? 'Feito, definir próximo passo' : it.kind === 'etapa' ? 'Marcar etapa como feita' : 'Concluir';
-  return `<li class="row ${late ? 'late' : ''} ${it.tentative ? 'tentative' : ''} ${done ? 'swipe' : ''}" style="--c:var(--${areaVar(it.area)})">
+  const dica = it.kind === 'acao' ? 'Feito, definir próximo passo' : it.kind === 'etapa' ? 'Marcar etapa como feita' : it.kind === 'conflito' ? 'Ciente, já está combinado' : 'Concluir';
+  const lbl = it.motivo === 'atrasada' || it.motivo === 'conflito' ? relDate(it.date) : it.motivo;
+  return `<li class="row ${late ? (it.kind === 'conflito' ? 'conf' : 'late') : ''} ${it.tentative ? 'tentative' : ''} ${done ? 'swipe' : ''}" style="--c:var(--${areaVar(it.area)})">
     ${done ? `<button class="tick" data-done="${idx}" title="${dica}" aria-label="${h(dica + ': ' + it.title)}"></button>` : `<span class="kind" aria-hidden="true">${icon}</span>`}
     <button class="row-main" data-open="${idx}">
       <span class="row-title">${it.time ? `<b class="time">${h(it.time)}</b>` : ''}${h(it.title)}${it.prio === 1 ? ' <span class="prio">alta</span>' : ''}</span>
       ${it.sub ? `<span class="row-sub">${h(it.sub)}</span>` : ''}
     </button>
-    <span class="row-meta">${late ? `<span class="late-lbl">${it.motivo === 'atrasada' ? relDate(it.date) : it.motivo}</span>` : ''}${it.kind === 'gig' && it.ref.valor ? brl(it.ref.valor) : ''}</span>
+    <span class="row-meta">${late ? `<span class="late-lbl">${lbl}</span>` : ''}${it.kind === 'gig' && it.ref.valor ? brl(it.ref.valor) : ''}</span>
     ${canSnooze || wa ? `<span class="row-act">${wa ? `<a class="mini wa" href="${h(wa)}" target="_blank" rel="noopener" data-wa="${idx}" aria-label="WhatsApp: ${h(it.sub || it.title)}">WhatsApp</a>` : ''}${canSnooze ? `<button class="mini" data-snz="${idx}:1" aria-label="Adiar para amanhã: ${h(it.title)}">amanhã</button><button class="mini" data-snz="${idx}:3" aria-label="Adiar 3 dias: ${h(it.title)}">+3d</button>` : ''}</span>` : ''}
   </li>`;
 }
@@ -88,8 +108,8 @@ export function render(el) {
   <div class="cols">
     <div class="col-main">
       ${att.length ? `<section class="block warn">
-        <h2>Escapando</h2>
-        <ul class="list">${att.map(i => row(i, { late: true })).join('')}</ul>
+        <h2>Escapando <span class="count">${att.length}</span></h2>
+        ${escapando(att)}
       </section>` : ''}
       <section class="block">
         <h2>Hoje</h2>
@@ -128,8 +148,10 @@ export function render(el) {
     const b = ev.target.closest('button'); if (!b) return;
     if (await habitos.onClick(b)) return;
     if (b.dataset.open) return openItem(bound[+b.dataset.open]);
+    if (b.dataset.mais) { abertos.has(b.dataset.mais) ? abertos.delete(b.dataset.mais) : abertos.add(b.dataset.mais); return render(el); }
     if (b.dataset.done) {
       const it = bound[+b.dataset.done];
+      if (it.kind === 'conflito') { marcarCiente(it.chave); return toast('Ok, conflito marcado como resolvido'); }
       if (it.kind === 'tarefa') return toggleTask(it.ref);
       if (it.kind === 'etapa') return etapaDone(it.ref, it.etapa);
       return dealDone(it.ref);

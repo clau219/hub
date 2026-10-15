@@ -1,5 +1,5 @@
 import * as db from './db.js';
-import { load, onChange, save, meta, atencao } from './store.js';
+import { load, onChange, save, meta, atencao, S } from './store.js';
 import { parseCapture, fmtDate, relDate, AREAS, hhmm } from './util.js';
 import { toast, dealForm, bookingForm, taskForm } from './ui.js';
 import * as hoje from './v-hoje.js';
@@ -10,6 +10,7 @@ import * as tarefas from './v-tarefas.js';
 import * as contatos from './v-contatos.js';
 import * as cripto from './v-cripto.js';
 import * as ajustes from './v-ajustes.js';
+import * as paleta from './palette.js';
 
 const VIEWS = { hoje, pipeline, agenda, alugueis, tarefas, contatos, cripto, ajustes };
 const $ = s => document.querySelector(s);
@@ -45,6 +46,14 @@ async function start() {
       ev.preventDefault();
       if (!inp.value.trim()) return;
       const t = parseCapture(inp.value);
+      if (t.tipo === 'deal') {
+        // "+dj Ana Souza casamento 12/12": abre a oportunidade preenchida para conferir
+        inp.value = '';
+        form.closest('dialog')?.close();
+        const c = S.contacts.filter(c => t.texto.toLowerCase().startsWith(c.nome.toLowerCase())).sort((a, b) => b.nome.length - a.nome.length)[0];
+        const resto = c ? t.texto.slice(c.nome.length).trim() : t.texto;
+        return dealForm({}, { negocio: t.negocio, data_evento: t.data_evento, contato_id: c?.id, _contato: c ? '' : t.texto, notas: resto });
+      }
       if (!t.titulo) return;
       await save('tasks', t);
       inp.value = '';
@@ -55,6 +64,9 @@ async function start() {
   capturar($('#capture'), $('#captureInput'));
   capturar($('#capture2'), $('#captureInput2'));
   $('#newDeal').onclick = () => dealForm();
+  paleta.iniciar();
+  $('#searchBtn').onclick = () => paleta.abrir();
+  document.querySelector('[data-buscar]').onclick = e => { e.preventDefault(); $('#sheetMore').close(); paleta.abrir(); };
 
   // Folhas do celular: tocar fora fecha; escolher um link ou botão também
   for (const sh of [$('#sheetAdd'), $('#sheetMore')]) {

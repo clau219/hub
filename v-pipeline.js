@@ -5,18 +5,39 @@ import { dealForm, modal, toast, dealWa, aposWhats } from './ui.js';
 let filtro = 'todos';
 let mostrarFechados = false;
 
-function card(d) {
+// No celular, colunas lado a lado não cabem: vira uma lista pela data da próxima ação
+const estreito = matchMedia('(max-width: 760px)');
+let ultimoEl = null, ultimoModo = null;
+addEventListener('resize', () => {
+  if (estreito.matches !== ultimoModo && ultimoEl?.isConnected && location.hash.startsWith('#/pipeline')) render(ultimoEl);
+});
+
+function lista(deals) {
+  const hoje = today(), sem = addDays(hoje, 7);
+  const ab = deals.filter(d => ABERTAS.includes(d.etapa)).sort((a, b) => (a.data_proxima_acao || '').localeCompare(b.data_proxima_acao || ''));
+  const grupos = [
+    ['Atrasadas', ab.filter(d => d.data_proxima_acao < hoje)],
+    ['Hoje', ab.filter(d => d.data_proxima_acao === hoje)],
+    ['Próximos 7 dias', ab.filter(d => d.data_proxima_acao > hoje && d.data_proxima_acao <= sem)],
+    ['Depois', ab.filter(d => d.data_proxima_acao > sem)],
+  ].filter(g => g[1].length);
+  return grupos.map(([n, l]) => `<section class="block"><h2>${n} <span class="count">${l.length}</span></h2>
+    <div class="drop">${l.map(d => card(d, true)).join('')}</div></section>`).join('') || '<p class="empty">Nenhuma oportunidade aberta.</p>';
+}
+
+function card(d, comEtapa = false) {
   const late = d.data_proxima_acao && d.data_proxima_acao < today();
   const isToday = d.data_proxima_acao === today();
   return `<article class="card" draggable="true" data-id="${d.id}" tabindex="0" style="--c:${AREAS[d.negocio]?.cor}">
     <header><b>${h(contactName(d.contato_id) || d.titulo)}</b>${d.valor ? `<span>${brl(d.valor)}</span>` : ''}</header>
     ${d.data_evento || d.local ? `<p class="card-ev">${d.data_evento ? fmtDate(d.data_evento) : ''}${d.data_evento && d.local ? ', ' : ''}${h((d.local || '').split(',')[0])}</p>` : ''}
     ${d.proxima_acao ? `<p class="card-next ${late ? 'late' : isToday ? 'today' : ''}"><span>${relDate(d.data_proxima_acao)}</span> ${h(d.proxima_acao)}</p>` : ''}
-    <footer>${filtro === 'todos' ? `<span class="tag" style="--c:${AREAS[d.negocio]?.cor}">${AREAS[d.negocio]?.nome}</span>` : ''}${dealWa(d) ? `<a class="mini wa" href="${h(dealWa(d))}" target="_blank" rel="noopener" data-wa="${d.id}" draggable="false">WhatsApp</a>` : ''}</footer>
+    <footer>${comEtapa ? `<span class="tag" style="--c:var(--ink)">${etapa(d.etapa).nome}</span>` : ''}${filtro === 'todos' ? `<span class="tag" style="--c:${AREAS[d.negocio]?.cor}">${AREAS[d.negocio]?.nome}</span>` : ''}${dealWa(d) ? `<a class="mini wa" href="${h(dealWa(d))}" target="_blank" rel="noopener" data-wa="${d.id}" draggable="false">WhatsApp</a>` : ''}</footer>
   </article>`;
 }
 
 export function render(el) {
+  ultimoEl = el; ultimoModo = estreito.matches;
   const deals = S.deals.filter(d => filtro === 'todos' || d.negocio === filtro);
   const cols = ETAPAS.filter(e => ABERTAS.includes(e.id));
   const fechados = deals.filter(d => !ABERTAS.includes(d.etapa)).sort((a, b) => (b.data_evento || '').localeCompare(a.data_evento || ''));
@@ -28,7 +49,8 @@ export function render(el) {
     </div>
     <button class="btn primary" id="pNew">Nova oportunidade</button>
   </div>
-  <p class="muted small">Arraste os cartões entre colunas. Toda oportunidade aberta tem uma próxima ação com data.</p>
+  ${estreito.matches ? `<p class="muted small">Ordenadas pela próxima ação. Toque para abrir e mudar a etapa.</p>${lista(deals)}` : `
+  <p class="muted small">Arraste os cartões entre colunas, ou selecione um cartão e use <kbd>←</kbd> <kbd>→</kbd>. Toda oportunidade aberta tem uma próxima ação com data.</p>
   <div class="board">
     ${cols.map(c => {
       const l = deals.filter(d => d.etapa === c.id).sort((a, b) => (a.data_proxima_acao || '').localeCompare(b.data_proxima_acao || ''));
@@ -38,7 +60,7 @@ export function render(el) {
         <div class="drop">${l.map(card).join('') || '<p class="empty">Vazio</p>'}</div>
       </section>`;
     }).join('')}
-  </div>
+  </div>`}
   <section class="block">
     <button class="link-btn" id="toggleClosed">${mostrarFechados ? 'Esconder' : 'Mostrar'} pagos e perdidos (${fechados.length})</button>
     ${mostrarFechados ? `<table class="table"><thead><tr><th>Cliente</th><th>Evento</th><th>Local</th><th>Valor</th><th>Etapa</th></tr></thead><tbody>
@@ -56,7 +78,14 @@ export function render(el) {
       if (a) return aposWhats(S.deals.find(d => d.id === a.dataset.wa));
       open(c.dataset.id);
     };
-    c.onkeydown = e => { if (e.key === 'Enter') open(c.dataset.id); };
+    c.onkeydown = e => {
+      if (e.key === 'Enter') return open(c.dataset.id);
+      // ← → movem o cartão para a etapa vizinha
+      const passo = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+      const d = c.classList.contains('card') && passo && S.deals.find(x => x.id === c.dataset.id);
+      const para = d && ABERTAS[ABERTAS.indexOf(d.etapa) + passo];
+      if (para) { e.preventDefault(); mover(d, para); }
+    };
   });
 
   // Arrastar e soltar

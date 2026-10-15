@@ -48,8 +48,9 @@
   <div class="main">
     <header class="top">
       <form id="capture" class="capture" autocomplete="off">
-        <input id="captureInput" placeholder="Anotar algo…  ( / )   ex.: ligar p/ Guilherme amanhã #dj !" aria-label="Captura rápida">
+        <input id="captureInput" placeholder="Anotar algo…  ( / )   ex.: ligar p/ Guilherme amanhã #dj !   ·   +dj Ana 12/12 cria oportunidade" aria-label="Captura rápida">
       </form>
+      <button class="btn" id="searchBtn" type="button" title="Buscar (Ctrl+K)">Buscar <kbd>Ctrl K</kbd></button>
       <button class="btn" id="newDeal" type="button">Nova oportunidade</button>
       <div class="clock" id="clock" aria-live="off"></div>
     </header>
@@ -72,6 +73,7 @@
   <form id="capture2" class="capture" autocomplete="off">
     <input id="captureInput2" enterkeyhint="done" placeholder="Anotar algo…  ex.: ligar p/ Guilherme amanhã #dj !" aria-label="Captura rápida">
   </form>
+  <p class="muted small sheet-help">Comece com <b>+</b> para criar oportunidade: <i>+dj Ana 12/12</i>. Datas: amanhã, sex, 20/11, dia 20, em 3 dias, semana que vem.</p>
   <div class="sheet-btns">
     <button type="button" class="btn" data-add="deal">Oportunidade</button>
     <button type="button" class="btn" data-add="reserva">Reserva</button>
@@ -80,12 +82,19 @@
 </dialog>
 <dialog id="sheetMore" class="sheet" aria-label="Mais seções">
   <nav class="sheet-links">
+    <a href="#" data-buscar><span class="ico">⌕</span>Buscar</a>
     <a href="#/alugueis" data-route="alugueis"><span class="ico">⌂</span>Aluguéis</a>
     <a href="#/tarefas" data-route="tarefas"><span class="ico">☐</span>Tarefas</a>
     <a href="#/contatos" data-route="contatos"><span class="ico">☺</span>Contatos</a>
     <a href="#/cripto" data-route="cripto"><span class="ico">₿</span>Cripto</a>
     <a href="#/ajustes" data-route="ajustes"><span class="ico">⚙</span>Ajustes</a>
   </nav>
+</dialog>
+<dialog id="pal" class="pal" aria-label="Buscar e agir">
+  <input id="palIn" type="search" placeholder="Buscar cliente, reserva, tarefa… ou digite uma ação" autocomplete="off" enterkeyhint="go"
+    role="combobox" aria-expanded="true" aria-controls="palList" aria-autocomplete="list">
+  <ul id="palList" class="pal-list" role="listbox"></ul>
+  <p class="pal-foot muted small"><kbd>↑</kbd><kbd>↓</kbd> navegar · <kbd>Enter</kbd> abrir · <kbd>Esc</kbd> fechar</p>
 </dialog>
 <div id="toast" class="toast" role="status"></div>
 

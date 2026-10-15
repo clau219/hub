@@ -137,6 +137,7 @@ export function atencao() {
   }
   for (const t of S.tasks) if (!t.feito && t.prazo && t.prazo < hoje)
     out.push({ kind: 'tarefa', motivo: 'atrasada', date: t.prazo, area: t.area, title: t.titulo, ref: t });
+  out.push(...conflitos());
   // Hospedagem: só a etapa atrasada mais antiga de cada reserva, para não poluir
   for (const b of S.bookings) {
     if (!acompanhada(b)) continue;
@@ -144,6 +145,41 @@ export function atencao() {
     if (e) out.push({ ...etapaItem(b, e, prazo(b, e), prop(b.property_id)), motivo: 'atrasada' });
   }
   return out.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// ---------------------------------------------------------------
+// Conflitos de agenda: gig no mesmo dia de um check-in/check-out, ou na véspera de um check-out
+// (tocou de noite, tem casa para entregar de manhã). Marcar como "ciente" vale só neste aparelho.
+// ---------------------------------------------------------------
+const CIENTE = 'hub:conflitos-ok';
+const lerCiente = () => { try { return new Set(JSON.parse(localStorage.getItem(CIENTE) || '[]')); } catch { return new Set(); } };
+export function marcarCiente(chave) {
+  const s = lerCiente(); s.add(chave);
+  try { localStorage.setItem(CIENTE, JSON.stringify([...s].slice(-200))); } catch {}
+  listeners.forEach(fn => fn());
+}
+export function conflitos(dias = 30) {
+  const hoje = today(), fim = addDays(hoje, dias), ok = lerCiente(), out = [];
+  const gigs = S.deals.filter(d => d.negocio === 'dj' && d.data_evento && !['perdido', 'pago'].includes(d.etapa) && d.data_evento >= hoje && d.data_evento <= fim);
+  const movs = [];
+  for (const b of S.bookings) {
+    if (b.status !== 'confirmada') continue;
+    movs.push({ dia: b.checkin, tipo: 'Check-in', b }, { dia: b.checkout, tipo: 'Check-out', b });
+  }
+  for (const g of gigs) {
+    for (const m of movs) {
+      const mesmoDia = m.dia === g.data_evento;
+      const manhaSeguinte = m.tipo === 'Check-out' && m.dia === addDays(g.data_evento, 1);
+      if (!mesmoDia && !manhaSeguinte) continue;
+      const chave = `${g.id}|${m.b.id}|${m.tipo}`;
+      if (ok.has(chave)) continue;
+      const casa = prop(m.b.property_id).nome;
+      out.push({ kind: 'conflito', motivo: 'conflito', chave, date: g.data_evento, area: 'dj', ref: g,
+        title: `Gig ${contactName(g.contato_id) || g.titulo} × ${m.tipo} ${casa}`,
+        sub: `${mesmoDia ? 'No mesmo dia' : 'Check-out na manhã seguinte'} (${fmtCheckin(m.dia)}). Combine quem recebe ou entrega a casa.` });
+    }
+  }
+  return out;
 }
 
 function etapaItem(b, e, d, p) {
