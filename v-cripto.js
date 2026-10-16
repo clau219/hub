@@ -6,6 +6,7 @@ import {
   M, VELHO_MS, PADRAO, TIPOS, CORRETORAS, LIMITE_ISENCAO, LIMITE_DECLARACAO, FNG_PT,
   atualizar, atualizando, buscar, preco, reais, compacto, qtd, pct, sparkline, posicoes, calcular,
   paraCsv, interpretarCsv, resolverSimbolos, CSV_COLS, lerNumero, coinLabel,
+  H, STABLES, atualizarSinais, sinaisAtualizando, sinaisVencidos, anotarDominancia, indicadores, progresso,
 } from './cripto.js';
 
 let aba = 'mercado';
@@ -92,7 +93,7 @@ async function semear() {
 export function render(el) {
   viewEl = el;
   const q = location.hash.split('?')[1];
-  if (q === 'mercado' || q === 'carteira') aba = q;
+  if (q === 'mercado' || q === 'carteira' || q === 'sinais') aba = q;
   let semeado = false; try { semeado = !!localStorage.getItem('hub:cripto-semeado'); } catch { /* idem */ }
   if (db.mode === 'local' && !S.crypto_watch.length && !semeado) semear();
   refresh(false);
@@ -100,19 +101,19 @@ export function render(el) {
   el.innerHTML = `
   <div class="view-head">
     <h1>Cripto</h1>
-    <div class="seg" role="tablist">${[['mercado', 'Mercado'], ['carteira', 'Carteira']].map(([k, l]) => `<button role="tab" aria-selected="${aba === k}" class="${aba === k ? 'on' : ''}" data-aba="${k}">${l}</button>`).join('')}</div>
+    <div class="seg" role="tablist">${[['mercado', 'Mercado'], ['carteira', 'Carteira'], ['sinais', 'Sinais']].map(([k, l]) => `<button role="tab" aria-selected="${aba === k}" class="${aba === k ? 'on' : ''}" data-aba="${k}">${l}</button>`).join('')}</div>
     <span class="cr-at muted small" id="crAt">${atualizadoHa()}</span>
     <button class="btn" id="crRef" ${atualizando() ? 'disabled' : ''}>Atualizar</button>
-    ${aba === 'mercado' ? '<button class="btn primary" id="crAdd">Adicionar moeda</button>' : '<button class="btn primary" id="crTx">Novo lançamento</button>'}
+    ${aba === 'mercado' ? '<button class="btn primary" id="crAdd">Adicionar moeda</button>' : aba === 'carteira' ? '<button class="btn primary" id="crTx">Novo lançamento</button>' : ''}
   </div>
   ${erro ? `<p class="banner cr-banner">${h(erro)}${M.at ? ' Mostrando as últimas cotações salvas.' : ''}</p>` : ''}
-  ${aba === 'mercado' ? mercado() : carteira()}`;
+  ${aba === 'mercado' ? mercado() : aba === 'carteira' ? carteira() : sinais()}`;
 
   el.querySelectorAll('[data-aba]').forEach(b => b.onclick = () => { history.replaceState(null, '', '#/cripto?' + b.dataset.aba); aba = b.dataset.aba; render(el); });
   el.querySelector('#crRef').onclick = () => refresh(true);
   el.querySelector('#crAdd')?.addEventListener('click', addMoeda);
   el.querySelector('#crTx')?.addEventListener('click', () => txForm());
-  (aba === 'mercado' ? bindMercado : bindCarteira)(el);
+  ({ mercado: bindMercado, carteira: bindCarteira, sinais: bindSinais })[aba](el);
 }
 
 // ===============================================================
@@ -250,6 +251,165 @@ function addMoeda() {
   };
   inp.oninput = () => { clearTimeout(t); t = setTimeout(ir, 400); };
   inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); clearTimeout(t); ir(); } };
+}
+
+// ===============================================================
+// SINAIS
+// ===============================================================
+let erroSinais = '', erroSinaisAt = 0;
+let ajudaAberta = false;
+
+// Quadro + carteira + bitcoin (para o clima do mercado)
+const idsSinais = () => [...new Set(['bitcoin', ...posicoes(S.crypto_tx).ativos.map(p => p.coin_id), ...quadro().map(w => w.coin_id)])];
+const redesenhar = () => { if (viewEl && naTela() && aba === 'sinais') render(viewEl); };
+
+function refreshSinais() {
+  const ids = idsSinais();
+  if (sinaisAtualizando() || !sinaisVencidos(ids) || Date.now() - erroSinaisAt < 90e3) return;
+  atualizarSinais(ids, redesenhar)
+    .then(() => { erroSinais = ''; })
+    .catch(e => { erroSinais = e.message; erroSinaisAt = Date.now(); })
+    .finally(redesenhar);
+}
+
+const pctAbs = v => Math.abs(v).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + '%';
+const usd = v => preco(v, 'USD');
+
+// Cada sinal: k = 'desc' (preço descontado), 'alta' (preço esticado) ou 'info'; t = o quê; d = os números
+function sinaisMoeda(id, pos) {
+  const c = M.coins[id] || {};
+  const i = indicadores(id);
+  const s = [];
+  if (i) {
+    if (i.mm200 != null) {
+      const d = (i.atual / i.mm200 - 1) * 100;
+      if (d < 0) s.push({ k: 'desc', t: 'Abaixo da média de 200 dias', d: `${pctAbs(d)} abaixo de ${usd(i.mm200)}, a média do último ano` });
+      else if (d > 40) s.push({ k: 'alta', t: 'Muito acima da média de 200 dias', d: `${pctAbs(d)} acima de ${usd(i.mm200)}` });
+      else s.push({ k: 'info', t: 'Acima da média de 200 dias', d: `${pctAbs(d)} acima de ${usd(i.mm200)}` });
+    } else s.push({ k: 'info', t: 'Histórico curto', d: `só ${i.dias} dias de cotação; a média de 200 dias ainda não existe` });
+    if (i.mm50 != null && i.atual < i.mm50) s.push({ k: 'desc', t: 'Abaixo da média de 50 dias', d: `${pctAbs((i.atual / i.mm50 - 1) * 100)} abaixo de ${usd(i.mm50)}` });
+    if (i.rsi != null) {
+      const r = Math.round(i.rsi);
+      if (r < 30) s.push({ k: 'desc', t: `RSI em ${r}: sobrevendido`, d: 'abaixo de 30: nos últimos 14 dias as quedas pesaram bem mais que as altas' });
+      else if (r > 70) s.push({ k: 'alta', t: `RSI em ${r}: sobrecomprado`, d: 'acima de 70: nos últimos 14 dias as altas pesaram bem mais que as quedas' });
+      else s.push({ k: 'info', t: `RSI em ${r}`, d: r < 40 ? 'perto da zona de sobrevenda (abaixo de 30)' : r > 60 ? 'perto da zona de sobrecompra (acima de 70)' : 'zona neutra (entre 30 e 70)' });
+    }
+    const dd = (i.atual / i.max - 1) * 100;
+    const ath = c.ath != null && c.ath < -1 ? `; ${pctAbs(c.ath)} abaixo da máxima histórica` : '';
+    if (dd <= -30) s.push({ k: 'desc', t: 'Queda grande desde a máxima de 12 meses', d: `${pctAbs(dd)} abaixo de ${usd(i.max)}${ath}` });
+    else if (dd > -5) s.push({ k: 'alta', t: 'Perto da máxima de 12 meses', d: `${dd < -.05 ? `${pctAbs(dd)} abaixo de` : 'na'} máxima de ${usd(i.max)}` });
+    else s.push({ k: 'info', t: 'Distância da máxima de 12 meses', d: `${pctAbs(dd)} abaixo de ${usd(i.max)}${ath}` });
+    if (i.mm50 != null && i.mm200 != null) {
+      const sobe = i.mm50 > i.mm200;
+      s.push(i.cruzou
+        ? { k: 'info', t: sobe ? 'Cruz dourada recente' : 'Cruz da morte recente', d: `a média de 50 dias passou ${sobe ? 'para cima' : 'para baixo'} da de 200 há ${i.cruzou === 1 ? '1 dia' : `cerca de ${i.cruzou} dias`}` }
+        : { k: 'info', t: sobe ? 'Médias apontando alta' : 'Médias apontando baixa', d: `média de 50 dias (${usd(i.mm50)}) ${sobe ? 'acima' : 'abaixo'} da de 200` });
+    }
+  }
+  if (pos?.medio && c.brl) {
+    const d = (c.brl / pos.medio - 1) * 100;
+    s.push({ k: d < 0 ? 'desc' : 'info', t: d < 0 ? 'Abaixo do seu preço médio' : 'Acima do seu preço médio',
+      d: `${preco(c.brl)} está ${pctAbs(d)} ${d < 0 ? 'abaixo' : 'acima'} do seu preço médio de ${preco(pos.medio)}` });
+  }
+  const ordem = { desc: 0, alta: 1, info: 2 };
+  s.sort((a, b) => ordem[a.k] - ordem[b.k]);
+  return { i, s, n: s.filter(x => x.k === 'desc').length, dd: i?.mm200 ? i.atual / i.mm200 : 9 };
+}
+
+function clima(moedas) {
+  const out = [];
+  const f = M.fng, fh = H.fng?.v || [];
+  if (f) {
+    const m7 = fh.length >= 7 ? Math.round(fh.slice(0, 7).reduce((a, b) => a + b, 0) / 7) : null;
+    out.push({ k: f.v <= 25 ? 'desc' : f.v >= 75 ? 'alta' : 'info', t: `Medo e Ganância em ${f.v}: ${h(FNG_PT[f.c] || f.c)}`,
+      d: [m7 != null ? `média de 7 dias ${m7}` : '', fh.length > 7 ? `nos últimos 30 dias, de ${Math.min(...fh)} a ${Math.max(...fh)}` : '',
+        f.v <= 25 ? 'medo extremo é quando o índice fica em 25 ou menos' : f.v >= 75 ? 'ganância extrema é quando o índice fica em 75 ou mais' : ''].filter(Boolean).join('; ') });
+  }
+  const b = indicadores('bitcoin');
+  if (b?.mm200) {
+    const d = (b.atual / b.mm200 - 1) * 100;
+    out.push({ k: d < 0 ? 'desc' : 'info', t: `Bitcoin ${d < 0 ? 'abaixo' : 'acima'} da média de 200 dias`, d: `${usd(b.atual)}, ${pctAbs(d)} ${d < 0 ? 'abaixo' : 'acima'} da média de ${usd(b.mm200)}` });
+  }
+  const comMedia = moedas.filter(x => x.i?.mm200 && !x.i.stable);
+  if (comMedia.length > 1) {
+    const abaixo = comMedia.filter(x => x.i.atual < x.i.mm200).length;
+    out.push({ k: abaixo / comMedia.length >= .6 ? 'desc' : 'info', t: `${abaixo} de ${comMedia.length} moedas abaixo da média de 200 dias`, d: 'entre as do seu quadro e da sua carteira (sem as stablecoins)' });
+  }
+  const dom = M.global?.dom;
+  if (dom != null) {
+    const dias = Object.keys(H.dom).sort();
+    const ref = dias.filter(d => Date.parse(today()) - Date.parse(d) >= 6 * 864e5).at(-1);
+    const delta = ref ? dom - H.dom[ref] : null;
+    out.push({ k: 'info', t: `Dominância do BTC em ${dom.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%`,
+      d: [delta != null && Math.abs(delta) >= .1 ? `${delta > 0 ? 'subiu' : 'caiu'} ${delta.toLocaleString('pt-BR', { maximumFractionDigits: 1, signDisplay: 'never' })} ponto${Math.abs(delta) >= 1.95 ? 's' : ''} desde ${fmtDate(ref)}` : '',
+        dom >= 58 ? 'alta: o dinheiro está concentrado no bitcoin; nessas fases as outras moedas costumam render menos que ele'
+          : dom <= 45 ? 'baixa: as outras moedas ganharam espaço em relação ao bitcoin' : 'faixa intermediária'].filter(Boolean).join('; ') });
+  }
+  const dv = H.dolar?.v || [];
+  if (dv.length > 20) {
+    const hoje = M.dolar || dv[0], antes = dv.at(-1), d = (hoje / antes - 1) * 100;
+    out.push({ k: 'info', t: `Dólar ${Math.abs(d) < .5 ? 'estável' : d > 0 ? `subiu ${pctAbs(d)}` : `caiu ${pctAbs(d)}`} em 30 dias`,
+      d: `${preco(hoje)} hoje, ${preco(antes)} um mês atrás${Math.abs(d) >= .5 ? `; em reais, as criptos ficaram ${d > 0 ? 'mais caras' : 'mais baratas'} mesmo sem mudar de preço em dólar` : ''}` });
+  }
+  return out;
+}
+
+const lista = itens => `<ul class="sg-list">${itens.map(x => `<li class="sg-${x.k}"><b>${x.t}</b><span>${x.d}</span></li>`).join('')}</ul>`;
+
+function sinais() {
+  refreshSinais();
+  if (M.global?.dom != null) anotarDominancia(today(), M.global.dom);
+  const pos = Object.fromEntries(posicoes(S.crypto_tx).ativos.map(p => [p.coin_id, p]));
+  const nomes = new Map(conhecidas().map(c => [c.coin_id, c]));
+  const moedas = idsSinais().filter(id => id !== 'bitcoin' || nomes.has('bitcoin'))
+    .map(id => ({ id, w: nomes.get(id), c: M.coins[id], ...sinaisMoeda(id, pos[id]) }))
+    .filter(x => !(x.i ? x.i.stable : pareceStable(x.id)));
+  moedas.sort((a, b) => b.n - a.n || a.dd - b.dd);
+  const cl = clima(moedas);
+  const carregando = sinaisAtualizando();
+  const comSinal = moedas.filter(x => x.n >= 3);
+
+  return `
+  <p class="sg-aviso">Indicadores calculados automaticamente com dados públicos. Mostram o que os números dizem hoje; <b>não são recomendação de investimento nem aconselhamento financeiro.</b></p>
+  ${erroSinais ? `<p class="banner cr-banner">${h(erroSinais)} O histórico que faltou será buscado de novo daqui a pouco.</p>` : ''}
+  <section class="block">
+    <h2>Clima do mercado</h2>
+    ${cl.length ? `<div class="sg-card sg-clima">${lista(cl)}</div>` : `<p class="empty">${carregando || atualizando() ? 'Carregando…' : 'Sem dados ainda: clique em Atualizar.'}</p>`}
+    ${moedas.length ? `<p class="muted small sg-resumo">${comSinal.length ? `${comSinal.length === 1 ? 'Uma moeda tem' : `${comSinal.length} moedas têm`} 3 ou mais sinais de preço descontado: ${comSinal.map(x => `<b>${h(x.w?.simbolo || x.c?.simbolo || x.id)}</b>`).join(', ')}.` : 'Nenhuma moeda tem 3 ou mais sinais de preço descontado agora.'}</p>` : ''}
+  </section>
+  <section class="block">
+    <h2>Suas moedas <span class="count">${moedas.length}</span></h2>
+    ${moedas.length ? `<div class="sg-coins">${moedas.map(x => {
+      const c = x.c || {}, nome = x.w?.nome || c.nome || x.id, simb = x.w?.simbolo || c.simbolo || '';
+      return `<article class="sg-card">
+        <header><span class="coin">${c.img ? `<img src="${h(c.img)}" alt="" width="20" height="20" loading="lazy">` : '<i class="coin-ph"></i>'}<b>${h(nome)}</b><span class="muted">${h(simb)}</span>${pos[x.id] ? '<span class="tag sg-tag">na carteira</span>' : ''}</span>
+          <span class="sg-px">${preco(c.brl)}<small>${pct(c.ch24)} 24h</small></span></header>
+        <div class="sg-n ${x.n ? 'on' : ''}">${x.n ? `${x.n} ${x.n === 1 ? 'sinal' : 'sinais'} de preço descontado` : 'Nenhum sinal de preço descontado'}</div>
+        ${x.s.length ? lista(x.s) : `<p class="muted small">${carregando ? 'Carregando o histórico…' : 'Sem histórico de preços para esta moeda.'}</p>`}
+      </article>`;
+    }).join('')}</div>` : '<p class="empty">Adicione moedas no quadro da aba Mercado ou lançamentos na Carteira.</p>'}
+  </section>
+  <details class="sg-help" id="sgHelp" ${ajudaAberta ? 'open' : ''}><summary>Como ler os sinais</summary>
+    <dl>
+      <dt><i class="sg-dot sg-desc"></i>Preço descontado</dt><dd>Conta quantos destes aparecem: abaixo da média de 200 dias, abaixo da média de 50 dias, RSI abaixo de 30, queda de 30% ou mais desde a máxima de 12 meses e cotação abaixo do seu preço médio.</dd>
+      <dt><i class="sg-dot sg-alta"></i>Preço esticado</dt><dd>O contrário: RSI acima de 70, preço mais de 40% acima da média de 200 dias ou a menos de 5% da máxima de 12 meses.</dd>
+      <dt>Médias de 50 e 200 dias</dt><dd>Média do preço de fechamento dos últimos 50 e 200 dias. Muita gente usa a de 200 para separar tendência de alta (preço acima) de tendência de baixa (preço abaixo). Quando a de 50 cruza a de 200 para cima, chama-se cruz dourada; para baixo, cruz da morte.</dd>
+      <dt>RSI (índice de força relativa)</dt><dd>De 0 a 100, compara o tamanho das altas e das quedas dos últimos 14 dias. Abaixo de 30 indica sobrevenda; acima de 70, sobrecompra.</dd>
+      <dt>Medo e Ganância</dt><dd>Índice do alternative.me, de 0 a 100, que junta volatilidade, volume, redes sociais e dominância do bitcoin. Mede o humor do mercado, não o preço futuro.</dd>
+      <dt>Dominância do BTC</dt><dd>Fatia do bitcoin no valor de mercado de todas as criptomoedas.</dd>
+    </dl>
+    <p class="small">Nenhum desses números prevê o preço: uma moeda pode continuar abaixo das médias ou cair mais por muito tempo.</p>
+  </details>
+  <p class="muted small">Médias, RSI e máxima de 12 meses usam o fechamento diário em dólar (CoinGecko), guardado por 12 horas neste navegador; o preço médio é em reais. Dados: CoinGecko, alternative.me e AwesomeAPI.${carregando && progresso.total ? ` Carregando histórico: ${progresso.feitas} de ${progresso.total}${progresso.esperando ? ' (esperando o limite de consultas da CoinGecko, cerca de 1 minuto)' : ''}…` : ''}</p>`;
+}
+// Sem histórico ainda: reconhece stablecoins pela cotação para não mostrar cartão vazio
+function pareceStable(id) {
+  const c = M.coins[id];
+  return STABLES.has(id) || (c?.usd > .97 && c.usd < 1.03 && Math.abs(c.ch7 ?? 9) < 1.5);
+}
+
+function bindSinais(el) {
+  el.querySelector('#sgHelp')?.addEventListener('toggle', e => { ajudaAberta = e.target.open; });
 }
 
 // ===============================================================

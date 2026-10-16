@@ -92,6 +92,114 @@ export async function buscar(txt) {
   return (d.coins || []).slice(0, 12).map(c => ({ id: c.id, simbolo: (c.symbol || '').toUpperCase(), nome: c.name, img: c.thumb, rank: c.market_cap_rank }));
 }
 
+// ---------------------------------------------------------------
+// Sinais: histórico diário em dólar (médias, RSI, máxima de 12 meses), medo e ganância e dólar em 30 dias.
+// Uma consulta por moeda, em fila e espaçada, guardada por 12 h: a CoinGecko gratuita aceita poucas por minuto.
+// ---------------------------------------------------------------
+const KEY_H = 'hub:cripto-hist';
+const HIST_MS = 12 * 3600e3;
+const EXTRA_MS = 3 * 3600e3;
+const PAUSA_MS = 6000;
+export const STABLES = new Set(['tether', 'usd-coin', 'dai', 'first-digital-usd', 'ethena-usde', 'true-usd', 'paypal-usd', 'usds', 'binance-usd', 'brz', 'usdd']);
+export const H = (() => {
+  try { return JSON.parse(localStorage.getItem(KEY_H)) || null; } catch { return null; }
+})() || { coins: {}, fng: null, dolar: null, dom: {} };
+H.dom ||= {};
+let filaH = null;
+export const progresso = { feitas: 0, total: 0, esperando: false };
+const salvarH = () => { try { localStorage.setItem(KEY_H, JSON.stringify(H)); } catch { /* cheio ou bloqueado */ } };
+const espera = ms => new Promise(r => setTimeout(r, ms));
+export const sinaisAtualizando = () => !!filaH;
+// Há algo vencido para buscar? (evita disparar a fila a cada redesenho)
+export function sinaisVencidos(ids) {
+  const agora = Date.now();
+  return !H.fng || agora - H.fng.at > EXTRA_MS || !H.dolar || agora - H.dolar.at > EXTRA_MS
+    || ids.some(id => id && !STABLES.has(id) && !(H.coins[id] && agora - H.coins[id].at < HIST_MS));
+}
+
+// aoAvancar é chamado a cada dado novo, para a tela ir se completando
+export function atualizarSinais(ids, aoAvancar) {
+  if (filaH) return filaH;
+  filaH = (async () => {
+    const agora = Date.now();
+    const extras = [];
+    if (!H.fng || agora - H.fng.at > EXTRA_MS) extras.push(getJson('https://api.alternative.me/fng/?limit=31').then(d => {
+      H.fng = { at: agora, v: d.data.map(x => +x.value) }; // mais recente primeiro
+    }));
+    if (!H.dolar || agora - H.dolar.at > EXTRA_MS) extras.push(getJson('https://economia.awesomeapi.com.br/json/daily/USD-BRL/31').then(d => {
+      H.dolar = { at: agora, v: d.map(x => +x.bid) }; // mais recente primeiro
+    }));
+    if (extras.length) { await Promise.allSettled(extras); salvarH(); aoAvancar?.(); }
+    const faltam = [...new Set(ids)].filter(id => id && !STABLES.has(id) && !(H.coins[id] && agora - H.coins[id].at < HIST_MS))
+      .sort((a, b) => (H.coins[a]?.at || 0) - (H.coins[b]?.at || 0));
+    Object.assign(progresso, { feitas: 0, total: faltam.length });
+    const historico = async id => {
+      let r;
+      try { r = await fetch(`${CG}/coins/${encodeURIComponent(id)}/market_chart?vs_currency=usd&days=365&interval=daily`); }
+      catch { r = { status: 429 }; } // o 429 da CoinGecko vem sem cabeçalho CORS e chega como falha de rede
+      if (r.status === 404) return { prices: [] }; // moeda sem histórico: não insiste por 12 h
+      if (r.status === 429) throw Object.assign(new Error('A CoinGecko limitou as consultas.'), { limite: true });
+      if (!r.ok) throw new Error(`Falha ao consultar o histórico (${r.status})`);
+      return r.json();
+    };
+    for (const [i, id] of faltam.entries()) {
+      if (i) await espera(PAUSA_MS);
+      let d;
+      try { d = await historico(id); }
+      catch (e) {
+        if (!e.limite) throw e;
+        progresso.esperando = true; aoAvancar?.();
+        await espera(65000); // limite da CoinGecko: espera e tenta mais uma vez
+        progresso.esperando = false;
+        d = await historico(id);
+      }
+      H.coins[id] = { at: Date.now(), p: (d.prices || []).map(x => +(+x[1]).toPrecision(6)) };
+      salvarH(); progresso.feitas++; aoAvancar?.();
+    }
+  })().finally(() => { filaH = null; progresso.esperando = false; });
+  return filaH;
+}
+
+// Dominância do BTC: guarda um valor por dia para mostrar a tendência
+export function anotarDominancia(dia, v) {
+  if (v == null || H.dom[dia] === +v.toFixed(2)) return;
+  H.dom[dia] = +v.toFixed(2);
+  const dias = Object.keys(H.dom).sort();
+  for (const d of dias.slice(0, Math.max(0, dias.length - 60))) delete H.dom[d];
+  salvarH();
+}
+
+const media = (a, n) => a.length >= n ? a.slice(-n).reduce((s, x) => s + x, 0) / n : null;
+// RSI de 14 dias pelo método de Wilder
+function rsi(a, n = 14) {
+  if (a.length < n + 1) return null;
+  let g = 0, l = 0;
+  for (let i = 1; i <= n; i++) { const d = a[i] - a[i - 1]; if (d > 0) g += d; else l -= d; }
+  g /= n; l /= n;
+  for (let i = n + 1; i < a.length; i++) { const d = a[i] - a[i - 1]; g = (g * (n - 1) + Math.max(d, 0)) / n; l = (l * (n - 1) + Math.max(-d, 0)) / n; }
+  return l === 0 ? 100 : 100 - 100 / (1 + g / l);
+}
+
+// Indicadores de uma moeda (em dólar); null enquanto não há histórico
+export function indicadores(id) {
+  const p = [...(H.coins[id]?.p || [])];
+  if (p.length < 15) return null;
+  const c = M.coins[id];
+  if (c?.usd && M.at > (H.coins[id].at || 0)) p[p.length - 1] = c.usd; // último ponto = cotação mais nova do quadro
+  const atual = p.at(-1);
+  const i = { atual, dias: p.length, mm50: media(p, 50), mm200: media(p, 200), rsi: rsi(p), max: Math.max(...p), min: Math.min(...p),
+    ch30: p.length > 30 ? (atual / p[p.length - 31] - 1) * 100 : null };
+  // Cruzamento das médias nos últimos 30 dias
+  if (i.mm50 != null && i.mm200 != null) {
+    for (let k = 1; k <= 30 && p.length - k >= 200; k++) {
+      const a = p.slice(0, p.length - k), m50 = media(a, 50), m200 = media(a, 200);
+      if ((m50 > m200) !== (i.mm50 > i.mm200)) { i.cruzou = k; break; }
+    }
+  }
+  i.stable = STABLES.has(id) || (atual > .97 && atual < 1.03 && i.max / i.min < 1.06);
+  return i;
+}
+
 export const FNG_PT = { 'Extreme Fear': 'Medo extremo', Fear: 'Medo', Neutral: 'Neutro', Greed: 'Ganância', 'Extreme Greed': 'Ganância extrema' };
 
 // ---------------------------------------------------------------
