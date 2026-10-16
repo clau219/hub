@@ -57,9 +57,23 @@ export async function load() {
 export async function save(table, row, id) {
   const r = id ? await db.update(table, id, row) : await db.insert(table, row);
   await load();
+  gcal(table, row, id || r?.id);
   return r;
 }
-export async function del(table, id) { await db.remove(table, id); await load(); }
+export async function del(table, id) { await db.remove(table, id); await load(); gcal(table); }
+
+// Gigs e eventos de DJ vão para o Google Agenda (função gcal-sync). Várias mudanças seguidas viram uma chamada só.
+let gcalT = null;
+function gcal(table, row = {}, id) {
+  if (db.mode !== 'supabase' || !['deals', 'events'].includes(table)) return;
+  const chamar = body => db.client().functions.invoke('gcal-sync', { body }).then(({ data, error }) => {
+    const erro = data?.erro || error?.message;
+    if (erro && !/GCAL_SA_JSON/.test(erro)) window.dispatchEvent(new CustomEvent('hub:aviso', { detail: 'Google Agenda: ' + erro }));
+  }).catch(e => console.warn('gcal-sync', e));
+  if (table === 'events' && row.origem === 'google' && id) return chamar({ evento: id });
+  clearTimeout(gcalT);
+  gcalT = setTimeout(() => chamar({}), 1500);
+}
 
 export const byId = (t, id) => S[t].find(r => r.id === id);
 export const contactName = id => byId('contacts', id)?.nome || '';

@@ -8,8 +8,11 @@ import { enablePush, pushStatus, testPush } from './push.js';
 export async function render(el) {
   // Se o service worker não responder, a tela não pode ficar em branco esperando
   const push = await Promise.race([pushStatus().catch(e => e.message), new Promise(r => setTimeout(() => r('Não foi possível verificar agora.'), 3000))]);
-  let feed = 'SEU_FEED_TOKEN';
-  if (db.mode === 'supabase') { const { data } = await db.client().from('app_config').select('value').eq('key', 'feed_token').maybeSingle(); if (data) feed = data.value; }
+  let feed = 'SEU_FEED_TOKEN', gst = null;
+  if (db.mode === 'supabase') {
+    const { data } = await db.client().from('app_config').select('key,value').in('key', ['feed_token', 'gcal_status']);
+    for (const c of data || []) if (c.key === 'feed_token') feed = c.value; else try { gst = JSON.parse(c.value); } catch { }
+  }
   const fn = CONFIG.SUPABASE_URL ? CONFIG.SUPABASE_URL.replace(/\/$/, '') + '/functions/v1' : null;
   el.innerHTML = `
   <div class="view-head"><h1>Ajustes</h1></div>
@@ -30,8 +33,15 @@ export async function render(el) {
   </section>
 
   <section class="block">
+    <h2>Gigs no Google Agenda</h2>
+    <p class="muted">Gigs fechadas, realizadas e pagas do Pipeline e os eventos que você cria na agenda DJ são gravados direto no calendário de DJ do Google, segundos depois de salvar. Mudar a data, apagar ou perder a gig no Hub muda lá também. Alterar um evento que veio do Google também altera o original.</p>
+    <p class="small">${!gst ? 'Ainda não rodou.' : gst.erro ? `<b>Não está funcionando:</b> ${h(gst.erro)}` : `Última sincronização ${fmtDate(localDate(gst.em))}: ${gst.total} no Google (${gst.criados} criados, ${gst.alterados} alterados, ${gst.apagados} apagados).`}</p>
+    ${db.mode === 'supabase' ? '<div class="row-btns"><button class="btn" id="gcalNow">Sincronizar agora</button></div>' : ''}
+  </section>
+
+  <section class="block">
     <h2>Levar o Hub para o Google Agenda</h2>
-    <p class="muted">Assine estes endereços no Google Agenda (Outras agendas, “Do URL”). Ficam dois calendários separados: Aluguéis (Airbnb + diretas) e Gigs do pipeline. O Google atualiza assinaturas a cada algumas horas.</p>
+    <p class="muted">Assine estes endereços no Google Agenda (Outras agendas, “Do URL”). O Google atualiza assinaturas a cada algumas horas. Não assine o de Gigs se já usa a gravação direta acima: as gigs apareceriam duas vezes.</p>
     ${fn ? `<p><b>Aluguéis</b><br><code class="sel">${fn}/ical-feed?cal=alugueis&token=${feed}</code></p>
             <p><b>Gigs DJ</b><br><code class="sel">${fn}/ical-feed?cal=dj&token=${feed}</code></p>`
       : '<p class="muted">Disponível depois de conectar o Supabase.</p>'}
@@ -84,6 +94,12 @@ export async function render(el) {
       if (error) throw error;
       await load(); toast(`Leitura concluída: ${data?.eventos ?? 0} eventos, ${data?.reservas ?? 0} reservas`);
     } catch (e) { toast('Falha na leitura: ' + e.message); ev.target.disabled = false; ev.target.textContent = 'Ler agora'; }
+  });
+  el.querySelector('#gcalNow')?.addEventListener('click', async ev => {
+    ev.target.disabled = true; ev.target.textContent = 'Sincronizando…';
+    const { data, error } = await db.client().functions.invoke('gcal-sync', { body: {} });
+    toast(data?.erro || error ? 'Falha: ' + (data?.erro || error.message) : `Google Agenda em dia: ${data.criados} criados, ${data.alterados} alterados, ${data.apagados} apagados`, 6000);
+    render(el);
   });
   if (db.mode === 'supabase') waConfig(el.querySelector('#waCfg'));
   el.querySelector('#pushOn').onclick = async () => { try { await enablePush(); toast('Notificações ativadas'); render(el); } catch (e) { toast(e.message); } };

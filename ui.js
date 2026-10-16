@@ -24,6 +24,7 @@ document.addEventListener('visibilitychange', () => {
 const datasRapidas = () => `<div class="quick-dates">${[['Hoje', 0], ['Amanhã', 1], ['+3d', 3], ['+1 sem', 7]].map(([l, n]) => `<button type="button" class="chip" data-add="${n}">${l}</button>`).join('')}</div>`;
 const ligarDatas = m => m.querySelectorAll('[data-add]').forEach(b => b.onclick = () => (m.querySelector('[name=data_proxima_acao]').value = addDays(today(), +b.dataset.add)));
 
+window.addEventListener('hub:aviso', e => toast(e.detail, 6000));
 export function toast(msg, ms = 2600) {
   const t = document.getElementById('toast');
   t.textContent = msg; t.classList.add('on');
