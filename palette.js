@@ -17,7 +17,7 @@ function nota(txt, q) {
   return t.includes(q) ? 1 : 0;
 }
 
-const IR = [['hoje', 'Hoje'], ['pipeline', 'Pipeline'], ['agenda', 'Agenda'], ['alugueis', 'Aluguéis'], ['tarefas', 'Tarefas'], ['contatos', 'Contatos'], ['cripto', 'Cripto'], ['ajustes', 'Ajustes']];
+const IR = [['hoje', 'Hoje'], ['pipeline', 'Pipeline'], ['agenda', 'Agenda'], ['alugueis', 'Aluguéis'], ['tarefas', 'Tarefas'], ['contatos', 'Contatos'], ['cripto', 'Cripto'], ['saude', 'Saúde'], ['ajustes', 'Ajustes']];
 
 function resultados(qRaw) {
   const q = norm(qRaw.trim());

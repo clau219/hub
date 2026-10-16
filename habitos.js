@@ -4,6 +4,9 @@ import { h, today, addDays, dow, weekdayShort, fmtDate } from './util.js';
 import { modal, toast, confirmInline, closeModal } from './ui.js';
 
 const DIAS = ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'];
+// Regras do Garmin (habits.auto = "passos>=8000"): o script do PC marca o dia sozinho quando cumpre
+const AUTO = [['passos', 'Passos no dia', 'passos', 8000], ['atividade', 'Minutos de atividade (relógio)', 'min', 30], ['sono', 'Horas de sono', 'h', 7], ['intensos', 'Minutos de intensidade', 'min', 20]];
+const autoTxt = a => { const [k, v] = (a || '').split('>='); const r = AUTO.find(x => x[0] === k); return r ? `${r[1]} ≥ ${(+v).toLocaleString('pt-BR')}${r[2] === 'passos' ? '' : ' ' + r[2]}` : ''; };
 const CORES = ['#0e7c72', '#6d3fd1', '#2457c5', '#b4600a', '#c6312b', '#6b7a7d'];
 
 const ativos = () => S.habits.filter(x => x.ativo !== false).sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0) || (a.created_at || '').localeCompare(b.created_at || ''));
@@ -36,7 +39,7 @@ export function bloco() {
       ${lista.map(hb => {
         const seq = sequencia(hb);
         return `<div class="hb-row" style="--c:${hb.cor || CORES[0]}">
-          <button class="hb-name" data-hab-edit="${hb.id}" title="Editar">${h(hb.nome)}</button>
+          <button class="hb-name" data-hab-edit="${hb.id}" title="${hb.auto ? 'Marcado sozinho pelo Garmin: ' + h(autoTxt(hb.auto)) : 'Editar'}">${h(hb.nome)}${hb.auto ? ' <span class="hb-auto" aria-label="automático">⌚</span>' : ''}</button>
           ${dias.map(d => {
             const p = previsto(hb, d), f = feito(hb, d);
             return `<button class="hb-cell ${f ? 'on' : ''} ${p ? '' : 'off'} ${d === hoje ? 'is-today' : ''}" data-hab-tog="${hb.id}|${d}"
@@ -75,12 +78,19 @@ export function habitForm(hb = {}) {
     </fieldset>
     <fieldset class="hb-colors"><legend>Cor</legend>
       ${CORES.map(c => `<label class="swatch" style="--c:${c}"><input type="radio" name="cor" value="${c}" ${c === cor ? 'checked' : ''}><span></span></label>`).join('')}
+    </fieldset>
+    <fieldset class="hb-autof"><legend>Marcar sozinho pelo Garmin</legend>
+      <div class="hb-autorow"><select name="auto_k"><option value="">Não, eu marco</option>${AUTO.map(([k, l]) => `<option value="${k}" ${(hb.auto || '').startsWith(k + '>=') ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <span>≥</span><input name="auto_v" type="number" min="0" step="any" inputmode="decimal" value="${h((hb.auto || '').split('>=')[1] || '')}" placeholder="8000"></div>
+      <small class="muted">O dia fica marcado quando o relógio registrar a meta (o programa do PC confere de manhã e à noite).</small>
     </fieldset>`, {
     extra: hb.id ? `<button type="button" class="btn danger" id="hbArch">Arquivar</button>` : '',
     onSubmit: async f => {
       const ds = [0, 1, 2, 3, 4, 5, 6].filter(i => f['d' + i]);
       if (!ds.length) throw new Error('Escolha pelo menos um dia.');
-      const row = { nome: f.nome.trim(), dias: ds, cor: f.cor, ativo: true };
+      const v = parseFloat(String(f.auto_v || '').replace(',', '.'));
+      if (f.auto_k && !(v > 0)) throw new Error('Diga a meta do Garmin (um número maior que zero).');
+      const row = { nome: f.nome.trim(), dias: ds, cor: f.cor, ativo: true, auto: f.auto_k ? `${f.auto_k}>=${v}` : null };
       if (!hb.id) row.ordem = S.habits.length;
       await save('habits', row, hb.id);
       toast(hb.id ? 'Hábito salvo' : 'Hábito criado');
@@ -91,6 +101,8 @@ export function habitForm(hb = {}) {
     const p = b.dataset.preset;
     for (let i = 0; i < 7; i++) m.querySelector(`[name=d${i}]`).checked = p.includes(String(i));
   });
+  const ak = m.querySelector('[name=auto_k]'), av = m.querySelector('[name=auto_v]');
+  ak.onchange = () => { const r = AUTO.find(x => x[0] === ak.value); if (r) { av.placeholder = r[3]; if (!av.value) av.value = r[3]; } };
   m.querySelector('#hbArch')?.addEventListener('click', async ev => {
     if (!confirmInline(ev.target)) return;
     await save('habits', { ativo: false }, hb.id); closeModal(); toast('Hábito arquivado (o histórico fica guardado)');

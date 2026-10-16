@@ -9,13 +9,14 @@ import * as alugueis from './v-alugueis.js';
 import * as tarefas from './v-tarefas.js';
 import * as contatos from './v-contatos.js';
 import * as cripto from './v-cripto.js';
+import * as saude from './v-saude.js';
 import * as ajustes from './v-ajustes.js';
 import * as paleta from './palette.js';
 
-const VIEWS = { hoje, pipeline, agenda, alugueis, tarefas, contatos, cripto, ajustes };
+const VIEWS = { hoje, pipeline, agenda, alugueis, tarefas, contatos, cripto, saude, ajustes };
 const $ = s => document.querySelector(s);
 const route = () => (location.hash.replace(/^#\//, '') || 'hoje').split('?')[0];
-const NO_MAIS = ['alugueis', 'tarefas', 'contatos', 'cripto', 'ajustes'];
+const NO_MAIS = ['alugueis', 'tarefas', 'contatos', 'cripto', 'saude', 'ajustes'];
 
 function render() {
   const r = VIEWS[route()] ? route() : 'hoje';
