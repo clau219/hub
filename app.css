@@ -705,3 +705,23 @@ kbd { font: 600 11px/1 var(--f); border: 1px solid var(--line-2); border-bottom-
 .view-head + .banner, .sd-parado { margin: 0 0 16px; }
 .sd-wk i.cut { border-top: 3px dotted var(--surface); }
 .sd-wbig { position: absolute; top: -15px; font-size: 10.5px; font-weight: 650; color: var(--ink-2); }
+
+/* Saúde: recomendação do dia */
+.sd-coach { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 12px; margin-bottom: 18px; --cc: var(--brand); }
+.sd-coach.sd-leve { --cc: var(--warn-ink); }
+.sd-coach.sd-descanso { --cc: var(--eng); }
+.sd-coach-main { background: linear-gradient(150deg, color-mix(in srgb, var(--cc) 14%, var(--surface)), var(--surface) 70%); border: 1px solid color-mix(in srgb, var(--cc) 30%, var(--line)); border-radius: var(--r-l); padding: 16px 18px; box-shadow: var(--shadow); }
+.sd-selo { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--cc); background: color-mix(in srgb, var(--cc) 14%, transparent); border-radius: 999px; padding: 3px 10px; }
+.sd-coach-main h2 { font-size: 22px; margin: 8px 0 4px; letter-spacing: -.02em; }
+.sd-coach-main p { margin: 0 0 8px; line-height: 1.5; color: var(--ink-2); }
+.sd-sug { color: var(--ink) !important; }
+.sd-motivos { list-style: none; padding: 0; margin: 10px 0 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.sd-motivos li { font-size: 12.5px; background: var(--sunk); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; display: flex; gap: 5px; align-items: center; color: var(--ink-2); }
+.sd-motivos li.pos span { color: var(--brand); }
+.sd-motivos li.neg span { color: var(--late); }
+.sd-ins { display: grid; gap: 8px; align-content: start; }
+.sd-in { background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--muted); border-radius: var(--r-m); padding: 9px 12px; display: flex; flex-direction: column; gap: 2px; font-size: 13.5px; line-height: 1.45; color: var(--ink-2); }
+.sd-in b { color: var(--ink); font-size: 14px; }
+.sd-in.bom { border-left-color: var(--brand); }
+.sd-in.meta { border-left-color: var(--sun); }
+@media (max-width: 900px) { .sd-coach { grid-template-columns: 1fr; } }

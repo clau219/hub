@@ -3,6 +3,7 @@
 import { S } from './store.js';
 import * as db from './db.js';
 import { h, today, addDays, fmtDate, dow, weekdayShort, localDate } from './util.js';
+import { insights } from './saude-insights.js';
 
 const PERIODOS = [[7, '7 dias'], [30, '30 dias'], [90, '90 dias'], [365, '1 ano']];
 let periodo = 30;
@@ -24,9 +25,9 @@ const TIPOS = {
 };
 const tipoNome = t => TIPOS[t] || (t ? t.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase()) : 'Atividade');
 
-// Carrega do Supabase só o período (+30 dias para a comparação); páginas de 1000 linhas
+// Carrega do Supabase o período (+30 dias para a comparação; no mínimo 120, para as tendências dos insights); páginas de 1000 linhas
 async function carregar(force) {
-  const desde = addDays(today(), -(Math.max(periodo, 30) + 30));
+  const desde = addDays(today(), -Math.max(periodo + 30, 120));
   if (carregando || (!force && D.desde && D.desde <= desde && Date.now() - D.at < 5 * 60e3)) return;
   carregando = true;
   try {
@@ -86,6 +87,7 @@ export function render(el) {
       : `O relógio não manda dados desde <b>${fmtDate(D.ultimo, { long: true })}</b>. Abra o app Garmin Connect no celular perto do relógio para sincronizar; o Hub pega o que chegar na próxima rodada.`}
     ${D.ultimo < ini ? `<button class="link-btn" data-per="365">Ver o último ano</button>` : ''}</p>` : ''}
   ${!temDados ? (D.at ? vazio() : '<p class="empty">Carregando…</p>') : `
+  ${coach()}
   ${tiles(porDia)}
   ${gigs(porDia)}
   <div class="sd-grid">
@@ -156,13 +158,30 @@ function tiles(porDia) {
   return out.length ? `<div class="kpis sd-kpis">${out.join('')}</div>` : '';
 }
 
+const gigDatas = () => new Set([
+  ...S.deals.filter(d => d.negocio === 'dj' && d.data_evento && ['fechado', 'realizado', 'pago'].includes(d.etapa)).map(d => d.data_evento),
+  ...S.events.filter(e => e.calendario === 'dj' && e.inicio).map(e => localDate(e.inicio)),
+]);
+
+// Recomendação do dia + cartões da semana (regras em saude-insights.js)
+function coach() {
+  const r = insights(D.daily, D.acts, [...gigDatas()]);
+  const ROT = { forte: 'Treinar forte', leve: 'Treino leve', descanso: 'Descanso ativo' };
+  return `<section class="sd-coach sd-${r.estado}">
+    <div class="sd-coach-main">
+      <span class="sd-selo">${ROT[r.estado]}</span>
+      <h2>${h(r.titulo)}</h2>
+      <p>${h(r.texto)}</p>
+      <p class="sd-sug"><b>Sugestão:</b> ${h(r.sugestao)}</p>
+      ${r.motivos.length ? `<ul class="sd-motivos">${r.motivos.map(m => `<li class="${m.sinal > 0 ? 'pos' : m.sinal < 0 ? 'neg' : ''}"><span aria-hidden="true">${m.sinal > 0 ? '▲' : m.sinal < 0 ? '▼' : '•'}</span>${h(m.txt)}</li>`).join('')}</ul>` : ''}
+    </div>
+    ${r.cards.length ? `<div class="sd-ins">${r.cards.map(c => `<div class="sd-in ${c.tom}"><b>${h(c.titulo)}</b><span>${h(c.txt)}</span></div>`).join('')}</div>` : ''}
+  </section>`;
+}
+
 // Noite depois de gig x demais noites (o sono do Garmin fica no dia em que você acorda)
 function gigs(porDia) {
-  const fechadas = ['fechado', 'realizado', 'pago'];
-  const datas = new Set([
-    ...S.deals.filter(d => d.negocio === 'dj' && d.data_evento && fechadas.includes(d.etapa)).map(d => d.data_evento),
-    ...S.events.filter(e => e.calendario === 'dj' && e.inicio).map(e => localDate(e.inicio)),
-  ]);
+  const datas = gigDatas();
   const ini = addDays(today(), -(Math.max(periodo, 30) - 1));
   const pos = [...datas].filter(d => d >= ini && d < today()).map(d => addDays(d, 1));
   const posSet = new Set(pos);
