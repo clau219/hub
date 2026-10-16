@@ -1,5 +1,5 @@
 // Service worker: cache do app (abre rápido e offline) + notificações push
-const CACHE = 'hub-v15';
+const CACHE = 'hub-v16';
 const CDN = 'hub-cdn-v1'; // bibliotecas com versão fixa e fontes: não mudam, ficam em cache
 const ASSETS = ['./', 'index.html', 'app.css', 'app.js', 'config.js', 'db.js', 'store.js', 'util.js', 'ui.js', 'push.js', 'habitos.js', 'hospedagem.js',
   'v-hoje.js', 'v-pipeline.js', 'v-agenda.js', 'v-alugueis.js', 'v-tarefas.js', 'v-contatos.js', 'v-ajustes.js', 'cripto.js', 'v-cripto.js', 'palette.js',
@@ -22,7 +22,8 @@ self.addEventListener('fetch', e => {
     return;
   }
   if (u.origin !== location.origin) return;
-  e.respondWith(fetch(e.request).then(r => { const c = r.clone(); caches.open(CACHE).then(x => x.put(e.request, c)); return r; })
+  // no-cache: confere com o servidor (resposta 304 é leve) em vez de usar a cópia de até 10 min do navegador
+  e.respondWith(fetch(e.request, { cache: 'no-cache' }).then(r => { const c = r.clone(); caches.open(CACHE).then(x => x.put(e.request, c)); return r; })
     .catch(() => caches.match(e.request)));
 });
 
