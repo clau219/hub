@@ -50,12 +50,14 @@ function ribbon(list) {
   const pos = t => { const [hh, mm] = t.split(':').map(Number); const v = (hh < H0 ? hh + 24 : hh) + mm / 60; return ((Math.min(Math.max(v, H0), H1) - H0) / (H1 - H0)) * 100; };
   const timed = list.filter(i => i.time);
   const now = hhmm(new Date().toISOString());
+  // Madrugada (antes das 7h): a data já é de hoje, mas o dia não começou; o marcador fica no início, não no fim
+  const cedo = +now.slice(0, 2) < H0;
   const hours = [];
   for (let x = H0; x <= 24; x += 3) hours.push(`<span style="left:${((x - H0) / (H1 - H0)) * 100}%">${String(x % 24).padStart(2, '0')}h</span>`);
   return `<div class="ribbon" aria-label="Linha do dia">
     <div class="ribbon-track">
       ${timed.map((i, k) => { const a = pos(i.time); const b = i.end ? pos(i.end) : a + 4; return `<button class="slot ${i.tentative ? 'tentative' : ''}" data-open="${bound.push(i) - 1}" style="left:${a}%;width:${Math.max(b - a, 11)}%;--c:var(--${areaVar(i.area)});--r:${k % 2}" title="${h(i.time + (i.end ? '–' + i.end : '') + ' ' + i.title)}"><span>${h(i.time)} ${h(i.title)}</span></button>`; }).join('')}
-      <div class="now" style="left:${pos(now)}%"><span>${now}</span></div>
+      <div class="now${cedo ? ' early' : ''}" style="left:${cedo ? 0 : pos(now)}%" title="${cedo ? 'Madrugada: o dia ainda não começou' : ''}"><span>${now}</span></div>
     </div>
     <div class="ribbon-hours">${hours.join('')}</div>
     ${timed.length ? '' : '<p class="ribbon-empty">Nada com horário marcado hoje.</p>'}
