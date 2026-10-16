@@ -6,7 +6,7 @@ import { h, today, addDays, fmtDate, dow, weekdayShort, localDate } from './util
 
 const PERIODOS = [[7, '7 dias'], [30, '30 dias'], [90, '90 dias'], [365, '1 ano']];
 let periodo = 30;
-let D = { daily: [], acts: [], status: null, desde: null, at: 0, erro: '' };
+let D = { daily: [], acts: [], status: null, ultimo: null, desde: null, at: 0, erro: '' };
 let carregando = false;
 let viewEl = null;
 const CFG = {}; // gráficos desenhados, para o hover
@@ -41,13 +41,15 @@ async function carregar(force) {
           if (data.length < 1000) return out;
         }
       };
-      const [daily, acts, st] = await Promise.all([todas('health_daily', 'dia'), todas('health_activities', 'dia'),
-        sb.from('app_config').select('value').eq('key', 'garmin_status').maybeSingle()]);
+      const [daily, acts, st, ult] = await Promise.all([todas('health_daily', 'dia'), todas('health_activities', 'dia'),
+        sb.from('app_config').select('value').eq('key', 'garmin_status').maybeSingle(),
+        sb.from('health_daily').select('dia').not('passos', 'is', null).order('dia', { ascending: false }).limit(1)]);
       let status = null; try { status = JSON.parse(st.data?.value || 'null'); } catch {}
-      D = { daily, acts, status, desde, at: Date.now(), erro: '' };
+      D = { daily, acts, status, ultimo: ult.data?.[0]?.dia || null, desde, at: Date.now(), erro: '' };
     } else {
       const [daily, acts] = await Promise.all([db.all('health_daily'), db.all('health_activities')]);
-      D = { daily: daily.filter(r => r.dia >= desde), acts: acts.filter(a => a.dia >= desde), status: null, desde, at: Date.now(), erro: '' };
+      const ultimo = daily.filter(r => r.passos != null).map(r => r.dia).sort().at(-1) || null;
+      D = { daily: daily.filter(r => r.dia >= desde), acts: acts.filter(a => a.dia >= desde), status: null, ultimo, desde, at: Date.now(), erro: '' };
     }
   } catch (e) {
     D.erro = 'Não foi possível carregar os dados de saúde: ' + (e.message || e);
@@ -67,7 +69,8 @@ export function render(el) {
   const porDia = Object.fromEntries(D.daily.map(r => [r.dia, r]));
   const dias = Array.from({ length: periodo }, (_, i) => addDays(ini, i));
   const linhas = dias.map(d => porDia[d] || { dia: d });
-  const temDados = D.daily.length || D.acts.length;
+  const temDados = D.ultimo || D.acts.length;
+  const parado = D.ultimo && D.ultimo < addDays(hoje, -2);
 
   el.innerHTML = `
   <div class="view-head">
@@ -77,6 +80,8 @@ export function render(el) {
   </div>
   ${D.erro ? `<p class="banner">${h(D.erro)}</p>` : ''}
   ${D.status?.erro ? `<p class="banner">Garmin: ${h(D.status.erro)}</p>` : ''}
+  ${parado ? `<p class="banner sd-parado">O relógio não manda dados desde <b>${fmtDate(D.ultimo, { long: true })}</b>. Abra o app Garmin Connect no celular perto do relógio para sincronizar; o Hub pega o que chegar na próxima rodada.
+    ${D.ultimo < ini ? `<button class="link-btn" data-per="365">Ver o último ano</button>` : ''}</p>` : ''}
   ${!temDados ? (D.at ? vazio() : '<p class="empty">Carregando…</p>') : `
   ${tiles(porDia)}
   ${gigs(porDia)}
