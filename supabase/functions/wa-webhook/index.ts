@@ -107,6 +107,10 @@ async function processarEntrada(sb: SB, e: Entrada, { teste = false }) {
   if (!datas) {
     // Falta a data: pede só o que falta (não chuta)
     texto = 'Olá! Para eu verificar a disponibilidade e os valores, me diga a data de entrada, a data de saída e quantas pessoas vão se hospedar.';
+  } else if (!x.datas_exatas) {
+    // Data vaga ("fim de semana", "Réveillon", "umas 5 noites"): confirma a data exata antes de cotar
+    const pessoas = x.hospedes ? '' : ' e quantas pessoas vão se hospedar';
+    texto = `Olá! Para eu conferir certinho: qual a data exata de entrada e de saída${pessoas}? Entendi de ${dm(datas.checkin)} a ${dm(datas.checkout)}, está certo?`;
   } else {
     cot = await cotar(datas.checkin, datas.checkout, x.hospedes || 2);
     const casasOk = (cot?.casas || []).filter((c: any) => c.status !== 'erro');
@@ -120,7 +124,7 @@ async function processarEntrada(sb: SB, e: Entrada, { teste = false }) {
 
   // Card: orçamento enviado, com data e valor quando a casa pedida está livre
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
-  if (datas) {
+  if (cot && datas) {
     patch.proxima_acao = 'Acompanhar: o robô enviou disponibilidade e valores';
     patch.data_proxima_acao = addDays(hoje(), 1);
     patch.data_evento = datas.checkin;
@@ -129,7 +133,7 @@ async function processarEntrada(sb: SB, e: Entrada, { teste = false }) {
     const { data: d } = await sb.from('deals').select('etapa').eq('id', deal_id).single();
     if (d?.etapa === 'lead') patch.etapa = 'orcamento';
   } else {
-    patch.proxima_acao = 'Acompanhar: o robô pediu as datas';
+    patch.proxima_acao = datas ? 'Acompanhar: o robô pediu para confirmar as datas' : 'Acompanhar: o robô pediu as datas';
     patch.data_proxima_acao = addDays(hoje(), 1);
   }
   await sb.from('deals').update(patch).eq('id', deal_id);
@@ -207,6 +211,7 @@ const ExtracaoSchema = z.object({
   checkout: z.string().nullable(),
   noites: z.number().int().nullable(),
   hospedes: z.number().int().nullable(),
+  datas_exatas: z.boolean(),
   resumo: z.string(),
 });
 type Extracao = z.infer<typeof ExtracaoSchema>;
@@ -223,6 +228,7 @@ Classifique a ÚLTIMA mensagem do cliente, usando as anteriores como contexto:
 - "outro": qualquer outra coisa (dúvidas sobre a casa, regras, check-in, reclamação, conversa).
 
 Datas: converta para AAAA-MM-DD. Datas sem ano são a próxima ocorrência a partir de hoje. "Fim de semana" = sexta a domingo (saída no domingo). Feriados citados pelo nome (Réveillon, Carnaval etc.): use as datas do próximo feriado. Se o cliente der só a entrada e o número de noites, preencha noites e deixe checkout nulo. Se não houver data clara, deixe nulo: nunca invente.
+datas_exatas: true SOMENTE se o cliente disse o dia e o mês da entrada e também o dia da saída ou o número exato de noites (ex.: "de 17 a 20 de novembro", "dia 5/12, 3 noites"), ou se respondeu confirmando ("sim", "isso", "certo") as datas que o Robô perguntou. false quando usou expressões vagas: "fim de semana", "semana que vem", feriado pelo nome (Réveillon, Carnaval, Natal, Páscoa), só o mês, "umas X noites", "entre X e Y", "por volta de". Mesmo com datas_exatas false, preencha checkin/checkout com a sua melhor interpretação (o sistema vai perguntar ao cliente se está certo).
 casa: a casa citada pelo nome, ou "qualquer". hospedes: total de pessoas (adultos + crianças), nulo se não disser.
 resumo: até 8 palavras para o card, ex.: "Vaga 20-23/11, 6 pessoas, Casa Azul".`;
   const conversa = historico.map(m => `${m.autor === 'cliente' ? 'Cliente' : m.autor === 'robo' ? 'Robô' : 'Claudio'}: ${m.texto}`).join('\n');
@@ -295,6 +301,7 @@ function textoDe(m: any): string | null {
 
 const hoje = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 const addDays = (iso: string, n: number) => new Date(Date.parse(iso) + n * 864e5).toISOString().slice(0, 10);
+const dm = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
 const dias = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 864e5);
 function telefoneBonito(wa: string) {
   const m = wa.match(/^55(\d{2})(\d{4,5})(\d{4})$/);
