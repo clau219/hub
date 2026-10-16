@@ -64,6 +64,7 @@ async function start() {
   capturar($('#capture'), $('#captureInput'));
   capturar($('#capture2'), $('#captureInput2'));
   $('#newDeal').onclick = () => dealForm();
+  tema();
   paleta.iniciar();
   $('#searchBtn').onclick = () => paleta.abrir();
   document.querySelector('[data-buscar]').onclick = e => { e.preventDefault(); $('#sheetMore').close(); paleta.abrir(); };
@@ -95,6 +96,28 @@ async function start() {
   setInterval(() => { if (!document.hidden && !$('#modal').open) load(); }, 5 * 60 * 1000);
 
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+
+// Tema: automático (segue o sistema) → claro → escuro. Vale só neste aparelho.
+const TEMAS = [['', 'auto', 'Tema automático'], ['light', 'claro', 'Tema claro'], ['dark', 'escuro', 'Tema escuro']];
+function tema() {
+  const b = $('#themeBtn');
+  const pintar = () => {
+    const t = TEMAS.find(x => x[0] === (document.documentElement.dataset.theme || '')) || TEMAS[0];
+    b.innerHTML = `<svg class="ico" aria-hidden="true"><use href="#i-${t[1]}"/></svg>`;
+    b.title = `${t[2]} (clique para trocar)`; b.setAttribute('aria-label', b.title);
+    const escuro = t[0] === 'dark' || (!t[0] && matchMedia('(prefers-color-scheme: dark)').matches);
+    document.querySelector('meta[name=theme-color]').content = escuro ? '#0a1113' : '#f4f6f5';
+  };
+  b.onclick = () => {
+    const i = TEMAS.findIndex(x => x[0] === (document.documentElement.dataset.theme || ''));
+    const prox = TEMAS[(i + 1) % TEMAS.length][0];
+    if (prox) document.documentElement.dataset.theme = prox; else delete document.documentElement.dataset.theme;
+    try { prox ? localStorage.setItem('hub:tema', prox) : localStorage.removeItem('hub:tema'); } catch {}
+    pintar();
+  };
+  matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', pintar);
+  pintar();
 }
 
 // Faixa de aviso: sem conexão (dados guardados) ou falha parcial na leitura

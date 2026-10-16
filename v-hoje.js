@@ -86,12 +86,13 @@ export function render(el) {
   const semanaGigs = prox.filter(i => i.kind === 'gig').length + doDia.filter(i => i.kind === 'gig').length;
   const inbox = S.tasks.filter(t => !t.feito && t.area === 'inbox' && !t.prazo);
   const hr = +hhmm(new Date().toISOString()).slice(0, 2);
-  const saud = hr < 12 ? 'Bom dia' : hr < 18 ? 'Boa tarde' : 'Boa noite';
-  const resumo = [
-    att.length ? `${att.length} ${att.length === 1 ? 'coisa escapando' : 'coisas escapando'}` : 'nada atrasado',
-    `${doDia.length} para hoje`,
-    semanaGigs ? `${semanaGigs} ${semanaGigs === 1 ? 'gig' : 'gigs'} em 7 dias` : null,
-  ].filter(Boolean);
+  const saud = hr < 5 ? 'Boa noite' : hr < 12 ? 'Bom dia' : hr < 18 ? 'Boa tarde' : 'Boa noite';
+  // Resumo em números clicáveis: cada um leva à seção correspondente
+  const stats = [
+    [att.length ? 'warn' : 'ok', att.length || '✓', att.length ? 'escapando' : 'nada atrasado', att.length ? 'sec-esc' : 'sec-dia'],
+    ['', doDia.length, 'para hoje', 'sec-dia'],
+    ['', semanaGigs, semanaGigs === 1 ? 'gig em 7 dias' : 'gigs em 7 dias', 'sec-prox'],
+  ];
 
   const porDia = {};
   prox.forEach(i => (porDia[i.date] ||= []).push(i));
@@ -99,23 +100,23 @@ export function render(el) {
   el.innerHTML = `
   <section class="hero">
     <div>
-      <h1>${saud}, Claudio</h1>
       <p class="hero-date">${fmtDate(hoje, { long: true })}</p>
+      <h1>${saud}, Claudio</h1>
     </div>
-    <p class="hero-sum">${resumo.slice(0, -1).join(', ')}${resumo.length > 1 ? ' e ' : ''}${resumo.at(-1)}.</p>
+    <div class="hero-stats">${stats.map(([c, n, l, alvo]) => `<button class="stat ${c}" data-ir="${alvo}"><b>${n}</b><span>${l}</span></button>`).join('')}</div>
   </section>
   ${ribbon(doDia)}
   <div class="cols">
     <div class="col-main">
-      ${att.length ? `<section class="block warn">
+      ${att.length ? `<section class="block warn" id="sec-esc">
         <h2>Escapando <span class="count">${att.length}</span></h2>
         ${escapando(att)}
       </section>` : ''}
-      <section class="block">
+      <section class="block" id="sec-dia">
         <h2>Hoje</h2>
         ${doDia.length ? `<ul class="list">${doDia.map(i => row(i)).join('')}</ul>` : `<p class="empty">Dia livre. Use a captura no topo para anotar o que aparecer.</p>`}
       </section>
-      <section class="block">
+      <section class="block" id="sec-prox">
         <h2>Próximos 7 dias</h2>
         ${Object.keys(porDia).length ? Object.entries(porDia).map(([d, l]) => `
           <h3 class="day">${relDate(d)}<span>${fmtDate(d)}</span></h3>
@@ -146,6 +147,7 @@ export function render(el) {
     const a = ev.target.closest('a[data-wa]');
     if (a) { aposWhats(bound[+a.dataset.wa].ref); return; }
     const b = ev.target.closest('button'); if (!b) return;
+    if (b.dataset.ir) return document.getElementById(b.dataset.ir)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     if (await habitos.onClick(b)) return;
     if (b.dataset.open) return openItem(bound[+b.dataset.open]);
     if (b.dataset.mais) { abertos.has(b.dataset.mais) ? abertos.delete(b.dataset.mais) : abertos.add(b.dataset.mais); return render(el); }

@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Hub</title>
-<meta name="theme-color" content="#0f5f5a">
+<meta name="theme-color" content="#0d6b63">
+<script>try{var t=localStorage.getItem('hub:tema');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -13,9 +14,26 @@
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-hoje" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-pipeline" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 7v8M12 7v5M16 7v10"/></symbol>
+  <symbol id="i-agenda" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="17" rx="3"/><path d="M16 2.5v4M8 2.5v4M3 10h18M8 14h.01M12 14h.01M16 14h.01M8 17.5h.01M12 17.5h.01"/></symbol>
+  <symbol id="i-alugueis" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V19a2 2 0 0 1-2 2h-4v-6H9v6H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-tarefas" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="m8 12 3 3 5-6"/></symbol>
+  <symbol id="i-contatos" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></symbol>
+  <symbol id="i-cripto" viewBox="0 0 24 24"><circle cx="8" cy="8" r="6"/><path d="M18.1 10.4A6 6 0 1 1 10.3 18M7 6h1v4M16.7 13.9l.7.7-2.8 2.8"/></symbol>
+  <symbol id="i-ajustes" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
+  <symbol id="i-buscar" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="i-mais" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="19" cy="12" r="1.2" fill="currentColor"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-lapis" viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></symbol>
+  <symbol id="i-claro" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-escuro" viewBox="0 0 24 24"><path d="M20.5 14.1A8.5 8.5 0 1 1 9.9 3.5a7 7 0 0 0 10.6 10.6z"/></symbol>
+  <symbol id="i-auto" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/></symbol>
+</svg>
 <div id="login" class="login" hidden>
   <form id="loginForm" class="login-box">
-    <h1>Hub</h1>
+    <h1><span class="logo">H<i></i></span>Hub</h1>
     <label>E-mail<input name="email" type="email" required autocomplete="username"></label>
     <label>Senha<input name="password" type="password" required autocomplete="current-password"></label>
     <button class="btn primary" type="submit">Entrar</button>
@@ -25,33 +43,37 @@
 
 <div id="app" class="app" hidden>
   <nav class="side" aria-label="Seções">
-    <a class="brand" href="#/hoje">Hub</a>
-    <a href="#/hoje" data-route="hoje"><span class="ico">◐</span>Hoje</a>
-    <a href="#/pipeline" data-route="pipeline"><span class="ico">▤</span>Pipeline</a>
-    <a href="#/agenda" data-route="agenda"><span class="ico">▦</span>Agenda</a>
-    <a href="#/alugueis" data-route="alugueis"><span class="ico">⌂</span>Aluguéis</a>
-    <a href="#/tarefas" data-route="tarefas"><span class="ico">☐</span>Tarefas</a>
-    <a href="#/contatos" data-route="contatos"><span class="ico">☺</span>Contatos</a>
-    <a href="#/cripto" data-route="cripto"><span class="ico">₿</span>Cripto</a>
-    <a href="#/ajustes" data-route="ajustes" class="push-end"><span class="ico">⚙</span>Ajustes</a>
+    <a class="brand" href="#/hoje"><span class="logo">H<i></i></span>Hub</a>
+    <span class="side-sep">Dia a dia</span>
+    <a href="#/hoje" data-route="hoje"><svg class="ico" aria-hidden="true"><use href="#i-hoje"/></svg>Hoje</a>
+    <a href="#/pipeline" data-route="pipeline"><svg class="ico" aria-hidden="true"><use href="#i-pipeline"/></svg>Pipeline</a>
+    <a href="#/agenda" data-route="agenda"><svg class="ico" aria-hidden="true"><use href="#i-agenda"/></svg>Agenda</a>
+    <span class="side-sep">Gestão</span>
+    <a href="#/alugueis" data-route="alugueis"><svg class="ico" aria-hidden="true"><use href="#i-alugueis"/></svg>Aluguéis</a>
+    <a href="#/tarefas" data-route="tarefas"><svg class="ico" aria-hidden="true"><use href="#i-tarefas"/></svg>Tarefas</a>
+    <a href="#/contatos" data-route="contatos"><svg class="ico" aria-hidden="true"><use href="#i-contatos"/></svg>Contatos</a>
+    <a href="#/cripto" data-route="cripto"><svg class="ico" aria-hidden="true"><use href="#i-cripto"/></svg>Cripto</a>
+    <a href="#/ajustes" data-route="ajustes" class="push-end"><svg class="ico" aria-hidden="true"><use href="#i-ajustes"/></svg>Ajustes</a>
   </nav>
 
   <!-- Celular: 4 abas + botão de adicionar -->
   <nav class="tabbar" aria-label="Seções">
-    <a href="#/hoje" data-route="hoje"><span class="ico">◐</span>Hoje</a>
-    <a href="#/pipeline" data-route="pipeline"><span class="ico">▤</span>Pipeline</a>
-    <button type="button" class="fab" id="fab" aria-label="Adicionar" aria-haspopup="dialog">+</button>
-    <a href="#/agenda" data-route="agenda"><span class="ico">▦</span>Agenda</a>
-    <button type="button" id="moreBtn" aria-haspopup="dialog"><span class="ico">⋯</span>Mais</button>
+    <a href="#/hoje" data-route="hoje"><svg class="ico" aria-hidden="true"><use href="#i-hoje"/></svg>Hoje</a>
+    <a href="#/pipeline" data-route="pipeline"><svg class="ico" aria-hidden="true"><use href="#i-pipeline"/></svg>Pipeline</a>
+    <button type="button" class="fab" id="fab" aria-label="Adicionar" aria-haspopup="dialog"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg></button>
+    <a href="#/agenda" data-route="agenda"><svg class="ico" aria-hidden="true"><use href="#i-agenda"/></svg>Agenda</a>
+    <button type="button" id="moreBtn" aria-haspopup="dialog"><svg class="ico" aria-hidden="true"><use href="#i-mais"/></svg>Mais</button>
   </nav>
 
   <div class="main">
     <header class="top">
       <form id="capture" class="capture" autocomplete="off">
-        <input id="captureInput" placeholder="Anotar algo…  ( / )   ex.: ligar p/ Guilherme amanhã #dj !   ·   +dj Ana 12/12 cria oportunidade" aria-label="Captura rápida">
+        <svg class="ico" aria-hidden="true"><use href="#i-lapis"/></svg>
+        <input id="captureInput" placeholder="Anotar algo…  ex.: ligar p/ Guilherme amanhã #dj !   ·   +dj Ana 12/12 vira oportunidade" aria-label="Captura rápida (atalho /)" title="Atalho: /">
       </form>
-      <button class="btn" id="searchBtn" type="button" title="Buscar (Ctrl+K)">Buscar <kbd>Ctrl K</kbd></button>
-      <button class="btn" id="newDeal" type="button">Nova oportunidade</button>
+      <button class="btn" id="searchBtn" type="button" title="Buscar (Ctrl+K)"><svg class="ico" aria-hidden="true"><use href="#i-buscar"/></svg>Buscar <kbd>Ctrl K</kbd></button>
+      <button class="btn primary" id="newDeal" type="button" title="Nova oportunidade (N)"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>Oportunidade</button>
+      <button class="icon-btn" id="themeBtn" type="button" aria-label="Tema"></button>
       <div class="clock" id="clock" aria-live="off"></div>
     </header>
     <div id="localBanner" class="banner" hidden>
@@ -82,12 +104,12 @@
 </dialog>
 <dialog id="sheetMore" class="sheet" aria-label="Mais seções">
   <nav class="sheet-links">
-    <a href="#" data-buscar><span class="ico">⌕</span>Buscar</a>
-    <a href="#/alugueis" data-route="alugueis"><span class="ico">⌂</span>Aluguéis</a>
-    <a href="#/tarefas" data-route="tarefas"><span class="ico">☐</span>Tarefas</a>
-    <a href="#/contatos" data-route="contatos"><span class="ico">☺</span>Contatos</a>
-    <a href="#/cripto" data-route="cripto"><span class="ico">₿</span>Cripto</a>
-    <a href="#/ajustes" data-route="ajustes"><span class="ico">⚙</span>Ajustes</a>
+    <a href="#" data-buscar><svg class="ico" aria-hidden="true"><use href="#i-buscar"/></svg>Buscar</a>
+    <a href="#/alugueis" data-route="alugueis"><svg class="ico" aria-hidden="true"><use href="#i-alugueis"/></svg>Aluguéis</a>
+    <a href="#/tarefas" data-route="tarefas"><svg class="ico" aria-hidden="true"><use href="#i-tarefas"/></svg>Tarefas</a>
+    <a href="#/contatos" data-route="contatos"><svg class="ico" aria-hidden="true"><use href="#i-contatos"/></svg>Contatos</a>
+    <a href="#/cripto" data-route="cripto"><svg class="ico" aria-hidden="true"><use href="#i-cripto"/></svg>Cripto</a>
+    <a href="#/ajustes" data-route="ajustes"><svg class="ico" aria-hidden="true"><use href="#i-ajustes"/></svg>Ajustes</a>
   </nav>
 </dialog>
 <dialog id="pal" class="pal" aria-label="Buscar e agir">
