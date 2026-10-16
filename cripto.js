@@ -63,6 +63,8 @@ export function atualizar(ids) {
         ch24: c.price_change_percentage_24h_in_currency ?? c.price_change_percentage_24h,
         ch7: c.price_change_percentage_7d_in_currency,
         mcap: c.market_cap, vol: c.total_volume, ath: c.ath_change_percentage,
+        athUsd: u[c.id]?.ath, athData: c.ath_date?.slice(0, 10), altaUsd: u[c.id]?.high_24h, baixaUsd: u[c.id]?.low_24h,
+        oferta: c.circulating_supply, ofertaMax: c.max_supply,
         spark: afinar(c.sparkline_in_7d?.price || [], 56),
       };
     }

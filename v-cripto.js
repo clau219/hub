@@ -16,6 +16,7 @@ let filtro = '';
 let erro = '';
 let snapAt = 0;
 let viewEl = null;
+let sel = null; // coin_id escolhido no quadro: os boxes do topo mostram os detalhes dele
 
 const dlg = () => document.getElementById('modal');
 const naTela = () => location.hash.startsWith('#/cripto');
@@ -130,15 +131,16 @@ function mercado() {
   const ath = com('ath').filter(c => !['tether', 'usd-coin'].includes(c.id)).sort((a, b) => b.ath - a.ath)[0];
   const { ativos, tot } = posicoes(S.crypto_tx);
   const setas = (k, l, cls = 'num') => `<th class="${cls}"><button class="th-sort ${sort.k === k ? 'on' : ''}" data-sort="${k}">${l}${sort.k === k ? (sort.dir < 0 ? ' ↓' : ' ↑') : ''}</button></th>`;
+  if (sel && !lista.some(w => w.coin_id === sel)) sel = null;
 
   return `
-  <div class="kpis">
+  ${sel ? detalhe(sel, lista.find(w => w.coin_id === sel)) : `<div class="kpis">
     <div class="kpi"><span>Dólar</span><b>${M.dolar ? preco(M.dolar) : '—'}</b></div>
     <div class="kpi"><span>Dominância do BTC</span><b>${g?.dom != null ? g.dom.toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + '%' : '—'}</b></div>
     <div class="kpi"><span>Valor de mercado total</span><b>${g ? compacto(g.mcap) : '—'}</b><small>${g ? compacto(g.mcapUsd, 'USD') + ' · ' + pct(g.ch24) + ' 24h' : ''}</small></div>
     <div class="kpi"><span>Medo e Ganância</span><b>${f ? f.v : '—'}</b><small>${f ? h(FNG_PT[f.c] || f.c) : ''}</small>
       ${f ? `<i class="fng" style="--v:${f.v}" aria-hidden="true"></i>` : ''}</div>
-  </div>
+  </div>`}
   ${cot.length ? `<div class="insights">
     ${alta ? `<span class="chip-static">Maior alta 24h: <b>${h(alta.simbolo)}</b> ${pct(alta.ch24)}</span>` : ''}
     ${queda && queda !== alta ? `<span class="chip-static">Maior queda 24h: <b>${h(queda.simbolo)}</b> ${pct(queda.ch24)}</span>` : ''}
@@ -152,7 +154,7 @@ function mercado() {
     <tbody>${lista.map(w => {
       const c = M.coins[w.coin_id] || {};
       const q = qt[w.coin_id];
-      return `<tr data-w="${w.id}">
+      return `<tr data-w="${w.id}" data-coin="${h(w.coin_id)}" class="${sel === w.coin_id ? 'sel' : ''}" tabindex="0" aria-selected="${sel === w.coin_id}">
         <td class="cr-h">${sort.k ? '' : `<button class="drag" data-drag aria-label="Arrastar para reordenar" title="Arrastar para reordenar">⋮⋮</button>`}</td>
         <td class="cr-fav"><button class="star ${w.favorita ? 'on' : ''}" data-fav="${w.id}" aria-pressed="${w.favorita}" aria-label="Favorita">${w.favorita ? '★' : '☆'}</button></td>
         <td class="num muted">${c.rank ?? ''}</td>
@@ -168,7 +170,7 @@ function mercado() {
         <td class="cr-acts"><button class="mini" data-buy="${w.coin_id}" title="Adicionar à carteira">+ Carteira</button><button class="mini trash" data-rm="${w.id}" aria-label="Remover do quadro" title="Remover do quadro">🗑</button></td>
       </tr>`;
     }).join('')}</tbody></table></div>
-    <p class="muted small">Variações em reais. ${sort.k ? '<button class="link-btn" id="crMine">Voltar para a minha ordem</button> (para arrastar)' : 'Arraste pelo ⋮⋮ para reordenar; clique no título da coluna para ordenar.'} Dados: CoinGecko, alternative.me e AwesomeAPI.</p>`
+    <p class="muted small">Variações em reais. ${sort.k ? '<button class="link-btn" id="crMine">Voltar para a minha ordem</button> (para arrastar)' : 'Arraste pelo ⋮⋮ para reordenar; clique no título da coluna para ordenar.'} Clique numa moeda para ver os detalhes dela nos quadros do topo. Dados: CoinGecko, alternative.me e AwesomeAPI.</p>`
     : `<p class="empty">Seu quadro está vazio. Use “Adicionar moeda”.</p>`}`;
 }
 
@@ -193,6 +195,48 @@ function bindMercado(el) {
   });
   el.querySelectorAll('[data-buy]').forEach(b => b.onclick = () => txForm({}, { coin_id: b.dataset.buy }));
   el.querySelectorAll('[data-drag]').forEach(handle => handle.onpointerdown = ev => arrastar(ev, handle));
+  el.querySelectorAll('tr[data-coin]').forEach(tr => {
+    const go = e => {
+      if (e.target.closest('button, a, input')) return;
+      sel = sel === tr.dataset.coin ? null : tr.dataset.coin;
+      render(el);
+      const topo = el.querySelector('.cr-sel') || el.querySelector('.kpis');
+      if (topo && topo.getBoundingClientRect().top < 0) topo.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    tr.onclick = go;
+    tr.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(e); } };
+  });
+  el.querySelector('#crSelX')?.addEventListener('click', () => { sel = null; render(el); });
+}
+
+// Detalhes da moeda escolhida (no lugar dos boxes do mercado)
+function detalhe(id, w) {
+  const c = M.coins[id] || {};
+  const i = indicadores(id);
+  if (!STABLES.has(id)) refreshSinais([id]);
+  const num = (v, d = 1) => v == null || isNaN(v) ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: d });
+  const curto = v => v == null ? '—' : Number(v).toLocaleString('pt-BR', { notation: 'compact', maximumFractionDigits: 2 });
+  const longe = (a, b) => a && b ? `${pctAbs((a / b - 1) * 100)} ${a < b ? 'abaixo' : 'acima'}` : '';
+  const pos = posicoes(S.crypto_tx).ativos.find(p => p.coin_id === id);
+  const carregando = !i && sinaisAtualizando() ? 'calculando…' : '';
+  const kpi = (t, b, sm = '') => `<div class="kpi"><span>${t}</span><b>${b}</b>${sm ? `<small>${sm}</small>` : ''}</div>`;
+  const faixa = c.altaUsd && c.baixaUsd && c.usd ? Math.min(100, Math.max(0, (c.usd - c.baixaUsd) / (c.altaUsd - c.baixaUsd || 1) * 100)) : null;
+  const r = i?.rsi != null ? Math.round(i.rsi) : null;
+  return `<div class="cr-sel">
+    <span class="coin">${c.img ? `<img src="${h(c.img)}" alt="" width="24" height="24">` : '<i class="coin-ph"></i>'}<b>${h(w?.nome || c.nome || id)}</b><span class="muted">${h(w?.simbolo || c.simbolo || '')}${c.rank ? ` · #${c.rank} em valor de mercado` : ''}</span></span>
+    <button class="btn" id="crSelX">Voltar ao mercado ✕</button>
+  </div>
+  <div class="kpis cr-det">
+    ${kpi('Preço', usd(c.usd), `${preco(c.brl)} · ${pct(c.ch24)} 24h · ${pct(c.ch7)} 7d`)}
+    ${kpi('Valor de mercado', compacto(c.mcap && M.dolar ? c.mcap / M.dolar : null, 'USD'), compacto(c.mcap))}
+    ${kpi('Volume 24h', compacto(c.vol && M.dolar ? c.vol / M.dolar : null, 'USD'), c.vol && c.mcap ? `${num(c.vol / c.mcap * 100)}% do valor de mercado` : '')}
+    <div class="kpi"><span>Faixa de 24h</span><b>${c.baixaUsd ? `${usd(c.baixaUsd)} – ${usd(c.altaUsd)}` : '—'}</b>${faixa != null ? `<small>preço atual em ${num(faixa, 0)}% da faixa (0% = mínima)</small><i class="cr-faixa" style="--v:${faixa.toFixed(1)}" aria-hidden="true"></i>` : ''}</div>
+    ${kpi('Máxima histórica', c.athUsd ? usd(c.athUsd) : '—', c.ath != null ? `${pct(c.ath)} desde ${c.athData ? fmtDate(c.athData, { year: true }) : 'a máxima'}` : '')}
+    ${kpi(i && !i.mm200 && i.mm50 ? 'Média de 50 dias' : 'Média de 200 dias', i?.mm200 ? usd(i.mm200) : i?.mm50 ? usd(i.mm50) : '—', i ? (i.mm200 ? [`preço ${longe(i.atual, i.mm200)}`, i.mm50 ? `de 50 dias: ${usd(i.mm50)} (${longe(i.atual, i.mm50)})` : ''] : [i.mm50 ? `preço ${longe(i.atual, i.mm50)}` : '', 'histórico curto para a de 200']).filter(Boolean).join(' · ') : carregando)}
+    ${kpi('RSI de 14 dias', r ?? '—', r != null ? `${r < 30 ? 'sobrevendido (abaixo de 30)' : r > 70 ? 'sobrecomprado (acima de 70)' : 'zona neutra (30 a 70)'}${i.ch30 != null ? ` · 30 dias: ${pct(i.ch30)}` : ''}` : carregando)}
+    ${pos ? kpi('Na sua carteira', reais(pos.valor), `${qtd(pos.qtd)} ${h(pos.simbolo)} · médio ${preco(pos.medio)} · ${pct(pos.resPct)}`)
+      : kpi('Oferta circulante', curto(c.oferta), c.ofertaMax ? `${num(c.oferta / c.ofertaMax * 100)}% do máximo de ${curto(c.ofertaMax)}` : c.oferta ? 'sem limite máximo definido' : '')}
+  </div>`;
 }
 
 // Arrastar pela alça (mouse e toque); salva a nova ordem ao soltar
@@ -261,10 +305,10 @@ let ajudaAberta = false;
 
 // Quadro + carteira + bitcoin (para o clima do mercado)
 const idsSinais = () => [...new Set(['bitcoin', ...posicoes(S.crypto_tx).ativos.map(p => p.coin_id), ...quadro().map(w => w.coin_id)])];
-const redesenhar = () => { if (viewEl && naTela() && aba === 'sinais') render(viewEl); };
+const redesenhar = () => { if (viewEl && naTela() && (aba === 'sinais' || (aba === 'mercado' && sel))) render(viewEl); };
 
-function refreshSinais() {
-  const ids = idsSinais();
+// Na aba Mercado, com uma moeda escolhida, busca só o histórico dela
+function refreshSinais(ids = idsSinais()) {
   if (sinaisAtualizando() || !sinaisVencidos(ids) || Date.now() - erroSinaisAt < 90e3) return;
   atualizarSinais(ids, redesenhar)
     .then(() => { erroSinais = ''; })

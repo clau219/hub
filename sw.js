@@ -1,5 +1,5 @@
 // Service worker: cache do app (abre rápido e offline) + notificações push
-const CACHE = 'hub-v16';
+const CACHE = 'hub-v17';
 const CDN = 'hub-cdn-v1'; // bibliotecas com versão fixa e fontes: não mudam, ficam em cache
 const ASSETS = ['./', 'index.html', 'app.css', 'app.js', 'config.js', 'db.js', 'store.js', 'util.js', 'ui.js', 'push.js', 'habitos.js', 'hospedagem.js',
   'v-hoje.js', 'v-pipeline.js', 'v-agenda.js', 'v-alugueis.js', 'v-tarefas.js', 'v-contatos.js', 'v-ajustes.js', 'cripto.js', 'v-cripto.js', 'palette.js',

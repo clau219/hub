@@ -461,6 +461,18 @@ svg.ico { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColo
 .kpi small { font-size: 13px; color: var(--muted); }
 .fng { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: linear-gradient(90deg, var(--down), var(--sun) 50%, var(--up)); opacity: .35; }
 .fng::after { content: ''; position: absolute; left: calc(var(--v) * 1%); top: -3px; width: 3px; height: 10px; margin-left: -1px; background: var(--ink); border-radius: 2px; }
+.cr-sel { scroll-margin-top: 76px; display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.cr-sel .coin { font-size: 17px; flex-wrap: wrap; }
+.cr-sel .coin img, .cr-sel .coin .coin-ph { width: 24px; height: 24px; }
+.cr-sel .coin .muted { font-size: 14px; }
+.cr-det .kpi b { font-size: 19px; white-space: normal; }
+@media (max-width: 760px) { .cr-det .kpi b { font-size: 16px; } }
+.cr-det .kpi small { white-space: normal; }
+.cr-faixa { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: linear-gradient(90deg, var(--down), var(--up)); opacity: .35; }
+.cr-faixa::after { content: ''; position: absolute; left: calc(var(--v) * 1%); top: -3px; width: 3px; height: 10px; margin-left: -1px; background: var(--ink); border-radius: 2px; }
+.cr-table tr[data-coin] { cursor: pointer; }
+.cr-table tr[data-coin]:hover { background: color-mix(in srgb, var(--brand) 5%, transparent); }
+.cr-table tr.sel { background: color-mix(in srgb, var(--brand) 12%, var(--surface)); box-shadow: inset 3px 0 0 var(--brand); }
 .insights { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
 .chip-static { font-size: 13px; padding: 3px 10px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); color: var(--muted); }
 .chip-static b { color: var(--ink); }
