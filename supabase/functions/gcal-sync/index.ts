@@ -102,13 +102,10 @@ async function alterarDoGoogle(sb: any, tk: string, cal: string, id: string) {
   if (!gid) return { erro: 'evento sem identificador do Google' };
   const atual = await g(tk, 'GET', `/calendars/${encodeURIComponent(cal)}/events/${encodeURIComponent(gid)}`);
   // Evento que se repete: o Hub mostra só a 1ª data da série, então altera só essa ocorrência
-  let alvo = gid;
-  if (atual.recurrence) {
-    const q = new URLSearchParams({ maxResults: '1', timeMin: atual.start.dateTime || `${atual.start.date}T00:00:00-03:00` });
-    const inst = await g(tk, 'GET', `/calendars/${encodeURIComponent(cal)}/events/${encodeURIComponent(gid)}/instances?${q}`);
-    if (!inst.items?.length) return { erro: 'não achei a data desse evento repetido no Google' };
-    alvo = inst.items[0].id;
-  }
+  // (id da ocorrência = id da série + "_" + início original: 20261016T180000Z ou 20261016 no dia inteiro)
+  const alvo = !atual.recurrence ? gid : `${gid}_${atual.start.dateTime
+    ? new Date(atual.start.dateTime).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
+    : atual.start.date.replace(/-/g, '')}`;
   const { summary, location, start, end } = deEvento(e);
   await g(tk, 'PATCH', `/calendars/${encodeURIComponent(cal)}/events/${encodeURIComponent(alvo)}`, { summary, location: location || '', start, end });
   return { ok: true, alterados: 1 };
