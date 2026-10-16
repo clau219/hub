@@ -27,7 +27,7 @@ Deno.serve(async req => {
   if (!body.evento || res.erro) {
     await sb.from('app_config').upsert({ key: 'gcal_status', value: JSON.stringify({ em: new Date().toISOString(), ...res }) }, { onConflict: 'key' });
   }
-  return json(res, res.erro ? 500 : 200);
+  return json(res); // erro vai no corpo (com 500 o Hub não consegue ler a mensagem)
 });
 
 // ---------- Hub → Google ----------
