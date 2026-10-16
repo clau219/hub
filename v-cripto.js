@@ -383,8 +383,8 @@ function sinais() {
       const c = x.c || {}, nome = x.w?.nome || c.nome || x.id, simb = x.w?.simbolo || c.simbolo || '';
       return `<article class="sg-card">
         <header><span class="coin">${c.img ? `<img src="${h(c.img)}" alt="" width="20" height="20" loading="lazy">` : '<i class="coin-ph"></i>'}<b>${h(nome)}</b><span class="muted">${h(simb)}</span>${pos[x.id] ? '<span class="tag sg-tag">na carteira</span>' : ''}</span>
-          <span class="sg-px">${preco(c.brl)}<small>${pct(c.ch24)} 24h</small></span></header>
-        <div class="sg-n ${x.n ? 'on' : ''}">${x.n ? `${x.n} ${x.n === 1 ? 'sinal' : 'sinais'} de preço descontado` : 'Nenhum sinal de preço descontado'}</div>
+          <span class="sg-px">${usd(c.usd)}<small>${preco(c.brl)} · ${pct(c.ch24)} 24h</small></span></header>
+        <div class="sg-n ${x.n ? 'on' : ''}">${x.n ? `${x.n} ${x.n === 1 ? 'sinal' : 'sinais'} de preço descontado` : !x.i && carregando ? 'Calculando…' : 'Nenhum sinal de preço descontado'}</div>
         ${x.s.length ? lista(x.s) : `<p class="muted small">${carregando ? 'Carregando o histórico…' : 'Sem histórico de preços para esta moeda.'}</p>`}
       </article>`;
     }).join('')}</div>` : '<p class="empty">Adicione moedas no quadro da aba Mercado ou lançamentos na Carteira.</p>'}
