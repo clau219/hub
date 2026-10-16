@@ -50,7 +50,7 @@ Deno.serve(async req => {
       } else {
         // Google Agenda → eventos do calendário escolhido (eventos repetidos entram só pela 1ª ocorrência)
         // eventos que o próprio Hub escreveu no Google (gcal-sync) não voltam como cópia
-        const rows = evs.filter(e => (e.end || e.start) >= limiteIni.slice(0, 10) && !HUB_UID.test(e.uid)).map(e => {
+        const rows = primeiraData(evs).filter(e => (e.end || e.start) >= limiteIni.slice(0, 10) && !HUB_UID.test(e.uid)).map(e => {
           const uid = `${f.id}:${e.uid}`; vistos.push(uid);
           return {
             calendario: f.calendario, titulo: e.summary || '(sem título)', local: e.location || null, origem: 'google', uid_externo: uid,
@@ -81,6 +81,15 @@ Deno.serve(async req => {
   } catch (e) { google = { erro: (e as Error).message }; }
   return json({ eventos, reservas, erros, google });
 });
+
+// Evento que se repete: fica uma linha por série (a 1ª data). Se essa data foi alterada no Google
+// (ou pelo Hub), o iCal traz uma exceção com RECURRENCE-ID igual ao início da série: ela substitui o original.
+function primeiraData(evs: IcsEvent[]) {
+  const out = new Map<string, IcsEvent>();
+  for (const e of evs) if (!e.recurrenceId) out.set(e.uid, e);
+  for (const e of evs) if (e.recurrenceId && out.get(e.uid)?.start === e.recurrenceId) out.set(e.uid, e);
+  return [...out.values()];
+}
 
 const HUB_UID = /^hub[de][0-9a-f]{32}@google\.com$/;
 
@@ -117,7 +126,7 @@ async function autorizado(req: Request, sb: any) {
 // Leitor mínimo de iCal (VEVENT) — suficiente para Google Agenda e Airbnb.
 type IcsEvent = {
   uid: string; summary: string; description?: string; location?: string;
-  start: string; end?: string; allDay: boolean; status?: string; rrule?: string;
+  start: string; end?: string; allDay: boolean; status?: string; rrule?: string; recurrenceId?: string;
 };
 
 function parseIcs(text: string): IcsEvent[] {
@@ -134,6 +143,7 @@ function parseIcs(text: string): IcsEvent[] {
           description: cur.DESCRIPTION ? unesc(cur.DESCRIPTION.value) : undefined,
           location: cur.LOCATION ? unesc(cur.LOCATION.value) : undefined,
           start: s.iso, end: e?.iso, allDay: s.allDay, status: cur.STATUS?.value, rrule: cur.RRULE?.value,
+          recurrenceId: cur['RECURRENCE-ID'] ? toIso(cur['RECURRENCE-ID']).iso : undefined,
         });
       }
       cur = null; continue;

@@ -101,9 +101,16 @@ async function alterarDoGoogle(sb: any, tk: string, cal: string, id: string) {
   const gid = String(e.uid_externo || '').split(':').slice(1).join(':').replace(/@google\.com$/, '');
   if (!gid) return { erro: 'evento sem identificador do Google' };
   const atual = await g(tk, 'GET', `/calendars/${encodeURIComponent(cal)}/events/${encodeURIComponent(gid)}`);
-  if (atual.recurrence || atual.recurringEventId) return { erro: 'evento que se repete: altere no Google Agenda' };
+  // Evento que se repete: o Hub mostra só a 1ª data da série, então altera só essa ocorrência
+  let alvo = gid;
+  if (atual.recurrence) {
+    const q = new URLSearchParams({ maxResults: '1', timeMin: atual.start.dateTime || `${atual.start.date}T00:00:00-03:00` });
+    const inst = await g(tk, 'GET', `/calendars/${encodeURIComponent(cal)}/events/${encodeURIComponent(gid)}/instances?${q}`);
+    if (!inst.items?.length) return { erro: 'não achei a data desse evento repetido no Google' };
+    alvo = inst.items[0].id;
+  }
   const { summary, location, start, end } = deEvento(e);
-  await g(tk, 'PATCH', `/calendars/${encodeURIComponent(cal)}/events/${encodeURIComponent(gid)}`, { summary, location: location || '', start, end });
+  await g(tk, 'PATCH', `/calendars/${encodeURIComponent(cal)}/events/${encodeURIComponent(alvo)}`, { summary, location: location || '', start, end });
   return { ok: true, alterados: 1 };
 }
 
