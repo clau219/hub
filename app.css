@@ -703,3 +703,5 @@ kbd { font: 600 11px/1 var(--f); border: 1px solid var(--line-2); border-bottom-
 .sd-ticks span { position: absolute; left: 2px; transform: translateY(-115%); font-size: 10.5px; color: var(--muted); pointer-events: none; }
 .sd-box .lc-grid { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .view-head + .banner, .sd-parado { margin: 0 0 16px; }
+.sd-wk i.cut { border-top: 3px dotted var(--surface); }
+.sd-wbig { position: absolute; top: -15px; font-size: 10.5px; font-weight: 650; color: var(--ink-2); }

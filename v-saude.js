@@ -41,15 +41,16 @@ async function carregar(force) {
           if (data.length < 1000) return out;
         }
       };
-      const [daily, acts, st, ult] = await Promise.all([todas('health_daily', 'dia'), todas('health_activities', 'dia'),
+      const [daily, acts, st, ult, ua] = await Promise.all([todas('health_daily', 'dia'), todas('health_activities', 'dia'),
         sb.from('app_config').select('value').eq('key', 'garmin_status').maybeSingle(),
-        sb.from('health_daily').select('dia').not('passos', 'is', null).order('dia', { ascending: false }).limit(1)]);
+        sb.from('health_daily').select('dia').not('passos', 'is', null).order('dia', { ascending: false }).limit(1),
+        sb.from('health_activities').select('dia').order('dia', { ascending: false }).limit(1)]);
       let status = null; try { status = JSON.parse(st.data?.value || 'null'); } catch {}
-      D = { daily, acts, status, ultimo: ult.data?.[0]?.dia || null, desde, at: Date.now(), erro: '' };
+      D = { daily, acts, status, ultimo: ult.data?.[0]?.dia || null, ultAtiv: ua.data?.[0]?.dia || '', desde, at: Date.now(), erro: '' };
     } else {
       const [daily, acts] = await Promise.all([db.all('health_daily'), db.all('health_activities')]);
       const ultimo = daily.filter(r => r.passos != null).map(r => r.dia).sort().at(-1) || null;
-      D = { daily: daily.filter(r => r.dia >= desde), acts: acts.filter(a => a.dia >= desde), status: null, ultimo, desde, at: Date.now(), erro: '' };
+      D = { daily: daily.filter(r => r.dia >= desde), acts: acts.filter(a => a.dia >= desde), status: null, ultimo, ultAtiv: acts.map(a => a.dia).sort().at(-1) || '', desde, at: Date.now(), erro: '' };
     }
   } catch (e) {
     D.erro = 'Não foi possível carregar os dados de saúde: ' + (e.message || e);
@@ -80,7 +81,9 @@ export function render(el) {
   </div>
   ${D.erro ? `<p class="banner">${h(D.erro)}</p>` : ''}
   ${D.status?.erro ? `<p class="banner">Garmin: ${h(D.status.erro)}</p>` : ''}
-  ${parado ? `<p class="banner sd-parado">O relógio não manda dados desde <b>${fmtDate(D.ultimo, { long: true })}</b>. Abra o app Garmin Connect no celular perto do relógio para sincronizar; o Hub pega o que chegar na próxima rodada.
+  ${parado ? `<p class="banner sd-parado">${D.ultAtiv > D.ultimo
+      ? `As atividades continuam chegando (a última em ${fmtDate(D.ultAtiv)}), mas o Garmin não tem passos, sono nem FC do dia a dia desde <b>${fmtDate(D.ultimo, { long: true })}</b>. Confira se o relógio está sendo usado fora dos treinos e se o "Monitoramento de atividades" está ligado nele.`
+      : `O relógio não manda dados desde <b>${fmtDate(D.ultimo, { long: true })}</b>. Abra o app Garmin Connect no celular perto do relógio para sincronizar; o Hub pega o que chegar na próxima rodada.`}
     ${D.ultimo < ini ? `<button class="link-btn" data-per="365">Ver o último ano</button>` : ''}</p>` : ''}
   ${!temDados ? (D.at ? vazio() : '<p class="empty">Carregando…</p>') : `
   ${tiles(porDia)}
@@ -271,14 +274,17 @@ function atividades(dias) {
     const fim = addDays(s, 6), da = acts.filter(a => a.dia >= s && a.dia <= fim);
     semanas.push({ s, min: da.reduce((t, a) => t + (a.duracao_seg || 0), 0) / 60, n: da.length });
   }
-  const max = Math.max(...semanas.map(w => w.min), 150) * 1.15;
+  // Semana fora da curva (ex.: trilha de vários dias) não pode achatar as outras: escala até ~2x o percentil 85
+  const ord = semanas.map(w => w.min).sort((a, b) => a - b);
+  const p85 = ord[Math.floor(ord.length * .85)] || 0;
+  const max = Math.min(Math.max(...ord, 150), Math.max(150, p85 * 2)) * 1.15;
   const meta = 150; // recomendação da OMS: 150 min de atividade moderada por semana
   return `<section class="block sd-acts">
     <h2>Atividades <span class="count">${acts.length} no período</span></h2>
     ${semanas.length > 1 ? `<div class="sd-weeks" role="img" aria-label="Minutos de atividade por semana">
       <span class="sd-wmeta" style="bottom:calc(18px + (100% - 18px) * ${(meta / max).toFixed(3)})" title="150 min por semana (OMS)"><em>150 min</em></span>
       ${semanas.map(w => `<div class="sd-wk" title="Semana de ${fmtDate(w.s)}: ${Math.round(w.min)} min em ${w.n} atividade${w.n === 1 ? '' : 's'}">
-        <i style="height:${(w.min / max * 100).toFixed(1)}%" class="${w.min >= meta ? 'ok' : ''}"></i>${semanas.length <= 14 ? `<span>${fmtDate(w.s)}</span>` : ''}</div>`).join('')}
+        <i style="height:${Math.min(100, w.min / max * 100).toFixed(1)}%" class="${w.min >= meta ? 'ok' : ''} ${w.min > max ? 'cut' : ''}"></i>${w.min > max ? `<b class="sd-wbig">${Math.round(w.min / 60)}h</b>` : ''}${semanas.length <= 14 ? `<span>${fmtDate(w.s)}</span>` : ''}</div>`).join('')}
     </div>` : ''}
     ${acts.length ? `<div class="list">${acts.slice(0, 12).map(a => `<div class="row sd-act">
       <div class="row-main"><b>${h(a.nome || tipoNome(a.tipo))}</b><span class="muted small">${a.nome ? tipoNome(a.tipo) + ' · ' : ''}${weekdayShort(a.dia)}, ${fmtDate(a.dia)}</span></div>
