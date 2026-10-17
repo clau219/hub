@@ -6,7 +6,14 @@ import { modal, toast, confirmInline, closeModal } from './ui.js';
 const DIAS = ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'];
 // Regras do Garmin (habits.auto = "passos>=8000"): o script do PC marca o dia sozinho quando cumpre
 const AUTO = [['passos', 'Passos no dia', 'passos', 8000], ['atividade', 'Minutos de atividade (relógio)', 'min', 30], ['sono', 'Horas de sono', 'h', 7], ['intensos', 'Minutos de intensidade', 'min', 20]];
-const autoTxt = a => { const [k, v] = (a || '').split('>='); const r = AUTO.find(x => x[0] === k); return r ? `${r[1]} ≥ ${(+v).toLocaleString('pt-BR')}${r[2] === 'passos' ? '' : ' ' + r[2]}` : ''; };
+// "atividade.corrida>=20": só minutos daquele tipo (os grupos de tipos do Garmin ficam em garmin/hubdb.py)
+const TIPOS_AT = [['', 'qualquer atividade'], ['corrida', 'corrida'], ['forca', 'força'], ['caminhada', 'caminhada'], ['trilha', 'trilha'], ['pedal', 'pedal'], ['natacao', 'natação']];
+const parseAuto = a => { const [k = '', v = ''] = (a || '').split('>='); const [base, tipo = ''] = k.split('.'); return { base, tipo, v }; };
+const autoTxt = a => {
+  const { base, tipo, v } = parseAuto(a); const r = AUTO.find(x => x[0] === base); if (!r) return '';
+  const nome = base === 'atividade' ? `Minutos de ${TIPOS_AT.find(t => t[0] === tipo)?.[1] || 'atividade'}` : r[1];
+  return `${nome} ≥ ${(+v).toLocaleString('pt-BR')}${r[2] === 'passos' ? '' : ' ' + r[2]}`;
+};
 const CORES = ['#0e7c72', '#6d3fd1', '#2457c5', '#b4600a', '#c6312b', '#6b7a7d'];
 
 const ativos = () => S.habits.filter(x => x.ativo !== false).sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0) || (a.created_at || '').localeCompare(b.created_at || ''));
@@ -80,8 +87,9 @@ export function habitForm(hb = {}) {
       ${CORES.map(c => `<label class="swatch" style="--c:${c}"><input type="radio" name="cor" value="${c}" ${c === cor ? 'checked' : ''}><span></span></label>`).join('')}
     </fieldset>
     <fieldset class="hb-autof"><legend>Marcar sozinho pelo Garmin</legend>
-      <div class="hb-autorow"><select name="auto_k"><option value="">Não, eu marco</option>${AUTO.map(([k, l]) => `<option value="${k}" ${(hb.auto || '').startsWith(k + '>=') ? 'selected' : ''}>${l}</option>`).join('')}</select>
-      <span>≥</span><input name="auto_v" type="number" min="0" step="any" inputmode="decimal" value="${h((hb.auto || '').split('>=')[1] || '')}" placeholder="8000"></div>
+      <div class="hb-autorow"><select name="auto_k"><option value="">Não, eu marco</option>${AUTO.map(([k, l]) => `<option value="${k}" ${parseAuto(hb.auto).base === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <span>≥</span><input name="auto_v" type="number" min="0" step="any" inputmode="decimal" value="${h(parseAuto(hb.auto).v)}" placeholder="8000"></div>
+      <label class="hb-autotipo" ${parseAuto(hb.auto).base === 'atividade' ? '' : 'hidden'}>Conta só<select name="auto_t">${TIPOS_AT.map(([k, l]) => `<option value="${k}" ${parseAuto(hb.auto).tipo === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
       <small class="muted">O dia fica marcado quando o relógio registrar a meta (o programa do PC confere de manhã e à noite).</small>
     </fieldset>`, {
     extra: hb.id ? `<button type="button" class="btn danger" id="hbArch">Arquivar</button>` : '',
@@ -90,7 +98,7 @@ export function habitForm(hb = {}) {
       if (!ds.length) throw new Error('Escolha pelo menos um dia.');
       const v = parseFloat(String(f.auto_v || '').replace(',', '.'));
       if (f.auto_k && !(v > 0)) throw new Error('Diga a meta do Garmin (um número maior que zero).');
-      const row = { nome: f.nome.trim(), dias: ds, cor: f.cor, ativo: true, auto: f.auto_k ? `${f.auto_k}>=${v}` : null };
+      const row = { nome: f.nome.trim(), dias: ds, cor: f.cor, ativo: true, auto: f.auto_k ? `${f.auto_k}${f.auto_k === 'atividade' && f.auto_t ? '.' + f.auto_t : ''}>=${v}` : null };
       if (!hb.id) row.ordem = S.habits.length;
       await save('habits', row, hb.id);
       toast(hb.id ? 'Hábito salvo' : 'Hábito criado');
@@ -102,7 +110,10 @@ export function habitForm(hb = {}) {
     for (let i = 0; i < 7; i++) m.querySelector(`[name=d${i}]`).checked = p.includes(String(i));
   });
   const ak = m.querySelector('[name=auto_k]'), av = m.querySelector('[name=auto_v]');
-  ak.onchange = () => { const r = AUTO.find(x => x[0] === ak.value); if (r) { av.placeholder = r[3]; if (!av.value) av.value = r[3]; } };
+  ak.onchange = () => {
+    const r = AUTO.find(x => x[0] === ak.value); if (r) { av.placeholder = r[3]; if (!av.value) av.value = r[3]; }
+    m.querySelector('.hb-autotipo').hidden = ak.value !== 'atividade';
+  };
   m.querySelector('#hbArch')?.addEventListener('click', async ev => {
     if (!confirmInline(ev.target)) return;
     await save('habits', { ativo: false }, hb.id); closeModal(); toast('Hábito arquivado (o histórico fica guardado)');

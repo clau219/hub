@@ -726,3 +726,6 @@ kbd { font: 600 11px/1 var(--f); border: 1px solid var(--line-2); border-bottom-
 .sd-in.bom { border-left-color: var(--brand); }
 .sd-in.meta { border-left-color: var(--sun); }
 @media (max-width: 900px) { .sd-coach { grid-template-columns: 1fr; } }
+.hb-autotipo { flex-basis: 100%; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin-top: 6px; }
+.hb-autotipo[hidden] { display: none; }
+.hb-autotipo select { flex: 1; }
