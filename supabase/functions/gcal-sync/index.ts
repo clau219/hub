@@ -98,14 +98,19 @@ async function alterarDoGoogle(sb: any, tk: string, cal: string, id: string) {
   const { data: e } = await sb.from('events').select('*').eq('id', id).maybeSingle();
   if (!e) return { erro: 'evento não encontrado' };
   if (e.origem !== 'google') return await reconciliar(sb, tk, cal);
-  const gid = String(e.uid_externo || '').split(':').slice(1).join(':').replace(/@google\.com$/, '');
+  // uid_externo: "<fonte>:<id>@google.com" ou, numa ocorrência de série, "<fonte>:<id>@google.com#20261016T180000Z"
+  const [base, ocorrencia] = String(e.uid_externo || '').split(':').slice(1).join(':').split('#');
+  const gid = (base || '').replace(/@google\.com$/, '');
   if (!gid) return { erro: 'evento sem identificador do Google' };
-  const atual = await g(tk, 'GET', `/calendars/${encodeURIComponent(cal)}/events/${encodeURIComponent(gid)}`);
-  // Evento que se repete: o Hub mostra só a 1ª data da série, então altera só essa ocorrência
-  // (id da ocorrência = id da série + "_" + início original: 20261016T180000Z ou 20261016 no dia inteiro)
-  const alvo = !atual.recurrence ? gid : `${gid}_${atual.start.dateTime
-    ? new Date(atual.start.dateTime).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
-    : atual.start.date.replace(/-/g, '')}`;
+  // Ocorrência de série: id da ocorrência = id da série + "_" + início original (20261016T180000Z ou 20261016)
+  let alvo = ocorrencia ? `${gid}_${ocorrencia}` : gid;
+  if (!ocorrencia) {
+    // Linha antiga (antes de 16/10, uma linha por série): altera a 1ª ocorrência
+    const atual = await g(tk, 'GET', `/calendars/${encodeURIComponent(cal)}/events/${encodeURIComponent(gid)}`);
+    if (atual.recurrence) alvo = `${gid}_${atual.start.dateTime
+      ? new Date(atual.start.dateTime).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
+      : atual.start.date.replace(/-/g, '')}`;
+  }
   const { summary, location, start, end } = deEvento(e);
   await g(tk, 'PATCH', `/calendars/${encodeURIComponent(cal)}/events/${encodeURIComponent(alvo)}`, { summary, location: location || '', start, end });
   return { ok: true, alterados: 1 };

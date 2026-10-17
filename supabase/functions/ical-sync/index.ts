@@ -1,6 +1,7 @@
 // Lê os links iCal cadastrados (Google Agenda e Airbnb) e grava na agenda/reservas.
 // Agendada a cada hora (cron.sql) e também chamada pelo botão "Ler agora" em Ajustes.
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
+import { RRule } from 'npm:rrule@2.8.1';
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' };
 
@@ -55,10 +56,12 @@ Deno.serve(async req => {
         if (sumiram.length && vazio) throw new Error(`calendário veio vazio; ${sumiram.length} reserva(s) futura(s) mantida(s) sem cancelar`);
         if (sumiram.length) await sb.from('bookings').update({ status: 'cancelada' }).in('id', sumiram);
       } else {
-        // Google Agenda → eventos do calendário escolhido (eventos repetidos entram só pela 1ª ocorrência)
-        // eventos que o próprio Hub escreveu no Google (gcal-sync) não voltam como cópia
-        const rows = primeiraData(evs).filter(e => (e.end || e.start) >= limiteIni.slice(0, 10) && !HUB_UID.test(e.uid)).map(e => {
-          const uid = `${f.id}:${e.uid}`; vistos.push(uid);
+        // Google Agenda → eventos do calendário escolhido. Séries repetidas viram uma linha por ocorrência na janela
+        // (60 dias para trás, 180 para frente), com o mesmo id que o Google dá à ocorrência ("serie#20261020T110000Z").
+        // Eventos que o próprio Hub escreveu no Google (gcal-sync) não voltam como cópia.
+        const ate = new Date(Date.now() + 180 * 864e5).toISOString().slice(0, 10);
+        const rows = expandir(todos, limiteIni.slice(0, 10), ate).filter(e => (e.end || e.start) >= limiteIni.slice(0, 10) && !HUB_UID.test(e.uid)).map(e => {
+          const uid = `${f.id}:${e.uid}${e.chave ? '#' + e.chave : ''}`; vistos.push(uid);
           return {
             calendario: f.calendario, titulo: e.summary || '(sem título)', local: e.location || null, origem: 'google', uid_externo: uid,
             dia_inteiro: e.allDay, inicio: e.allDay ? `${e.start}T12:00:00Z` : e.start, fim: e.allDay ? null : (e.end || null),
@@ -69,6 +72,9 @@ Deno.serve(async req => {
           if (er) throw er;
         }
         eventos += rows.length;
+        // Até 16/10 a série era uma linha só (sem "#data"): apaga essas, agora substituídas pelas ocorrências
+        const series = [...new Set(todos.filter(e => e.rrule).map(e => `${f.id}:${e.uid}`))];
+        for (let i = 0; i < series.length; i += 100) await sb.from('events').delete().in('uid_externo', series.slice(i, i + 100));
         const { data: antigos } = await sb.from('events').select('id,uid_externo').like('uid_externo', `${f.id}:%`).gte('inicio', new Date().toISOString());
         const sumiram = (antigos || []).filter(a => !vistos.includes(a.uid_externo)).map(a => a.id);
         if (sumiram.length && vazio) throw new Error(`calendário veio vazio; ${sumiram.length} evento(s) futuro(s) mantido(s)`);
@@ -92,13 +98,49 @@ Deno.serve(async req => {
   return json({ eventos, reservas, erros, google });
 });
 
-// Evento que se repete: fica uma linha por série (a 1ª data). Se essa data foi alterada no Google
-// (ou pelo Hub), o iCal traz uma exceção com RECURRENCE-ID igual ao início da série: ela substitui o original.
-function primeiraData(evs: IcsEvent[]) {
-  const out = new Map<string, IcsEvent>();
-  for (const e of evs) if (!e.recurrenceId) out.set(e.uid, e);
-  for (const e of evs) if (e.recurrenceId && out.get(e.uid)?.start === e.recurrenceId) out.set(e.uid, e);
-  return [...out.values()];
+// ---------- séries repetidas ----------
+// Chave da ocorrência no formato do Google: 20261020T110000Z (com horário, em UTC) ou 20261020 (dia inteiro).
+// O id da ocorrência no Google é "<id da série>_<chave>", e é assim que o gcal-sync altera só ela.
+const chave = (iso: string) => iso.length === 10 ? iso.replace(/-/g, '') : new Date(iso).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+const BR = 3 * 3600e3; // o Brasil não tem horário de verão desde 2019: a regra roda no relógio local (UTC-3)
+
+// Devolve os eventos simples e uma cópia de cada série por ocorrência entre "de" e "ate".
+// EXDATE e ocorrências canceladas somem; exceções (ocorrência movida ou editada no Google) substituem a original.
+type Ocorrencia = IcsEvent & { chave?: string };
+function expandir(todos: IcsEvent[], de: string, ate: string): Ocorrencia[] {
+  const out: Ocorrencia[] = [];
+  const excecoes = new Map<string, IcsEvent>();
+  for (const e of todos) if (e.recurrenceId) excecoes.set(`${e.uid}#${chave(e.recurrenceId)}`, e);
+  const usadas = new Set<string>();
+  for (const e of todos) {
+    if (e.recurrenceId) continue;
+    if (!e.rrule) { if (e.status !== 'CANCELLED') out.push(e); continue; }
+    if (e.status === 'CANCELLED') continue;
+    const dur = e.end ? Date.parse(e.end.length === 10 ? e.end + 'T00:00:00Z' : e.end) - Date.parse(e.start.length === 10 ? e.start + 'T00:00:00Z' : e.start) : 0;
+    // A regra é calculada no "relógio de parede" (dia da semana local), não em UTC: 22h de terça é 01h de quarta em UTC
+    const inicioLocal = e.allDay ? new Date(e.start + 'T00:00:00Z') : new Date(Date.parse(e.start) - BR);
+    let regra: RRule;
+    try { regra = new RRule({ ...RRule.parseString(e.rrule), dtstart: inicioLocal }); }
+    catch { out.push(e); continue; } // regra que não entendemos: fica só a 1ª data, como antes
+    const fora = new Set((e.exdates || []).map(chave));
+    const datas = regra.between(new Date(de + 'T00:00:00Z'), new Date(ate + 'T23:59:59Z'), true).slice(0, 400);
+    for (const d of datas) {
+      const iso = e.allDay ? d.toISOString().slice(0, 10) : new Date(d.getTime() + BR).toISOString();
+      const k = chave(iso);
+      if (fora.has(k)) continue;
+      const ex = excecoes.get(`${e.uid}#${k}`);
+      if (ex) { usadas.add(`${e.uid}#${k}`); if (ex.status !== 'CANCELLED') out.push({ ...ex, chave: k }); continue; }
+      const fim = dur ? (e.allDay ? new Date(Date.parse(iso + 'T00:00:00Z') + dur).toISOString().slice(0, 10) : new Date(Date.parse(iso) + dur).toISOString()) : undefined;
+      out.push({ ...e, start: iso, end: fim, chave: k });
+    }
+  }
+  // Exceção cuja data original ficou fora da janela, mas que foi movida para dentro dela
+  for (const [k, ex] of excecoes) {
+    if (usadas.has(k) || ex.status === 'CANCELLED') continue;
+    const dia = ex.start.slice(0, 10);
+    if (dia >= de && dia <= ate) out.push({ ...ex, chave: k.split('#').pop() });
+  }
+  return out;
 }
 
 const HUB_UID = /^hub[de][0-9a-f]{32}@google\.com$/;
@@ -136,15 +178,16 @@ async function autorizado(req: Request, sb: any) {
 // Leitor mínimo de iCal (VEVENT) — suficiente para Google Agenda e Airbnb.
 type IcsEvent = {
   uid: string; summary: string; description?: string; location?: string;
-  start: string; end?: string; allDay: boolean; status?: string; rrule?: string; recurrenceId?: string;
+  start: string; end?: string; allDay: boolean; status?: string; rrule?: string; recurrenceId?: string; exdates?: string[];
 };
 
 function parseIcs(text: string): IcsEvent[] {
   const lines = text.replace(/\r\n[ \t]/g, '').replace(/\n[ \t]/g, '').split(/\r?\n/);
   const out: IcsEvent[] = [];
   let cur: Record<string, { params: string; value: string }> | null = null;
+  let exdates: { params: string; value: string }[] = [];
   for (const line of lines) {
-    if (line === 'BEGIN:VEVENT') { cur = {}; continue; }
+    if (line === 'BEGIN:VEVENT') { cur = {}; exdates = []; continue; }
     if (line === 'END:VEVENT') {
       if (cur && cur.DTSTART) {
         const s = toIso(cur.DTSTART), e = cur.DTEND ? toIso(cur.DTEND) : null;
@@ -154,13 +197,15 @@ function parseIcs(text: string): IcsEvent[] {
           location: cur.LOCATION ? unesc(cur.LOCATION.value) : undefined,
           start: s.iso, end: e?.iso, allDay: s.allDay, status: cur.STATUS?.value, rrule: cur.RRULE?.value,
           recurrenceId: cur['RECURRENCE-ID'] ? toIso(cur['RECURRENCE-ID']).iso : undefined,
+          exdates: exdates.flatMap(x => x.value.split(',').map(v => toIso({ params: x.params, value: v }).iso)),
         });
       }
       cur = null; continue;
     }
     if (!cur) continue;
     const m = line.match(/^([A-Z-]+)((?:;[^:]*)?):(.*)$/);
-    if (m && !cur[m[1]]) cur[m[1]] = { params: m[2], value: m[3] };
+    if (m?.[1] === 'EXDATE') exdates.push({ params: m[2], value: m[3] }); // pode vir em várias linhas
+    else if (m && !cur[m[1]]) cur[m[1]] = { params: m[2], value: m[3] };
   }
   return out;
 }
