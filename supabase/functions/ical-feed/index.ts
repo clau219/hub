@@ -1,6 +1,8 @@
 // Publica os calendários do Hub em formato iCal, para assinar no Google Agenda.
 //   ?cal=alugueis&token=...  → Airbnb + reservas diretas das 3 casas
 //   ?cal=dj&token=...        → gigs do pipeline (fechadas, realizadas e pagas)
+//   ?cal=diretas&casa=QS39&token=... → só o que NÃO veio do Airbnb (reservas diretas, Booking, bloqueios do Hub) de uma casa,
+//                                      para importar no calendário do anúncio e o Airbnb bloquear essas datas sozinho
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
 
 Deno.serve(async req => {
@@ -22,6 +24,14 @@ Deno.serve(async req => {
       const titulo = b.status === 'bloqueio' ? `${nome(b.property_id)}: bloqueado` : `${nome(b.property_id)}: ${b.hospede || 'reserva'} (${b.origem})`;
       evs.push(vevent(`bk-${b.id}`, stamp, titulo, `DTSTART;VALUE=DATE:${b.checkin.replace(/-/g, '')}`, `DTEND;VALUE=DATE:${b.checkout.replace(/-/g, '')}`, b.notas));
     }
+  } else if (cal === 'diretas') {
+    const casa = u.searchParams.get('casa');
+    if (!casa) return new Response('informe ?casa=', { status: 400 });
+    const { data: bks } = await sb.from('bookings').select('id,checkin,checkout,status')
+      .eq('property_id', casa).neq('status', 'cancelada').or('origem.is.null,origem.neq.airbnb')
+      .gte('checkout', new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10));
+    // Sem nome de hóspede: o Airbnb só precisa saber que a data está ocupada
+    for (const b of bks || []) evs.push(vevent(`dir-${b.id}`, stamp, 'Reservado (Hub)', `DTSTART;VALUE=DATE:${b.checkin.replace(/-/g, '')}`, `DTEND;VALUE=DATE:${b.checkout.replace(/-/g, '')}`));
   } else if (cal === 'dj') {
     const { data: deals } = await sb.from('deals').select('*, contacts(nome)').eq('negocio', 'dj').in('etapa', ['fechado', 'realizado', 'pago']).not('data_evento', 'is', null);
     for (const d of deals || []) {
@@ -38,7 +48,7 @@ Deno.serve(async req => {
     }
   }
 
-  const nomeCal = cal === 'dj' ? 'Hub: Gigs DJ' : 'Hub: Aluguéis';
+  const nomeCal = cal === 'dj' ? 'Hub: Gigs DJ' : cal === 'diretas' ? 'Hub: reservas diretas' : 'Hub: Aluguéis';
   const body = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Hub//PT-BR', 'CALSCALE:GREGORIAN', `X-WR-CALNAME:${nomeCal}`, 'X-WR-TIMEZONE:America/Sao_Paulo', ...evs, 'END:VCALENDAR'].join('\r\n');
   return new Response(body, { headers: { 'Content-Type': 'text/calendar; charset=utf-8', 'Cache-Control': 'max-age=900' } });
 });

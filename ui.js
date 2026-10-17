@@ -309,5 +309,6 @@ export function openItem(it) {
   if (it.kind === 'tarefa') return taskForm(it.ref);
   if (it.kind === 'checkin' || it.kind === 'checkout' || it.kind === 'etapa') return bookingForm(it.ref);
   if (it.kind === 'evento') return eventForm(it.ref);
+  if (it.kind === 'conflito' && it.ref.property_id) return bookingForm(it.ref); // reserva dupla
   return dealForm(it.ref);
 }

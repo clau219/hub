@@ -8,10 +8,13 @@ import { enablePush, pushStatus, testPush } from './push.js';
 export async function render(el) {
   // Se o service worker não responder, a tela não pode ficar em branco esperando
   const push = await Promise.race([pushStatus().catch(e => e.message), new Promise(r => setTimeout(() => r('Não foi possível verificar agora.'), 3000))]);
-  let feed = 'SEU_FEED_TOKEN', gst = null;
+  let feed = 'SEU_FEED_TOKEN', gst = null, ist = null;
   if (db.mode === 'supabase') {
-    const { data } = await db.client().from('app_config').select('key,value').in('key', ['feed_token', 'gcal_status']);
-    for (const c of data || []) if (c.key === 'feed_token') feed = c.value; else try { gst = JSON.parse(c.value); } catch { }
+    const { data } = await db.client().from('app_config').select('key,value').in('key', ['feed_token', 'gcal_status', 'ical_status']);
+    for (const c of data || []) {
+      if (c.key === 'feed_token') feed = c.value;
+      else try { if (c.key === 'gcal_status') gst = JSON.parse(c.value); else ist = JSON.parse(c.value); } catch { }
+    }
   }
   const fn = CONFIG.SUPABASE_URL ? CONFIG.SUPABASE_URL.replace(/\/$/, '') + '/functions/v1' : null;
   el.innerHTML = `
@@ -29,7 +32,14 @@ export async function render(el) {
       ${S.calendar_sources.map(s => `<tr><td>${h(s.nome || '')}</td><td>${s.calendario === 'dj' ? 'DJ' : s.calendario === 'alugueis' ? 'Aluguéis' : 'Pessoal'}</td><td>${h(s.tipo)}</td><td>${h(s.property_id || '')}</td>
         <td>${s.ultimo_sync ? fmtDate(localDate(s.ultimo_sync)) : 'ainda não'}</td><td><button class="mini" data-del="${s.id}">Remover</button></td></tr>`).join('') || '<tr><td colspan="6" class="muted">Nenhum link cadastrado.</td></tr>'}
     </tbody></table>
+    ${ist?.erros?.length ? `<p class="small late-lbl"><b>Problema na última leitura (${fmtDate(localDate(ist.em))}):</b> ${ist.erros.map(h).join(' · ')}</p>` : ''}
     <div class="row-btns"><button class="btn" id="srcNew">Adicionar link iCal</button>${fn && db.mode === 'supabase' ? '<button class="btn" id="syncNow">Ler agora</button>' : ''}</div>
+  </section>
+
+  <section class="block">
+    <h2>Bloquear o Airbnb com as reservas diretas</h2>
+    <p class="muted">Cada casa tem um endereço com as reservas que não vieram do Airbnb (diretas, Booking, bloqueios feitos no Hub). Importe no anúncio: Airbnb › Calendário › Disponibilidade › Conectar calendários › Importar calendário. Assim o Airbnb fecha essas datas sozinho e não aceita reserva dupla. Ele relê de algumas em algumas horas: num fechamento de última hora, bloqueie também à mão.</p>
+    ${fn ? S.properties.map(p => `<p><b>${h(p.nome)}</b><br><code class="sel">${fn}/ical-feed?cal=diretas&casa=${encodeURIComponent(p.id)}&token=${feed}</code></p>`).join('') : '<p class="muted">Disponível depois de conectar o Supabase.</p>'}
   </section>
 
   <section class="block">

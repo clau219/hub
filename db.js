@@ -13,10 +13,17 @@ export async function init() {
 }
 export const client = () => sb;
 
+// Modo leitura: sem internet e com a sessão vencida, o Hub mostra a cópia guardada e não grava nada
+export let leitura = false;
+export function modoLeitura() { leitura = true; }
+const podeGravar = () => { if (leitura) throw new Error('Sem conexão: o Hub está em modo leitura até a internet voltar.'); };
+
 export const auth = {
+  semRede: false, // a última verificação de sessão falhou por falta de rede (não por login inválido)
   async session() {
     if (!sb) return { local: true };
-    const { data } = await sb.auth.getSession();
+    const { data, error } = await sb.auth.getSession();
+    this.semRede = !data.session && (navigator.onLine === false || /Retryable|fetch|network/i.test(`${error?.name} ${error?.message}`));
     return data.session;
   },
   async signIn(email, password) {
@@ -32,16 +39,27 @@ const ls = {
   set(t, v) { try { localStorage.setItem(LS + t, JSON.stringify(v)); } catch (e) { console.error(e); } },
 };
 
+// O Supabase devolve no máximo 1000 linhas por consulta: lê em páginas até acabar.
+// Eventos antigos não servem para nada na tela: só os de até 400 dias atrás.
+const FILTRO = {
+  events: q => q.gte('inicio', new Date(Date.now() - 400 * 864e5).toISOString()),
+};
+const PAGINA = 1000;
 export async function all(table) {
-  if (sb) {
-    const { data, error } = await sb.from(table).select('*');
+  if (!sb) return ls.get(table);
+  const out = [];
+  for (let i = 0; ; i += PAGINA) {
+    let q = sb.from(table).select('*');
+    if (FILTRO[table]) q = FILTRO[table](q);
+    const { data, error } = await q.order('id').range(i, i + PAGINA - 1);
     if (error) throw error;
-    return data;
+    out.push(...data);
+    if (data.length < PAGINA) return out;
   }
-  return ls.get(table);
 }
 
 export async function insert(table, row) {
+  podeGravar();
   row = clean(row);
   if (sb) {
     const { data, error } = await sb.from(table).insert(row).select().single();
@@ -55,6 +73,7 @@ export async function insert(table, row) {
 }
 
 export async function update(table, id, patch) {
+  podeGravar();
   patch = clean(patch);
   if (sb) {
     const { data, error } = await sb.from(table).update(patch).eq('id', id).select().single();
@@ -72,6 +91,7 @@ export async function update(table, id, patch) {
 
 // Insere várias linhas de uma vez (importação de CSV)
 export async function insertMany(table, rows) {
+  podeGravar();
   rows = rows.map(clean);
   if (sb) {
     const { error } = await sb.from(table).insert(rows);
@@ -84,6 +104,7 @@ export async function insertMany(table, rows) {
 
 // Insere ou atualiza pela coluna única `key` (ex.: um snapshot por dia)
 export async function upsert(table, row, key) {
+  podeGravar();
   row = clean(row);
   if (sb) {
     const { data, error } = await sb.from(table).upsert(row, { onConflict: key }).select().single();
@@ -98,6 +119,7 @@ export async function upsert(table, row, key) {
 }
 
 export async function remove(table, id) {
+  podeGravar();
   if (sb) {
     const { error } = await sb.from(table).delete().eq('id', id);
     if (error) throw error;

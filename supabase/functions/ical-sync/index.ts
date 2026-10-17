@@ -18,7 +18,13 @@ Deno.serve(async req => {
 
   for (const f of fontes || []) {
     try {
-      const evs = parseIcs(await baixar(f.url)).filter(e => e.status !== 'CANCELLED');
+      const texto = await baixar(f.url);
+      // Página de erro ou de login com HTTP 200 não é calendário: sem esta checagem, viraria "0 eventos" e cancelaria tudo
+      if (!/BEGIN:VCALENDAR/.test(texto)) throw new Error('a resposta não é um calendário iCal');
+      const todos = parseIcs(texto);
+      // Calendário sem nenhum evento (nem passados nem bloqueios) é suspeito: não cancela nem apaga nada desta vez
+      const vazio = todos.length === 0;
+      const evs = todos.filter(e => e.status !== 'CANCELLED');
       const vistos: string[] = [];
 
       const ehAirbnb = f.tipo === 'airbnb' || /airbnb\./i.test(f.url);
@@ -46,6 +52,7 @@ Deno.serve(async req => {
         // reservas futuras que sumiram do feed = canceladas
         const { data: antigas } = await sb.from('bookings').select('id,uid_externo').like('uid_externo', `${f.id}:%`).gte('checkout', hoje);
         const sumiram = (antigas || []).filter(a => !vistos.includes(a.uid_externo)).map(a => a.id);
+        if (sumiram.length && vazio) throw new Error(`calendário veio vazio; ${sumiram.length} reserva(s) futura(s) mantida(s) sem cancelar`);
         if (sumiram.length) await sb.from('bookings').update({ status: 'cancelada' }).in('id', sumiram);
       } else {
         // Google Agenda → eventos do calendário escolhido (eventos repetidos entram só pela 1ª ocorrência)
@@ -64,6 +71,7 @@ Deno.serve(async req => {
         eventos += rows.length;
         const { data: antigos } = await sb.from('events').select('id,uid_externo').like('uid_externo', `${f.id}:%`).gte('inicio', new Date().toISOString());
         const sumiram = (antigos || []).filter(a => !vistos.includes(a.uid_externo)).map(a => a.id);
+        if (sumiram.length && vazio) throw new Error(`calendário veio vazio; ${sumiram.length} evento(s) futuro(s) mantido(s)`);
         if (sumiram.length) await sb.from('events').delete().in('id', sumiram);
       }
       await sb.from('calendar_sources').update({ ultimo_sync: new Date().toISOString() }).eq('id', f.id);
@@ -71,6 +79,8 @@ Deno.serve(async req => {
       erros.push(`${f.nome || f.url}: ${(e as Error).message}`);
     }
   }
+  // Resultado da leitura fica guardado para aparecer em Ajustes (a leitura de hora em hora não tem quem veja o erro)
+  await sb.from('app_config').upsert({ key: 'ical_status', value: JSON.stringify({ em: new Date().toISOString(), eventos, reservas, erros }) }, { onConflict: 'key' });
   // em seguida, manda as gigs e eventos do Hub para o Google Agenda
   let google: unknown = null;
   try {

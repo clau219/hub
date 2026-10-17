@@ -302,9 +302,10 @@ svg.ico { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColo
 .g-track > span { border-left: 1px solid var(--line); }
 .g-track > span.today { background: color-mix(in srgb, var(--brand) 9%, transparent); }
 .bar { position: absolute; top: 5px; bottom: 5px; left: calc(var(--s) / var(--n) * 100%); width: calc((var(--e) - var(--s)) / var(--n) * 100%); border: 0; border-radius: 8px; color: #fff; font-size: 12px; font-weight: 600; padding: 0 9px; text-align: left; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; box-shadow: var(--shadow-sm); transition: filter .15s, transform .15s; }
-.bar:hover { filter: brightness(1.08); transform: translateY(-1px); }
-.bar.air { background: linear-gradient(180deg, var(--air), color-mix(in srgb, var(--air) 78%, #000)); }
-.bar.dir { background: linear-gradient(180deg, var(--dir), color-mix(in srgb, var(--dir) 75%, #000)); }
+.bar:hover { filter: saturate(1.2); transform: translateY(-1px); }
+/* texto branco de 12px: o tom mais claro do degradê ainda passa de 4,5:1 nos dois temas */
+.bar.air { background: linear-gradient(180deg, color-mix(in srgb, var(--air) 72%, #000), color-mix(in srgb, var(--air) 62%, #000)); }
+.bar.dir { background: linear-gradient(180deg, color-mix(in srgb, var(--dir) 72%, #000), color-mix(in srgb, var(--dir) 62%, #000)); }
 .bar.blk { background: repeating-linear-gradient(135deg, var(--blk) 0 6px, color-mix(in srgb, var(--blk) 70%, var(--surface)) 6px 12px); color: var(--ink); }
 
 /* ---------- Modal ---------- */

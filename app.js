@@ -34,7 +34,14 @@ function render() {
 async function start() {
   await db.init();
   const session = await db.auth.session();
-  if (!session) return showLogin();
+  if (!session) {
+    // Sem internet e com o token vencido (dura 1 h), a biblioteca não renova a sessão: em vez do login,
+    // abre a cópia guardada só para leitura e recarrega quando a conexão voltar
+    let copia = null; try { copia = localStorage.getItem('hub:snap'); } catch {}
+    if (!db.auth.semRede || !copia) return showLogin();
+    db.modoLeitura();
+    window.addEventListener('online', () => location.reload(), { once: true });
+  }
   $('#app').hidden = false;
   $('#localBanner').hidden = db.mode !== 'local';
   onChange(render);
@@ -51,7 +58,9 @@ async function start() {
         // "+dj Ana Souza casamento 12/12": abre a oportunidade preenchida para conferir
         inp.value = '';
         form.closest('dialog')?.close();
-        const c = S.contacts.filter(c => t.texto.toLowerCase().startsWith(c.nome.toLowerCase())).sort((a, b) => b.nome.length - a.nome.length)[0];
+        // Nome do contato como palavras inteiras no início ("Ana" não casa com "Anabela")
+        const tx = t.texto.toLowerCase() + ' ';
+        const c = S.contacts.filter(c => c.nome && tx.startsWith(c.nome.toLowerCase().trim() + ' ')).sort((a, b) => b.nome.length - a.nome.length)[0];
         const resto = c ? t.texto.slice(c.nome.length).trim() : t.texto;
         return dealForm({}, { negocio: t.negocio, data_evento: t.data_evento, contato_id: c?.id, _contato: c ? '' : t.texto, notas: resto });
       }
@@ -124,14 +133,16 @@ function tema() {
 // Faixa de aviso: sem conexão (dados guardados) ou falha parcial na leitura
 function syncBanner() {
   const b = $('#syncBanner');
-  if (meta.offline) {
+  if (db.leitura) {
+    b.innerHTML = `Sem conexão: modo leitura, com os dados de ${meta.at ? `${fmtDate(meta.at.slice(0, 10))}, ${hhmm(meta.at)}` : 'antes'}. Nada pode ser alterado; o Hub recarrega sozinho quando a internet voltar.`;
+  } else if (meta.offline) {
     b.innerHTML = meta.at
       ? `Sem conexão. Mostrando os dados de ${fmtDate(meta.at.slice(0, 10))}, ${hhmm(meta.at)}: o que mudou depois não aparece. <button class="link-btn" data-reload>Tentar de novo</button>`
       : `Sem conexão e sem dados guardados neste aparelho. <button class="link-btn" data-reload>Tentar de novo</button>`;
   } else if (meta.erro) {
     b.innerHTML = `${meta.erro}. O que depende disso pode estar incompleto. <button class="link-btn" data-reload>Tentar de novo</button>`;
   }
-  b.hidden = !meta.offline && !meta.erro;
+  b.hidden = !db.leitura && !meta.offline && !meta.erro;
 }
 
 // Gravação que falhou fora de um formulário (concluir, adiar…) não pode passar em silêncio

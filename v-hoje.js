@@ -33,7 +33,7 @@ function row(it, { late } = {}) {
   const wa = it.kind === 'acao' ? dealWa(it.ref) : null;
   const dica = it.kind === 'acao' ? 'Feito, definir próximo passo' : it.kind === 'etapa' ? 'Marcar etapa como feita' : it.kind === 'conflito' ? 'Ciente, já está combinado' : 'Concluir';
   const lbl = it.motivo === 'atrasada' || it.motivo === 'conflito' ? relDate(it.date) : it.motivo;
-  return `<li class="row ${late ? (it.kind === 'conflito' ? 'conf' : 'late') : ''} ${it.tentative ? 'tentative' : ''} ${done ? 'swipe' : ''}" style="--c:var(--${areaVar(it.area)})">
+  return `<li class="row ${late ? (it.motivo === 'conflito' ? 'conf' : 'late') : ''} ${it.tentative ? 'tentative' : ''} ${done ? 'swipe' : ''}" style="--c:var(--${areaVar(it.area)})">
     ${done ? `<button class="tick" data-done="${idx}" title="${dica}" aria-label="${h(dica + ': ' + it.title)}"></button>` : `<span class="kind" aria-hidden="true">${icon}</span>`}
     <button class="row-main" data-open="${idx}">
       <span class="row-title">${it.time ? `<b class="time">${h(it.time)}</b>` : ''}${h(it.title)}${it.prio === 1 ? ' <span class="prio">alta</span>' : ''}</span>

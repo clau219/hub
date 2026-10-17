@@ -97,6 +97,9 @@ export function msgDeal(d, nome) {
 
 // ---------- Captura rápida: "ligar p/ Guilherme amanhã #dj !" ----------
 // Começando com "+" vira oportunidade: "+dj Ana Souza casamento 12/12" (a data é a do evento)
+// "2026-11-31" não existe: o Date do JS viraria 1º de dezembro
+const dataValida = iso => { const d = new Date(iso + 'T12:00:00Z'); return !isNaN(d) && d.toISOString().slice(0, 10) === iso; };
+
 export function parseCapture(txt) {
   const deal = /^\s*\+/.test(txt);
   if (deal) txt = txt.replace(/^\s*\+\s*/, '').replace(/^(dj|eng|obra|consultoria|flores|aluguel|alugueis)(?=\s|$)/i, '#$1');
@@ -111,21 +114,27 @@ export function parseCapture(txt) {
   t = t.replace(/\s(amanh[ãa])\s/i, () => { prazo = addDays(hoje, 1); return ' '; });
   t = t.replace(/\sem (\d{1,3}) dias?\s/i, (m, n) => { prazo = addDays(hoje, +n); return ' '; });
   t = t.replace(/\s(?:(?:na )?pr[óo]xima semana|semana que vem)\s/i, () => { prazo = addDays(hoje, ((8 - dow(hoje)) % 7) || 7); return ' '; });
+  // "dia 20": este mês, ou o próximo se já passou. Dia que não existe no mês (31/11) fica no texto, sem prazo.
   t = t.replace(/\sdia (\d{1,2})\s/i, (m, d) => {
+    const [y, mo] = hoje.split('-').map(Number);
     let iso = `${hoje.slice(0, 7)}-${d.padStart(2, '0')}`;
-    if (iso < hoje) { const [y, mo] = hoje.split('-').map(Number); iso = mo === 12 ? `${y + 1}-01-${d.padStart(2, '0')}` : `${y}-${String(mo + 1).padStart(2, '0')}-${d.padStart(2, '0')}`; }
+    if (iso < hoje) iso = mo === 12 ? `${y + 1}-01-${d.padStart(2, '0')}` : `${y}-${String(mo + 1).padStart(2, '0')}-${d.padStart(2, '0')}`;
+    if (!dataValida(iso)) return m;
     prazo = iso; return ' ';
   });
   t = t.replace(/\s(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\s/, (m, d, mo, y) => {
     let yy = y ? (y.length === 2 ? '20' + y : y) : hoje.slice(0, 4);
     let iso = `${yy}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}`;
     if (!y && iso < hoje) iso = `${+yy + 1}${iso.slice(4)}`;
+    if (!dataValida(iso)) return m;
     prazo = iso; return ' ';
   });
-  const wd = { dom: 0, seg: 1, ter: 2, qua: 3, qui: 4, sex: 5, sab: 6, 'sáb': 6 };
-  t = t.replace(/\s(dom|seg|ter|qua|qui|sex|s[áa]b)\s/i, (m, k) => {
-    const target = wd[k.toLowerCase().replace('á', 'a')] ?? wd[k.toLowerCase()];
-    let n = (target - dow(hoje) + 7) % 7 || 7;
+  // Dia da semana por extenso ("sexta", "na quinta", "sexta-feira") ou abreviado ("sex", "qui").
+  // "ter" sozinho é o verbo ("ter o orçamento pronto"): terça só por extenso ou "ter."
+  const DIA = { dom: 0, seg: 1, ter: 2, qua: 3, qui: 4, sex: 5, sab: 6 };
+  t = t.replace(/\s(?:(?:na|no|até|ate|pr[óo]xim[ao])\s+)?(domingo|segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado|dom|seg|ter\.|qua|qui|sex|s[áa]b)(?:-feira)?(?=\s)/i, (m, k) => {
+    const target = DIA[k.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').slice(0, 3)];
+    const n = (target - dow(hoje) + 7) % 7 || 7;
     prazo = addDays(hoje, n); return ' ';
   });
   const titulo = t.replace(/\s+/g, ' ').trim();

@@ -142,7 +142,11 @@ export function atencao() {
   const out = [];
   for (const d of S.deals) {
     if (!ABERTAS.includes(d.etapa)) continue;
-    if (d.data_proxima_acao && d.data_proxima_acao < hoje)
+    // Aberta sem próximo passo (importação, edição direta no banco): some de todas as listas, então aparece aqui
+    if (!d.proxima_acao?.trim() || !d.data_proxima_acao)
+      out.push({ kind: 'acao', motivo: 'sem próxima ação', date: localDate(d.updated_at || d.created_at || new Date().toISOString()), area: d.negocio,
+        title: `${d.titulo}: sem próxima ação`, sub: 'Defina o próximo passo e a data', ref: d });
+    else if (d.data_proxima_acao < hoje)
       out.push({ kind: 'acao', motivo: 'atrasada', date: d.data_proxima_acao, area: d.negocio, title: d.proxima_acao, sub: contactName(d.contato_id) || d.titulo, ref: d });
     else if (['orcamento', 'negociacao'].includes(d.etapa) && d.updated_at && diffDays(localDate(d.updated_at), hoje) >= CONFIG.DIAS_ESQUECIDO && d.data_proxima_acao > hoje)
       out.push({ kind: 'acao', motivo: 'parado', date: localDate(d.updated_at), area: d.negocio, title: `${d.titulo}: sem movimento há ${diffDays(localDate(d.updated_at), hoje)} dias`, sub: 'Próxima ação: ' + d.proxima_acao, ref: d });
@@ -151,7 +155,7 @@ export function atencao() {
   }
   for (const t of S.tasks) if (!t.feito && t.prazo && t.prazo < hoje)
     out.push({ kind: 'tarefa', motivo: 'atrasada', date: t.prazo, area: t.area, title: t.titulo, ref: t });
-  out.push(...conflitos());
+  out.push(...conflitos(), ...reservasDuplas());
   // Hospedagem: só a etapa atrasada mais antiga de cada reserva, para não poluir
   for (const b of S.bookings) {
     if (!acompanhada(b)) continue;
@@ -192,6 +196,23 @@ export function conflitos(dias = 30) {
         title: `Gig ${contactName(g.contato_id) || g.titulo} × ${m.tipo} ${casa}`,
         sub: `${mesmoDia ? 'No mesmo dia' : 'Check-out na manhã seguinte'} (${fmtCheckin(m.dia)}). Combine quem recebe ou entrega a casa.` });
     }
+  }
+  return out;
+}
+
+// Duas reservas confirmadas na mesma casa com noites em comum (ex.: Airbnb × direta).
+// Bloqueio sobre reserva não conta: é o que se faz no Airbnb para segurar uma reserva direta.
+export function reservasDuplas() {
+  const hoje = today(), ok = lerCiente(), out = [];
+  const ativas = S.bookings.filter(b => b.status === 'confirmada' && b.checkout > hoje).sort((a, b) => a.checkin.localeCompare(b.checkin));
+  for (let i = 0; i < ativas.length; i++) for (let j = i + 1; j < ativas.length; j++) {
+    const a = ativas[i], b = ativas[j];
+    if (a.property_id !== b.property_id || !(a.checkin < b.checkout && b.checkin < a.checkout)) continue;
+    const chave = `dupla|${a.id}|${b.id}`;
+    if (ok.has(chave)) continue;
+    const quem = x => `${x.hospede || 'sem nome'} (${x.origem}, ${fmtCheckin(x.checkin)} a ${fmtCheckin(x.checkout)})`;
+    out.push({ kind: 'conflito', motivo: 'reserva dupla', chave, date: b.checkin, area: 'alugueis', ref: b,
+      title: `Reserva dupla · ${prop(a.property_id).nome}`, sub: `${quem(a)} × ${quem(b)}` });
   }
   return out;
 }
