@@ -1,7 +1,7 @@
 // Lê os links iCal cadastrados (Google Agenda e Airbnb) e grava na agenda/reservas.
 // Agendada a cada hora (cron.sql) e também chamada pelo botão "Ler agora" em Ajustes.
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
-import { RRule } from 'npm:rrule@2.8.1';
+import { RRule } from 'https://esm.sh/rrule@2.8.1';
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' };
 
