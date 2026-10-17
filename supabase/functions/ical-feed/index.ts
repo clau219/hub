@@ -27,11 +27,16 @@ Deno.serve(async req => {
   } else if (cal === 'diretas') {
     const casa = u.searchParams.get('casa');
     if (!casa) return new Response('informe ?casa=', { status: 400 });
-    const { data: bks } = await sb.from('bookings').select('id,checkin,checkout,status')
+    const { data: bks } = await sb.from('bookings').select('id,checkin,checkout,status,origem,hospede')
       .eq('property_id', casa).neq('status', 'cancelada').or('origem.is.null,origem.neq.airbnb')
       .gte('checkout', new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10));
-    // Sem nome de hóspede: o Airbnb só precisa saber que a data está ocupada
-    for (const b of bks || []) evs.push(vevent(`dir-${b.id}`, stamp, 'Reservado (Hub)', `DTSTART;VALUE=DATE:${b.checkin.replace(/-/g, '')}`, `DTEND;VALUE=DATE:${b.checkout.replace(/-/g, '')}`));
+    // Título para reconhecer no Airbnb: origem + primeiro nome ("Direta: Marina (Hub)"). Sobrenome e documento não saem do Hub.
+    const ORIGEM: Record<string, string> = { direto: 'Direta', booking: 'Booking', outro: 'Reserva' };
+    for (const b of bks || []) {
+      const nome = String(b.hospede || '').trim().split(/\s+/)[0];
+      const titulo = b.status === 'bloqueio' ? 'Bloqueio (Hub)' : `${ORIGEM[b.origem] || 'Reserva'}${nome ? ': ' + nome : ''} (Hub)`;
+      evs.push(vevent(`dir-${b.id}`, stamp, titulo, `DTSTART;VALUE=DATE:${b.checkin.replace(/-/g, '')}`, `DTEND;VALUE=DATE:${b.checkout.replace(/-/g, '')}`));
+    }
   } else if (cal === 'dj') {
     const { data: deals } = await sb.from('deals').select('*, contacts(nome)').eq('negocio', 'dj').in('etapa', ['fechado', 'realizado', 'pago']).not('data_evento', 'is', null);
     for (const d of deals || []) {
