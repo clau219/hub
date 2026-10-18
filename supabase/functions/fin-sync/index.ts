@@ -20,13 +20,17 @@ Deno.serve(async req => {
   const body = await req.json().catch(() => ({}));
   if (body.connect) {
     try {
+      const key = await apiKey();
+      // Na conta grátis só o conector MeuPluggy funciona com bancos reais: a janela mostra só ele
+      const cons = await pg(key, '/connectors?name=MeuPluggy').catch(() => ({ results: [] }));
+      const meu = (cons.results || []).filter((c: any) => /meu\s*pluggy/i.test(c.name)).map((c: any) => c.id);
       const r = await fetch(`${API}/connect_token`, {
-        method: 'POST', headers: { 'X-API-KEY': await apiKey(), 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'X-API-KEY': key, 'Content-Type': 'application/json' },
         body: JSON.stringify({ options: { clientUserId: 'hub', avoidDuplicates: true } }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || !j.accessToken) throw new Error(`Pluggy ${r.status} ao abrir a conexão: ${j.message || r.statusText}`);
-      return json({ connectToken: j.accessToken });
+      return json({ connectToken: j.accessToken, connectorIds: meu });
     } catch (e) {
       return json({ erro: (e as Error).message });
     }

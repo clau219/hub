@@ -155,7 +155,7 @@ function conectar(extra = false) {
     <ol>
       <li>No <a href="https://meu.pluggy.ai" target="_blank" rel="noopener">meu.pluggy.ai</a>, o banco precisa estar conectado.</li>
       <li>No <a href="https://dashboard.pluggy.ai" target="_blank" rel="noopener">dashboard.pluggy.ai</a>, o conector <b>MeuPluggy</b> precisa estar ativado na sua aplicação.</li>
-      <li>Clique abaixo, escolha <b>MeuPluggy</b>, entre com sua conta e autorize <b>um banco</b>. Repita para cada banco.</li>
+      <li>Clique abaixo, entre com sua conta do <b>MeuPluggy</b> (não escolha o banco direto) e autorize <b>um banco</b>. Repita para cada banco.</li>
     </ol>
     <button class="btn primary" id="fnConnect" ${sincronizando ? 'disabled' : ''}>${sincronizando ? 'Conectando…' : 'Conectar banco'}</button>
     <details class="fn-manual"><summary>Já tenho o Item ID</summary>
@@ -182,6 +182,8 @@ async function abrirConnect() {
     if (data?.erro) throw new Error(data.erro);
     const pc = new window.PluggyConnect({
       connectToken: data.connectToken,
+      ...(data.connectorIds?.length ? { connectorIds: data.connectorIds } : {}),
+      ...(data.connectorIds?.length === 1 ? { selectedConnectorId: data.connectorIds[0] } : {}),
       onSuccess: async ({ item }) => {
         try {
           const r = await sincronizar({ item: item.id, nome: item.connector?.name });
