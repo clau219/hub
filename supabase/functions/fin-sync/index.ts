@@ -66,13 +66,13 @@ async function sincronizar(sb: any, key: string, so: string[] | null, dias: numb
   for (const it of items) {
     try {
       const item = await pg(key, `/items/${it.id}`);
-      const nome = it.nome || item.connector?.name || 'Banco';
+      const accs = (await pg(key, `/accounts?itemId=${it.id}`)).results || [];
+      const nome = (it.nome && !/meu\s*pluggy/i.test(it.nome) ? it.nome : '') || nomeBanco(accs) || item.connector?.name || 'Banco';
       await sb.from('fin_items').update({
         nome, status: item.status, erro: item.error?.message || null,
         sincronizado_em: item.lastUpdatedAt || null, lido_em: new Date().toISOString(),
       }).eq('id', it.id);
 
-      const accs = (await pg(key, `/accounts?itemId=${it.id}`)).results || [];
       for (const a of accs) {
         const c = a.creditData || {};
         const { error: ea } = await sb.from('fin_contas').upsert({
@@ -146,19 +146,21 @@ function classificar(t: any, regras: any[]) {
   return {};
 }
 
-// /v2/transactions (cursor); cai para /transactions (páginas) se a v2 não responder
+// /v2/transactions: filtro dateFrom e cursor "after" tirado do link `next`; se a v2 recusar, usa /transactions (páginas)
 async function transacoes(key: string, conta: string, desde: string) {
   const out: any[] = [];
   try {
-    let url = `/v2/transactions?accountId=${conta}&from=${desde}&pageSize=500`;
-    for (let n = 0; url && n < 100; n++) {
-      const r = await pg(key, url);
+    let after = '';
+    for (let n = 0; n < 200; n++) {
+      const r = await pg(key, `/v2/transactions?accountId=${conta}&dateFrom=${desde}${after ? `&after=${encodeURIComponent(after)}` : ''}`);
       out.push(...(r.results || []));
-      url = r.next ? String(r.next).replace(API, '') : '';
+      after = r.next ? new URL(r.next, API).searchParams.get('after') || '' : '';
+      if (!after) return out;
     }
     return out;
   } catch (e) {
-    if (!/404|405/.test((e as Error).message)) throw e;
+    if (!/Pluggy (400|404|405) /.test((e as Error).message)) throw e;
+    out.length = 0;
   }
   for (let page = 1; ; page++) {
     const r = await pg(key, `/transactions?accountId=${conta}&from=${desde}&pageSize=500&page=${page}`);
@@ -195,6 +197,12 @@ async function autorizado(req: Request, sb: any) {
   return !!data?.user;
 }
 
+function nomeBanco(accs: any[]) {
+  const txt = accs.map(a => `${a.name} ${a.marketingName || ''}`).join(' ');
+  if (/nu ?pagamentos|nubank/i.test(txt)) return 'Nubank';
+  if (/mercado ?pago/i.test(txt)) return 'Mercado Pago';
+  return accs[0]?.marketingName || accs[0]?.name || '';
+}
 const dia = (s?: string | null) => s ? new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date(s)) : null;
 const hojeSp = () => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date());
 function addDays(iso: string, n: number) {
