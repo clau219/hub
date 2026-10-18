@@ -733,6 +733,10 @@ kbd { font: 600 11px/1 var(--f); border: 1px solid var(--line-2); border-bottom-
 /* ---------- Finanças ---------- */
 .fn-pos { color: var(--up); }
 .fn-neg { color: var(--down); }
+.fn-kpis { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.fn-kpi-link { cursor: pointer; text-align: left; font: inherit; color: inherit; }
+.fn-kpi-link:hover { border-color: var(--brand); }
+.fn-inv td small { white-space: normal; }
 .fn-mes { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
 .fn-mes b { font-size: 17px; min-width: 150px; text-align: center; }
 .fn-mes .btn { min-height: 34px; padding: 4px 12px; }

@@ -62,7 +62,7 @@ async function sincronizar(sb: any, key: string, so: string[] | null, dias: numb
   if (!items?.length) return { contas: 0, novos: 0, aviso: 'Nenhuma conexão cadastrada.' };
   const { data: regras } = await sb.from('fin_regras').select('*');
 
-  let contas = 0, novos = 0, atualizados = 0, apagados = 0;
+  let contas = 0, novos = 0, atualizados = 0, apagados = 0, invest = 0;
   const erros: string[] = [];
   for (const it of items) {
     try {
@@ -94,12 +94,41 @@ async function sincronizar(sb: any, key: string, so: string[] | null, dias: numb
         const r = await gravar(sb, a, txs, desde, regras || []);
         novos += r.novos; atualizados += r.atualizados; apagados += r.apagados;
       }
+      // Investimentos: falha aqui (produto não liberado no banco) não impede o resto
+      try { invest += await investimentos(sb, key, it.id); }
+      catch (e) { erros.push(`${nome} (investimentos): ${(e as Error).message}`); }
     } catch (e) {
       erros.push(`${it.nome || it.id}: ${(e as Error).message}`);
       await sb.from('fin_items').update({ erro: (e as Error).message, lido_em: new Date().toISOString() }).eq('id', it.id);
     }
   }
-  return { contas, novos, atualizados, apagados, ...(erros.length ? { erro: erros.join(' · ') } : {}) };
+  return { contas, novos, atualizados, apagados, invest, ...(erros.length ? { erro: erros.join(' · ') } : {}) };
+}
+
+async function investimentos(sb: any, key: string, item: string) {
+  const lst: any[] = [];
+  for (let page = 1; page < 50; page++) {
+    const r = await pg(key, `/investments?itemId=${item}&pageSize=500&page=${page}`);
+    lst.push(...(r.results || []));
+    if (page >= (r.totalPages || 1)) break;
+  }
+  const agora = new Date().toISOString();
+  const rows = lst.filter(i => i.status !== 'TOTAL_WITHDRAWAL').map(i => ({
+    id: i.id, item_id: item, nome: i.name, tipo: i.type, subtipo: i.subtype, emissor: i.issuer || i.institution?.name || null,
+    saldo: i.balance ?? i.amount ?? null, aplicado: i.amountOriginal ?? null, rendimento: i.amountProfit ?? null, liquido: i.amountWithdrawal ?? null,
+    taxa: i.rate ?? null, taxa_tipo: i.rateType ?? null, taxa_fixa: i.fixedAnnualRate ?? null, rend_12m: i.lastTwelveMonthsRate ?? null,
+    vence: dia(i.dueDate), data: dia(i.date), status: i.status, atualizado_em: agora,
+  }));
+  if (rows.length) {
+    const { error } = await sb.from('fin_invest').upsert(rows, { onConflict: 'id' });
+    if (error) throw new Error(error.message);
+  }
+  // Resgatados por completo ou que sumiram da instituição saem da lista
+  const { data: ant } = await sb.from('fin_invest').select('id').eq('item_id', item);
+  const ids = new Set(rows.map(r => r.id));
+  const sair = (ant || []).map((a: any) => a.id).filter((id: string) => !ids.has(id));
+  if (sair.length) await sb.from('fin_invest').delete().in('id', sair);
+  return rows.length;
 }
 
 async function gravar(sb: any, conta: any, txs: any[], desde: string, regras: any[]) {
