@@ -35,7 +35,7 @@ let aba = 'painel';
 let mes = today().slice(0, 7);
 let filtro = { q: '', conta: '', cat: '', semCat: false, negocio: '' };
 let D = { items: [], contas: [], tx: [], regras: [], inv: [], mov: [], snap: [], hist: [], carteiras: [], saldosCripto: [], status: null, criptoStatus: null, at: 0, erro: '' };
-let carregando = false, sincronizando = false;
+let carregando = false, sincronizando = false, leuCarteiras = false;
 let viewEl = null;
 
 const naTela = () => location.hash.startsWith('#/financas');
@@ -84,6 +84,9 @@ async function carregar(force) {
       let criptoStatus = null; try { criptoStatus = JSON.parse(cst.data?.value || 'null'); } catch {}
       D = { items: it.data, contas: ct.data, tx, regras: rg.data, inv, mov, snap: snap.error ? [] : snap.data, hist,
         carteiras: cart.error ? [] : cart.data, saldosCripto: sal.error ? [] : sal.data, status, criptoStatus, at: Date.now(), erro: '' };
+      // Carteira nunca lida ou lida há mais de 12 h: lê agora (uma vez por visita) e recarrega
+      const velha = c => !c.lido_em || Date.now() - Date.parse(c.lido_em) > 12 * 3600e3;
+      if (!leuCarteiras && D.carteiras.some(velha)) { leuCarteiras = true; lerCarteiras().then(() => carregar(true)).catch(() => {}); }
     } else {
       const [items, contas, tx, regras, inv, mov, snap, hist, carteiras, saldosCripto] = await Promise.all(['fin_items', 'fin_contas', 'fin_tx', 'fin_regras', 'fin_invest', 'fin_inv_mov', 'fin_snap', 'fin_invest_hist', 'cripto_carteiras', 'cripto_saldos'].map(t => db.all(t)));
       D = { items, contas, tx: tx.filter(t => t.data >= desde).sort((a, b) => b.data.localeCompare(a.data)), regras, inv, mov, snap, hist, carteiras, saldosCripto, status: null, criptoStatus: null, at: Date.now(), erro: '' };

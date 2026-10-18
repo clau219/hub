@@ -39,9 +39,29 @@ function carteiraQtd() {
   if (_qtdTx !== S.crypto_tx) { _qtdTx = S.crypto_tx; _qtdCache = Object.fromEntries(Object.values(calcular(S.crypto_tx).moedas).map(m => [m.coin_id, m.qtd])); }
   return _qtdCache;
 }
-// Moedas conhecidas: quadro + carteira
+// Carteiras de autocustódia (OneKey, Rabby…) lidas na blockchain pela função cripto-carteiras.
+// Só leitura aqui; o cadastro fica em Finanças → Contas e a soma com os lançamentos, no Painel.
+let OC = { saldos: [], carteiras: [], at: 0 };
+async function carregarOC() {
+  if (Date.now() - OC.at < 5 * 60e3) return;
+  OC.at = Date.now();
+  try {
+    if (db.mode === 'supabase') {
+      const [s, c] = await Promise.all([db.client().from('cripto_saldos').select('*'), db.client().from('cripto_carteiras').select('*')]);
+      OC = { saldos: s.data || [], carteiras: c.data || [], at: OC.at };
+    } else {
+      const [saldos, carteiras] = await Promise.all([db.all('cripto_saldos'), db.all('cripto_carteiras')]);
+      OC = { saldos, carteiras, at: OC.at };
+    }
+  } catch { return; }
+  if (OC.saldos.some(s => s.coin_id && !M.coins[s.coin_id])) refresh(false);
+  if (viewEl && naTela()) render(viewEl);
+}
+
+// Moedas conhecidas: quadro + carteira + carteiras da blockchain
 function conhecidas() {
   const m = new Map();
+  for (const s of OC.saldos) if (s.coin_id && !m.has(s.coin_id)) m.set(s.coin_id, { coin_id: s.coin_id, simbolo: s.simbolo, nome: s.nome || s.simbolo });
   for (const w of S.crypto_watch) m.set(w.coin_id, { coin_id: w.coin_id, simbolo: w.simbolo, nome: w.nome });
   for (const t of S.crypto_tx) if (!m.has(t.coin_id)) m.set(t.coin_id, { coin_id: t.coin_id, simbolo: t.simbolo, nome: t.nome || t.simbolo });
   return [...m.values()];
@@ -98,6 +118,7 @@ export function render(el) {
   let semeado = false; try { semeado = !!localStorage.getItem('hub:cripto-semeado'); } catch { /* idem */ }
   if (db.mode === 'local' && !S.crypto_watch.length && !semeado) semear();
   refresh(false);
+  carregarOC();
 
   el.innerHTML = `
   <div class="view-head">
@@ -459,9 +480,43 @@ function bindSinais(el) {
 // ===============================================================
 // CARTEIRA
 // ===============================================================
+// Bloco das carteiras da blockchain (uma linha por moeda, somando as redes)
+const REDES = { bitcoin: 'Bitcoin', ethereum: 'Ethereum', base: 'Base', arbitrum: 'Arbitrum', optimism: 'OP Mainnet', polygon: 'Polygon', bsc: 'BNB Chain', avalanche: 'Avalanche' };
+function blocoOnchain() {
+  if (!OC.carteiras.length) return '';
+  const nomeCart = id => OC.carteiras.find(c => c.id === id)?.nome || 'Carteira';
+  const g = new Map();
+  for (const s of OC.saldos) {
+    const k = s.coin_id || `${s.chain}:${s.token}`;
+    const x = g.get(k) || g.set(k, { coin_id: s.coin_id, simbolo: s.simbolo, nome: s.nome, qtd: 0, onde: [], usd: s.preco_usd }).get(k);
+    x.qtd += Number(s.quantidade); x.onde.push(`${nomeCart(s.carteira_id)} · ${REDES[s.chain] || s.chain}`);
+  }
+  const linhas = [...g.values()].map(x => {
+    const c = x.coin_id ? M.coins[x.coin_id] : null;
+    const p = c?.brl ?? (x.usd && M.dolar ? x.usd * M.dolar : null);
+    return { ...x, c, p, valor: p != null ? x.qtd * p : null };
+  }).sort((a, b) => (b.valor || 0) - (a.valor || 0));
+  const total = linhas.reduce((t, x) => t + (x.valor || 0), 0);
+  const lido = OC.carteiras.map(c => c.lido_em).filter(Boolean).sort().at(-1);
+  return `<section class="block">
+    <h2>Carteiras na blockchain <span class="count">${linhas.length}</span></h2>
+    <p class="muted small">${OC.carteiras.map(c => h(c.nome || 'Carteira')).join(', ')} · lidas pelo endereço público${lido ? `, última leitura ${fmtDate(lido.slice(0, 10))}` : ' (ainda não lidas)'}.
+      Somadas aos lançamentos no <a href="#/financas?painel">Painel de Finanças</a>; para preço médio e resultado, lance as compras aqui com a corretora da carteira.</p>
+    ${linhas.length ? `<div class="kpis cr-oc-kpis"><div class="kpi big"><span>Valor nas carteiras</span><b>${reais(total)}</b><small>${M.dolar ? 'US$ ' + (total / M.dolar).toLocaleString('pt-BR', { maximumFractionDigits: 0 }) : ''}</small></div></div>
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>Moeda</th><th class="num">Quantidade</th><th class="num">Preço atual</th><th class="num">Valor</th><th class="num">24h</th><th>Onde</th></tr></thead>
+      <tbody>${linhas.map(x => `<tr>
+        <td><span class="coin">${x.c?.img ? `<img src="${h(x.c.img)}" alt="" width="20" height="20" loading="lazy">` : '<i class="coin-ph"></i>'}<b>${h(x.c?.nome || x.nome || x.simbolo)}</b><span class="muted">${h(x.c?.simbolo || x.simbolo)}</span></span></td>
+        <td class="num">${qtd(x.qtd)}</td><td class="num">${preco(x.p)}</td><td class="num"><b>${reais(x.valor)}</b></td><td class="num">${pct(x.c?.ch24)}</td>
+        <td class="muted small">${h([...new Set(x.onde)].join(', '))}</td></tr>`).join('')}</tbody>
+    </table></div>` : '<p class="empty">Nenhum saldo encontrado ainda. Em Finanças, clique em Atualizar.</p>'}
+    <p class="small"><a href="#/financas?contas">Gerenciar carteiras</a></p>
+  </section>`;
+}
+
 function carteira() {
   const { lista, ativos, tot, vendas } = posicoes(S.crypto_tx);
-  if (!S.crypto_tx.length) return `
+  if (!S.crypto_tx.length) return `${blocoOnchain()}
     <section class="block"><p class="empty">Nenhum lançamento ainda. Registre compras, vendas, transferências e recebimentos em “Novo lançamento”, ou traga o histórico das corretoras por CSV.</p>
     ${csvBtns()}</section>`;
   const fechadas = lista.filter(p => p.qtd === 0 && p.realizado);
@@ -469,7 +524,8 @@ function carteira() {
     .sort((a, b) => b.data.localeCompare(a.data) || (b.created_at || '').localeCompare(a.created_at || ''));
   const semCot = ativos.filter(p => !p.cot);
 
-  return `
+  return `${blocoOnchain()}
+  ${OC.carteiras.length ? '<h2 class="cr-sub">Lançamentos (corretoras e compras)</h2>' : ''}
   <div class="kpis">
     <div class="kpi big"><span>Valor atual</span><b>${reais(tot.valor)}</b><small>${M.dolar ? 'US$ ' + (tot.valor / M.dolar).toLocaleString('pt-BR', { maximumFractionDigits: 0 }) : ''}</small></div>
     <div class="kpi"><span>Custo total</span><b>${reais(tot.custo)}</b></div>

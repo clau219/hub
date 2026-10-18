@@ -944,3 +944,5 @@ kbd { font: 600 11px/1 var(--f); border: 1px solid var(--line-2); border-bottom-
 .fn-cart-h code { font-size: 12px; color: var(--muted); }
 .fn-cart-h .link-btn { margin: 0 0 0 auto; }
 .fn-carts form { margin-top: 10px; }
+.cr-sub { font-size: 17px; margin: 4px 0 12px; }
+.cr-oc-kpis { grid-template-columns: minmax(0, 340px); }
