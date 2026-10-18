@@ -768,6 +768,8 @@ kbd { font: 600 11px/1 var(--f); border: 1px solid var(--line-2); border-bottom-
 .fn-conta b { font-size: 20px; }
 .fn-conta small { color: var(--muted); font-size: 13px; }
 .fn-conectar ol { padding-left: 20px; line-height: 1.6; margin: 8px 0 14px; }
+.fn-manual { margin-top: 14px; font-size: 14px; }
+.fn-manual summary { cursor: pointer; color: var(--muted); margin-bottom: 10px; }
 .fn-form { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; }
 .fn-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 600; flex: 1 1 200px; }
 .fn-form label:first-child { flex-basis: 320px; }

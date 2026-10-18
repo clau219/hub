@@ -3,7 +3,8 @@
 //   - Lançamento novo recebe categoria/negócio/casa pelas regras (fin_regras); os já existentes só têm valor,
 //     descrição e status atualizados, então o que foi ajustado no Hub não se perde.
 //   - Pendentes que sumiram na Pluggy (viraram outro lançamento ao compensar) são apagados.
-// Corpo: {} sincroniza tudo · {item: "<id>", nome?} cadastra uma conexão e sincroniza · {dias: N} relê N dias.
+// Corpo: {} sincroniza tudo · {item: "<id>", nome?} cadastra uma conexão e sincroniza · {dias: N} relê N dias
+//        · {connect: true} devolve {connectToken} para abrir a janela da Pluggy (Pluggy Connect) no Hub.
 // Chamada pelo cron (x-hub-cron, 2x por dia) e pelo botão da tela Finanças.
 // Segredos: PLUGGY_CLIENT_ID, PLUGGY_CLIENT_SECRET.
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
@@ -17,6 +18,19 @@ Deno.serve(async req => {
   const sb = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
   if (!(await autorizado(req, sb))) return json({ error: 'não autorizado' }, 401);
   const body = await req.json().catch(() => ({}));
+  if (body.connect) {
+    try {
+      const r = await fetch(`${API}/connect_token`, {
+        method: 'POST', headers: { 'X-API-KEY': await apiKey(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ options: { clientUserId: 'hub', avoidDuplicates: true } }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.accessToken) throw new Error(`Pluggy ${r.status} ao abrir a conexão: ${j.message || r.statusText}`);
+      return json({ connectToken: j.accessToken });
+    } catch (e) {
+      return json({ erro: (e as Error).message });
+    }
+  }
   let res: Record<string, unknown>;
   try {
     const key = await apiKey();

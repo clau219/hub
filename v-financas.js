@@ -117,6 +117,7 @@ export function render(el) {
   el.querySelector('#fnSync')?.addEventListener('click', () => sincronizar().catch(e => toast(e.message, 5000)));
   el.querySelectorAll('[data-mes]').forEach(b => b.onclick = () => { mes = mesMais(mes, +b.dataset.mes); render(el); });
   el.querySelector('#fnConectar')?.addEventListener('submit', conectarSubmit);
+  el.querySelector('#fnConnect')?.addEventListener('click', abrirConnect);
   el.querySelectorAll('[data-cat]').forEach(b => b.onclick = () => { filtro = { ...filtro, cat: b.dataset.cat, semCat: false, negocio: '' }; irAba('lancamentos'); });
   el.querySelectorAll('[data-neg]').forEach(b => b.onclick = () => { filtro = { ...filtro, negocio: b.dataset.neg, cat: '', semCat: false }; irAba('lancamentos'); });
   el.querySelector('#fnSemCat')?.addEventListener('click', () => { filtro = { q: '', conta: '', cat: '', negocio: '', semCat: true }; irAba('lancamentos'); });
@@ -143,21 +144,55 @@ function statusTxt() {
 }
 
 // ---------- Conectar ----------
+// O botão abre a janela da Pluggy (Pluggy Connect) aqui mesmo; ao autorizar, o Item ID volta sozinho e é salvo.
+// O campo de Item ID fica como alternativa (copiado do "Ir para Demo" do dashboard).
+const PLUGGY_JS = 'https://cdn.pluggy.ai/pluggy-connect/v2.11.0/pluggy-connect.js';
+
 function conectar(extra = false) {
   return `<section class="block fn-conectar">
-    ${extra ? '<h2>Adicionar outra conexão</h2>' : `<h2>Conectar seus bancos</h2>
-    <p>O Hub lê seus bancos pelo <b>Meu Pluggy</b> (Open Finance, grátis para uso pessoal, até 5 conexões). Só leitura: nada sai das suas contas.</p>
+    <h2>${extra ? 'Conectar outro banco' : 'Conectar seus bancos'}</h2>
+    ${extra ? '' : `<p>O Hub lê seus bancos pelo <b>Meu Pluggy</b> (Open Finance, grátis para uso pessoal, até 5 conexões). Só leitura: nada sai das suas contas.</p>`}
     <ol>
-      <li>No <a href="https://meu.pluggy.ai" target="_blank" rel="noopener">meu.pluggy.ai</a>, conecte o banco (a autorização é feita no app do banco).</li>
-      <li>No <a href="https://dashboard.pluggy.ai" target="_blank" rel="noopener">dashboard.pluggy.ai</a>, na sua aplicação, abra <b>Ir para Demo</b>, escolha o conector <b>MeuPluggy</b> e entre com a conta do Meu Pluggy.</li>
-      <li>No menu ⋯ do canto, <b>Copiar Item ID</b> e cole abaixo.</li>
-    </ol>`}
-    <form id="fnConectar" class="fn-form">
-      <label>Item ID<input name="item" required placeholder="1a2b3c4d-…" autocomplete="off" pattern="[0-9a-fA-F-]{36}" title="36 caracteres, como 1a2b3c4d-5e6f-…"></label>
-      <label>Nome<input name="nome" placeholder="Ex.: Nubank"></label>
-      <button class="btn primary" ${sincronizando ? 'disabled' : ''}>${sincronizando ? 'Conectando…' : 'Conectar'}</button>
-    </form>
+      <li>No <a href="https://meu.pluggy.ai" target="_blank" rel="noopener">meu.pluggy.ai</a>, o banco precisa estar conectado.</li>
+      <li>No <a href="https://dashboard.pluggy.ai" target="_blank" rel="noopener">dashboard.pluggy.ai</a>, o conector <b>MeuPluggy</b> precisa estar ativado na sua aplicação.</li>
+      <li>Clique abaixo, escolha <b>MeuPluggy</b>, entre com sua conta e autorize <b>um banco</b>. Repita para cada banco.</li>
+    </ol>
+    <button class="btn primary" id="fnConnect" ${sincronizando ? 'disabled' : ''}>${sincronizando ? 'Conectando…' : 'Conectar banco'}</button>
+    <details class="fn-manual"><summary>Já tenho o Item ID</summary>
+      <form id="fnConectar" class="fn-form">
+        <label>Item ID<input name="item" required placeholder="1a2b3c4d-…" autocomplete="off" pattern="[0-9a-fA-F-]{36}" title="36 caracteres, como 1a2b3c4d-5e6f-…"></label>
+        <label>Nome<input name="nome" placeholder="Ex.: Nubank"></label>
+        <button class="btn">Conectar</button>
+      </form>
+    </details>
   </section>`;
+}
+
+const carregarJs = src => window.PluggyConnect ? Promise.resolve() : new Promise((ok, falha) => {
+  const sc = document.createElement('script'); sc.src = src; sc.onload = ok; sc.onerror = () => falha(new Error('Não foi possível abrir a janela da Pluggy (sem internet?).'));
+  document.head.appendChild(sc);
+});
+
+async function abrirConnect() {
+  if (db.mode !== 'supabase') return toast('A conexão só funciona com o Supabase configurado.');
+  const btn = viewEl?.querySelector('#fnConnect'); if (btn) { btn.disabled = true; btn.textContent = 'Abrindo…'; }
+  try {
+    const [{ data, error }] = await Promise.all([db.client().functions.invoke('fin-sync', { body: { connect: true } }), carregarJs(PLUGGY_JS)]);
+    if (error) throw error;
+    if (data?.erro) throw new Error(data.erro);
+    const pc = new window.PluggyConnect({
+      connectToken: data.connectToken,
+      onSuccess: async ({ item }) => {
+        try {
+          const r = await sincronizar({ item: item.id, nome: item.connector?.name });
+          toast(`${item.connector?.name || 'Banco'} conectado: ${r.contas} conta${r.contas === 1 ? '' : 's'}, ${r.novos} lançamentos`, 5000);
+        } catch (e) { toast(e.message, 6000); }
+      },
+      onError: e => toast('Pluggy: ' + (e?.message || 'erro na conexão'), 6000),
+    });
+    await pc.init();
+  } catch (e) { toast(e.message, 6000); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = 'Conectar banco'; } }
 }
 
 async function conectarSubmit(ev) {
