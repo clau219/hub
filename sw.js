@@ -1,8 +1,8 @@
 // Service worker: cache do app (abre rápido e offline) + notificações push
-const CACHE = 'hub-v28';
+const CACHE = 'hub-v29';
 const CDN = 'hub-cdn-v1'; // bibliotecas com versão fixa e fontes: não mudam, ficam em cache
 const ASSETS = ['./', 'index.html', 'app.css', 'app.js', 'config.js', 'db.js', 'store.js', 'util.js', 'ui.js', 'push.js', 'habitos.js', 'hospedagem.js',
-  'v-hoje.js', 'v-pipeline.js', 'v-agenda.js', 'v-alugueis.js', 'v-tarefas.js', 'v-contatos.js', 'v-ajustes.js', 'cripto.js', 'v-cripto.js', 'v-saude.js', 'saude-insights.js', 'v-financas.js', 'palette.js',
+  'v-hoje.js', 'v-pipeline.js', 'v-agenda.js', 'v-alugueis.js', 'v-tarefas.js', 'v-contatos.js', 'v-ajustes.js', 'cripto.js', 'v-cripto.js', 'v-saude.js', 'saude-insights.js', 'v-financas.js', 'v-fin-carteira.js', 'fin-calc.js', 'fin-graficos.js', 'palette.js',
   'manifest.webmanifest', 'icon.svg'];
 
 // Um arquivo que falhe não impede a instalação (addAll falharia inteiro)

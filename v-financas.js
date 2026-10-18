@@ -1,13 +1,18 @@
-// Finanças: contas, cartões e lançamentos do Open Finance (Nubank, Mercado Pago…) pelo Meu Pluggy.
-// Os dados chegam pela Edge Function fin-sync (2x por dia e no botão Atualizar). Esta tela lê e classifica:
-// categoria, negócio e casa de cada lançamento, com regras "descrição contém X" para os próximos.
+// Finanças: contas, cartões, lançamentos e investimentos do Open Finance (Nubank, Mercado Pago…) pelo Meu Pluggy.
+// Os dados chegam pela Edge Function fin-sync (2x por dia e no botão Atualizar). Abas:
+//   Painel (v-fin-carteira.js): carteira de investimentos com indicadores, gráficos e listas RV/RF
+//   Fluxo de caixa: entradas e saídas do mês por negócio e categoria
+//   Lançamentos: extrato, com categoria/negócio/casa e regras "descrição contém X" para os próximos
+//   Contas: conexões, contas e cartões
 import { S } from './store.js';
 import * as db from './db.js';
 import { h, today, addDays, fmtDate, localDate, AREAS, mesNome } from './util.js';
 import { modal, toast } from './ui.js';
+import * as fc from './fin-calc.js';
+import * as carteira from './v-fin-carteira.js';
 
-const ABAS = [['resumo', 'Resumo'], ['lancamentos', 'Lançamentos'], ['investimentos', 'Investimentos'], ['contas', 'Contas']];
-const TIPO_INV = { FIXED_INCOME: 'Renda fixa', MUTUAL_FUND: 'Fundos', SECURITY: 'Previdência', EQUITY: 'Ações e FIIs', ETF: 'ETFs', COE: 'COE', OTHER: 'Outros' };
+const ABAS = [['painel', 'Painel'], ['fluxo', 'Fluxo de caixa'], ['lancamentos', 'Lançamentos'], ['contas', 'Contas']];
+const ABA_ANTIGA = { resumo: 'fluxo', investimentos: 'painel' }; // links antigos continuam funcionando
 const NEGOCIOS = ['pessoal', 'dj', 'alugueis', 'consultoria', 'casa'];
 const CATS_SAI = ['Moradia', 'Contas da casa', 'Mercado', 'Alimentação fora', 'Transporte', 'Combustível', 'Saúde', 'Educação', 'Lazer',
   'Compras', 'Assinaturas', 'Impostos', 'Tarifas bancárias', 'Faxina e limpeza', 'Condomínio', 'Manutenção', 'Equipamento', 'Outros'];
@@ -26,16 +31,19 @@ const PLUGGY = {
   'Same person transfer': INTERNA, 'Credit card payment': INTERNA, 'Investments': INVEST, 'Investment': INVEST, 'Fixed income': INVEST, 'Mutual funds': INVEST,
 };
 
-let aba = 'resumo';
+let aba = 'painel';
 let mes = today().slice(0, 7);
 let filtro = { q: '', conta: '', cat: '', semCat: false, negocio: '' };
-let D = { items: [], contas: [], tx: [], regras: [], inv: [], status: null, at: 0, erro: '' };
+let D = { items: [], contas: [], tx: [], regras: [], inv: [], mov: [], snap: [], hist: [], status: null, at: 0, erro: '' };
 let carregando = false, sincronizando = false;
 let viewEl = null;
 
 const naTela = () => location.hash.startsWith('#/financas');
-const brl2 = v => v == null ? '–' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-const brl0 = v => v == null ? '–' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
+// Valores em R$ passam por fc.money: respeitam o modo privacidade (botão de olho)
+const brl2 = v => fc.money(v, 2);
+const brl0 = v => fc.money(v, 0);
+const PRIV = 'hub:fin-privado';
+try { fc.priv.on = localStorage.getItem(PRIV) === '1'; } catch {}
 export const catDe = t => t.categoria || PLUGGY[t.cat_pluggy] || (t.valor > 0 ? 'Outras entradas' : 'Outros');
 const conta = id => D.contas.find(c => c.id === id);
 const contaNome = c => c ? (c.apelido || c.nome || 'Conta') : '';
@@ -54,22 +62,27 @@ async function carregar(force) {
     const desde = addDays(today(), -400);
     if (db.mode === 'supabase') {
       const sb = db.client();
-      const tx = [];
-      for (let i = 0; ; i += 1000) {
-        const { data, error } = await sb.from('fin_tx').select('*').gte('data', desde).order('data', { ascending: false }).order('id').range(i, i + 999);
-        if (error) throw error;
-        tx.push(...data);
-        if (data.length < 1000) break;
-      }
-      const [it, ct, rg, st, iv] = await Promise.all([sb.from('fin_items').select('*'), sb.from('fin_contas').select('*'), sb.from('fin_regras').select('*'),
-        sb.from('app_config').select('value').eq('key', 'fin_status').maybeSingle(), sb.from('fin_invest').select('*').order('saldo', { ascending: false })]);
+      // Lê em páginas de 1000 (limite do Supabase); tabela que ainda não existe vira lista vazia
+      const todas = async (t, ordem, filtro = q => q, opcional = false) => {
+        const out = [];
+        for (let i = 0; ; i += 1000) {
+          const { data, error } = await filtro(sb.from(t).select('*')).order(ordem, { ascending: false }).order('id').range(i, i + 999);
+          if (error) { if (opcional) return []; throw error; }
+          out.push(...data);
+          if (data.length < 1000) return out;
+        }
+      };
+      const [tx, it, ct, rg, st, inv, mov, snap, hist] = await Promise.all([
+        todas('fin_tx', 'data', q => q.gte('data', desde)), sb.from('fin_items').select('*'), sb.from('fin_contas').select('*'), sb.from('fin_regras').select('*'),
+        sb.from('app_config').select('value').eq('key', 'fin_status').maybeSingle(), todas('fin_invest', 'atualizado_em', q => q, true),
+        todas('fin_inv_mov', 'data', q => q, true), sb.from('fin_snap').select('*').order('dia'), todasHist(sb)]);
       const e = it.error || ct.error || rg.error;
       if (e) throw e;
       let status = null; try { status = JSON.parse(st.data?.value || 'null'); } catch {}
-      D = { items: it.data, contas: ct.data, tx, regras: rg.data, inv: iv.error ? [] : iv.data, status, at: Date.now(), erro: '' };
+      D = { items: it.data, contas: ct.data, tx, regras: rg.data, inv, mov, snap: snap.error ? [] : snap.data, hist, status, at: Date.now(), erro: '' };
     } else {
-      const [items, contas, tx, regras, inv] = await Promise.all(['fin_items', 'fin_contas', 'fin_tx', 'fin_regras', 'fin_invest'].map(t => db.all(t)));
-      D = { items, contas, tx: tx.filter(t => t.data >= desde).sort((a, b) => b.data.localeCompare(a.data)), regras, inv: inv.sort((a, b) => b.saldo - a.saldo), status: null, at: Date.now(), erro: '' };
+      const [items, contas, tx, regras, inv, mov, snap, hist] = await Promise.all(['fin_items', 'fin_contas', 'fin_tx', 'fin_regras', 'fin_invest', 'fin_inv_mov', 'fin_snap', 'fin_invest_hist'].map(t => db.all(t)));
+      D = { items, contas, tx: tx.filter(t => t.data >= desde).sort((a, b) => b.data.localeCompare(a.data)), regras, inv, mov, snap, hist, status: null, at: Date.now(), erro: '' };
     }
   } catch (e) {
     D.erro = /fin_|relation|does not exist/i.test(e.message || '') ? 'As tabelas de finanças ainda não existem: rode supabase/2026-10-17_financas.sql.'
@@ -78,6 +91,17 @@ async function carregar(force) {
   } finally {
     carregando = false;
     if (viewEl && naTela()) render(viewEl);
+  }
+}
+
+// Histórico diário de cada investimento: pode passar de 1000 linhas
+async function todasHist(sb) {
+  const out = [];
+  for (let i = 0; ; i += 1000) {
+    const { data, error } = await sb.from('fin_invest_hist').select('invest_id, dia, saldo').order('dia').order('invest_id').range(i, i + 999);
+    if (error) return out;
+    out.push(...data);
+    if (data.length < 1000) return out;
   }
 }
 
@@ -99,20 +123,27 @@ async function sincronizar(body = {}) {
 export function render(el) {
   viewEl = el;
   const q = location.hash.split('?')[1] || '';
-  if (ABAS.some(a => a[0] === q)) aba = q;
+  const qa = ABA_ANTIGA[q] || q;
+  if (ABAS.some(a => a[0] === qa)) aba = qa;
   carregar(false);
 
   const conectado = D.items.length > 0;
   el.innerHTML = `
-  <div class="view-head">
+  <div class="view-head fn-head">
     <h1>Finanças</h1>
-    ${conectado ? `<div class="seg" role="tablist">${ABAS.map(([k, l]) => `<button role="tab" aria-selected="${k === aba}" class="${k === aba ? 'on' : ''}" data-aba="${k}">${l}</button>`).join('')}</div>` : ''}
+    <div class="seg" role="tablist">${ABAS.map(([k, l]) => `<button role="tab" aria-selected="${k === aba}" class="${k === aba ? 'on' : ''}" data-aba="${k}">${l}</button>`).join('')}</div>
     <span class="muted small">${statusTxt()}</span>
+    <button class="btn fn-olho" id="fnOlho" aria-pressed="${fc.priv.on}" title="${fc.priv.on ? 'Mostrar valores' : 'Ocultar valores'}" aria-label="${fc.priv.on ? 'Mostrar valores' : 'Ocultar valores'}">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>${fc.priv.on ? '<path d="M3 3l18 18"/>' : ''}</svg></button>
     ${conectado ? `<button class="btn" id="fnSync" ${sincronizando ? 'disabled' : ''}>${sincronizando ? 'Atualizando…' : 'Atualizar'}</button>` : ''}
   </div>
   ${D.erro ? `<p class="banner">${h(D.erro)}</p>` : ''}
   ${D.status?.erro ? `<p class="banner">Pluggy: ${h(D.status.erro)}</p>` : ''}
-  ${!D.at ? '<p class="empty">Carregando…</p>' : !conectado ? conectar() : aba === 'resumo' ? resumo() : aba === 'lancamentos' ? lancamentos() : aba === 'investimentos' ? investimentos() : contas()}`;
+  <div class="fn-corpo">${!D.at ? (aba === 'painel' ? carteira.skeleton() : '<p class="empty">Carregando…</p>')
+    : aba === 'painel' ? carteira.painel(D, ctx) : aba === 'fluxo' ? (conectado ? resumo() : conectar()) : aba === 'lancamentos' ? (conectado ? lancamentos() : conectar())
+      : (conectado ? contas() : conectar())}</div>`;
+  if (D.at && aba === 'painel') carteira.ligar(el, ctx);
+  el.querySelector('#fnOlho').onclick = () => { fc.priv.on = !fc.priv.on; try { localStorage.setItem(PRIV, fc.priv.on ? '1' : '0'); } catch {} render(el); };
 
   el.querySelectorAll('[data-aba]').forEach(b => b.onclick = () => irAba(b.dataset.aba));
   el.querySelector('#fnSync')?.addEventListener('click', () => sincronizar().catch(e => toast(e.message, 5000)));
@@ -124,8 +155,7 @@ export function render(el) {
   el.querySelector('#fnSemCat')?.addEventListener('click', () => { filtro = { q: '', conta: '', cat: '', negocio: '', semCat: true }; irAba('lancamentos'); });
   el.querySelectorAll('tr[data-tx]').forEach(r => r.onclick = () => editarTx(D.tx.find(t => t.id === r.dataset.tx)));
   el.querySelectorAll('[data-conta]').forEach(b => b.onclick = () => editarConta(conta(b.dataset.conta)));
-  el.querySelectorAll('tr[data-inv]').forEach(r => r.onclick = () => editarInv(D.inv.find(i => i.id === r.dataset.inv)));
-  el.querySelector('#fnVerInv')?.addEventListener('click', () => irAba('investimentos'));
+  el.querySelector('#fnVerInv')?.addEventListener('click', () => irAba('painel'));
   const fq = el.querySelector('#fnQ');
   if (fq) {
     fq.oninput = () => { filtro.q = fq.value; const p = fq.selectionStart; render(el); const n = el.querySelector('#fnQ'); n.focus(); n.setSelectionRange(p, p); };
@@ -136,6 +166,8 @@ export function render(el) {
 }
 
 function irAba(a) { aba = a; history.replaceState(null, '', '#/financas?' + a); render(viewEl); window.scrollTo(0, 0); }
+// O que o Painel precisa desta tela
+const ctx = { catDe: t => catDe(t), rerender: () => viewEl && naTela() && render(viewEl), recarregar: () => carregar(true), irAba: a => irAba(a) };
 
 function statusTxt() {
   const s = D.status;
@@ -229,7 +261,7 @@ function resumo() {
   <div class="kpis fn-kpis">
     <div class="kpi"><span>Em contas</span><b>${brl0(soma(bancos.map(c => ({ valor: c.saldo || 0 }))))}</b><small>${bancos.length} conta${bancos.length === 1 ? '' : 's'}</small></div>
     <div class="kpi"><span>Faturas em aberto</span><b>${brl0(soma(cartoes.map(c => ({ valor: c.saldo || 0 }))))}</b><small>${vence ? `vence ${fmtDate(vence)}` : `${cartoes.length} cartão${cartoes.length === 1 ? '' : 'ões'}`}</small></div>
-    ${invVis().length ? `<button class="kpi fn-kpi-link" id="fnVerInv"><span>Investido</span><b>${brl0(soma(invVis().map(i => ({ valor: i.saldo || 0 }))))}</b><small>${invVis().length} aplicaç${invVis().length === 1 ? 'ão' : 'ões'}</small></button>` : ''}
+    ${D.inv.length ? (t => `<button class="kpi fn-kpi-link" id="fnVerInv"><span>Investido</span><b>${brl0(t.valor)}</b><small>${t.n} aplicaç${t.n === 1 ? 'ão' : 'ões'} · ver painel</small></button>`)(fc.totais(D.inv.map(i => fc.deInvest(i)))) : ''}
     <div class="kpi"><span>Resultado de ${mesNome(+mes.slice(5) - 1)}</span><b class="${ent + sai >= 0 ? 'fn-pos' : 'fn-neg'}">${ent + sai >= 0 ? '' : '−'}${brl0(Math.abs(ent + sai))}</b>
       <small>entrou <span class="fn-pos">${brl0(ent)}</span> · saiu <span class="fn-neg">${brl0(-sai)}</span></small></div>
   </div>
@@ -365,62 +397,6 @@ async function salvarTx(ids, patch) {
       if (error) throw error;
     }
   } else for (const id of ids) await db.update('fin_tx', id, patch);
-}
-
-// ---------- Investimentos ----------
-const invVis = () => D.inv.filter(i => !i.oculta);
-const pct = v => v == null ? '' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + '%';
-const SUB_INV = { TREASURY: 'Tesouro Direto', CORPORATE_DEBT: 'Crédito privado', DEBENTURES: 'Debêntures', RETIREMENT: 'Previdência', STOCK: 'Ação', REAL_ESTATE_FUND: 'FII',
-  INVESTMENT_FUND: 'Fundo', MULTIMARKET_FUND: 'Fundo multimercado', FIXED_INCOME_FUND: 'Fundo de renda fixa', STOCK_FUND: 'Fundo de ações', ETF_FUND: 'Fundo de ETF', STRUCTURED_NOTE: 'COE' };
-const nomeItem = id => D.items.find(x => x.id === id)?.nome || '';
-const somaSaldo = l => l.reduce((t, i) => t + Number(i.saldo || 0), 0);
-// "110% do CDI", "IPCA + 6%", "12,5% a.a."
-function taxaTxt(i) {
-  const tt = i.taxa_tipo && !/PRE/i.test(i.taxa_tipo) ? i.taxa_tipo.replace(/_/g, ' ') : '';
-  if (tt && i.taxa_fixa) return `${tt} + ${pct(i.taxa_fixa)}`;
-  if (tt && i.taxa) return `${pct(i.taxa)} do ${tt}`;
-  if (i.taxa_fixa || i.taxa) return `${pct(i.taxa_fixa || i.taxa)} a.a.`;
-  return '';
-}
-const ganho = i => i.rendimento != null ? +i.rendimento : i.aplicado != null && i.saldo != null ? i.saldo - i.aplicado : null;
-
-function investimentos() {
-  if (!D.inv.length) return `<section class="block"><p class="empty">Nenhum investimento veio dos bancos conectados.<br>
-    Se você tem caixinhas, CDB ou fundos, confira no <a href="https://meu.pluggy.ai" target="_blank" rel="noopener">meu.pluggy.ai</a> se a autorização do banco inclui investimentos e clique em Atualizar.</p></section>`;
-  const vis = invVis();
-  const total = somaSaldo(vis);
-  const comGanho = vis.filter(i => ganho(i) != null);
-  const lucro = comGanho.reduce((t, i) => t + ganho(i), 0);
-  const aplic = comGanho.reduce((t, i) => t + (i.saldo - ganho(i)), 0);
-  const grupos = {};
-  for (const i of D.inv) (grupos[i.tipo || 'OTHER'] ||= []).push(i);
-  const ordem = Object.entries(grupos).sort((a, b) => somaSaldo(b[1]) - somaSaldo(a[1]));
-  return `<div class="kpis fn-kpis">
-    <div class="kpi"><span>Total investido</span><b>${brl0(total)}</b><small>${vis.length} aplicaç${vis.length === 1 ? 'ão' : 'ões'}</small></div>
-    ${comGanho.length ? `<div class="kpi"><span>Rendeu até agora</span><b class="${lucro >= 0 ? 'fn-pos' : 'fn-neg'}">${brl2(lucro)}</b><small>${aplic > 0 ? `${pct(lucro / aplic * 100)} sobre ${brl0(aplic)} aplicados` : 'bruto, antes de IR'}</small></div>` : ''}
-    ${ordem.slice(0, 2).map(([t, l]) => { const v = somaSaldo(l.filter(i => !i.oculta)); return v ? `<div class="kpi"><span>${h(TIPO_INV[t] || t)}</span><b>${brl0(v)}</b><small>${pct(v / (total || 1) * 100)} do total</small></div>` : ''; }).join('')}
-  </div>
-  ${ordem.map(([t, l]) => `<section class="block"><h2>${h(TIPO_INV[t] || t)}</h2><div class="table-wrap"><table class="table fn-tx fn-inv">
-    <thead><tr><th>Aplicação</th><th>Rende</th><th>Vence</th><th class="num">Aplicado</th><th class="num">Hoje</th><th class="num">Rendeu</th></tr></thead>
-    <tbody>${l.map(i => `<tr data-inv="${h(i.id)}" class="${i.oculta ? 'fn-fora' : ''}">
-      <td><div class="fn-desc">${h(i.nome || 'Aplicação')}</div><small class="muted">${h([SUB_INV[i.subtipo] || i.subtipo, i.emissor, nomeItem(i.item_id)].filter(Boolean).join(' · '))}${i.oculta ? ' · fora dos totais' : ''}</small></td>
-      <td>${h(taxaTxt(i))}${i.rend_12m != null ? `<br><small class="muted">${pct(i.rend_12m)} em 12 meses</small>` : ''}</td>
-      <td class="fn-data">${i.vence ? fmtDate(i.vence, { year: true }) : '<span class="muted">livre</span>'}</td>
-      <td class="num">${i.aplicado != null ? brl2(i.aplicado) : ''}</td>
-      <td class="num"><b>${brl2(i.saldo)}</b>${i.liquido != null && Math.abs(i.liquido - i.saldo) > 0.01 ? `<br><small class="muted">líquido ${brl2(i.liquido)}</small>` : ''}</td>
-      <td class="num ${ganho(i) >= 0 ? 'fn-pos' : 'fn-neg'}">${ganho(i) != null ? brl2(ganho(i)) : ''}</td>
-    </tr>`).join('')}</tbody>
-  </table></div></section>`).join('')}
-  <p class="muted small">Valores informados pelos bancos via Open Finance, atualizados 1 vez por dia. "Rendeu" é bruto (antes de IR e IOF), salvo quando o banco informa o valor líquido.</p>`;
-}
-
-function editarInv(i) {
-  if (!i) return;
-  modal(i.nome || 'Aplicação', `<div class="grid2">
-    <label class="span2 chk"><input type="checkbox" name="oculta" ${i.oculta ? 'checked' : ''}> Deixar fora dos totais (ex.: reserva de outra pessoa ou da empresa)</label>
-  </div>`, {
-    onSubmit: async f => { await db.update('fin_invest', i.id, { oculta: !!f.oculta }); await carregar(true); },
-  });
 }
 
 // ---------- Contas ----------

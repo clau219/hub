@@ -3,6 +3,8 @@
 //   - Lançamento novo recebe categoria/negócio/casa pelas regras (fin_regras); os já existentes só têm valor,
 //     descrição e status atualizados, então o que foi ajustado no Hub não se perde.
 //   - Pendentes que sumiram na Pluggy (viraram outro lançamento ao compensar) são apagados.
+//   - Investimentos: saldo, quantidade e preço de cada aplicação + compras/vendas/impostos (fin_inv_mov).
+//   - No fim, foto do dia: contas/faturas (fin_snap) e valor de cada investimento, inclusive os manuais (fin_invest_hist).
 // Corpo: {} sincroniza tudo · {item: "<id>", nome?} cadastra uma conexão e sincroniza · {dias: N} relê N dias
 //        · {connect: true} devolve {connectToken} para abrir a janela da Pluggy (Pluggy Connect) no Hub.
 // Chamada pelo cron (x-hub-cron, 2x por dia) e pelo botão da tela Finanças.
@@ -102,6 +104,7 @@ async function sincronizar(sb: any, key: string, so: string[] | null, dias: numb
       await sb.from('fin_items').update({ erro: (e as Error).message, lido_em: new Date().toISOString() }).eq('id', it.id);
     }
   }
+  try { await foto(sb); } catch (e) { erros.push(`foto do dia: ${(e as Error).message}`); }
   return { contas, novos, atualizados, apagados, invest, ...(erros.length ? { erro: erros.join(' · ') } : {}) };
 }
 
@@ -118,6 +121,8 @@ async function investimentos(sb: any, key: string, item: string) {
     saldo: i.balance ?? i.amount ?? null, aplicado: i.amountOriginal ?? null, rendimento: i.amountProfit ?? null, liquido: i.amountWithdrawal ?? null,
     taxa: i.rate ?? null, taxa_tipo: i.rateType ?? null, taxa_fixa: i.fixedAnnualRate ?? null, rend_12m: i.lastTwelveMonthsRate ?? null,
     vence: dia(i.dueDate), data: dia(i.date), status: i.status, atualizado_em: agora,
+    ticker: i.code || null, quantidade: i.quantity ?? null, preco_atual: i.value ?? null,
+    preco_medio: i.amountOriginal != null && i.quantity ? i.amountOriginal / i.quantity : null,
   }));
   if (rows.length) {
     const { error } = await sb.from('fin_invest').upsert(rows, { onConflict: 'id' });
@@ -128,7 +133,39 @@ async function investimentos(sb: any, key: string, item: string) {
   const ids = new Set(rows.map(r => r.id));
   const sair = (ant || []).map((a: any) => a.id).filter((id: string) => !ids.has(id));
   if (sair.length) await sb.from('fin_invest').delete().in('id', sair);
+  for (const row of rows) await movimentos(sb, key, row.id);
   return rows.length;
+}
+
+// Compras, vendas, impostos e transferências de uma aplicação (a Pluggy não informa proventos aqui)
+const TIPO_MOV: Record<string, string> = { BUY: 'aporte', SELL: 'resgate', TAX: 'imposto', TRANSFER: 'transferencia' };
+async function movimentos(sb: any, key: string, inv: string) {
+  const lst: any[] = [];
+  try {
+    for (let page = 1; page < 20; page++) {
+      const r = await pg(key, `/investments/${inv}/transactions?pageSize=500&page=${page}`);
+      lst.push(...(r.results || []));
+      if (page >= (r.totalPages || 1)) break;
+    }
+  } catch { return; } // nem toda instituição informa o histórico
+  const rows = lst.filter(t => TIPO_MOV[t.type] && dia(t.date)).map(t => ({
+    id: 'p-' + t.id, invest_id: inv, data: dia(t.date), tipo: TIPO_MOV[t.type],
+    valor: Math.abs(t.amount ?? t.netAmount ?? (t.value && t.quantity ? t.value * t.quantity : 0)),
+    quantidade: t.quantity ?? null, descricao: t.description || null, fonte: 'pluggy',
+  }));
+  for (let i = 0; i < rows.length; i += 500) await sb.from('fin_inv_mov').upsert(rows.slice(i, i + 500), { onConflict: 'id' });
+}
+
+// Foto do dia para os gráficos de evolução
+async function foto(sb: any) {
+  const hoje = hojeSp();
+  const [{ data: cs }, { data: inv }] = await Promise.all([sb.from('fin_contas').select('tipo, saldo, oculta'), sb.from('fin_invest').select('id, saldo, aplicado')]);
+  const vis = (cs || []).filter((c: any) => !c.oculta);
+  const tot = (l: any[]) => l.reduce((t, c) => t + Number(c.saldo || 0), 0);
+  await sb.from('fin_snap').upsert({ dia: hoje, contas: tot(vis.filter((c: any) => c.tipo !== 'CREDIT')), faturas: tot(vis.filter((c: any) => c.tipo === 'CREDIT')),
+    atualizado_em: new Date().toISOString() }, { onConflict: 'dia' });
+  const rows = (inv || []).map((i: any) => ({ invest_id: i.id, dia: hoje, saldo: i.saldo, aplicado: i.aplicado }));
+  if (rows.length) await sb.from('fin_invest_hist').upsert(rows, { onConflict: 'invest_id,dia' });
 }
 
 async function gravar(sb: any, conta: any, txs: any[], desde: string, regras: any[]) {
