@@ -26,7 +26,8 @@ Deno.serve(async req => {
       const meu = (cons.results || []).filter((c: any) => /meu\s*pluggy/i.test(c.name)).map((c: any) => c.id);
       const r = await fetch(`${API}/connect_token`, {
         method: 'POST', headers: { 'X-API-KEY': key, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ options: { clientUserId: 'hub', avoidDuplicates: true } }),
+        // sem avoidDuplicates: pelo MeuPluggy todo banco usa a mesma conta e a Pluggy recusaria o segundo
+        body: JSON.stringify({ options: { clientUserId: 'hub' } }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || !j.accessToken) throw new Error(`Pluggy ${r.status} ao abrir a conexão: ${j.message || r.statusText}`);

@@ -190,8 +190,7 @@ async function abrirConnect() {
           toast(`${item.connector?.name || 'Banco'} conectado: ${r.contas} conta${r.contas === 1 ? '' : 's'}, ${r.novos} lançamentos`, 5000);
         } catch (e) { toast(e.message, 6000); }
       },
-      onError: e => toast(/ALREADY_EXISTS/.test(e?.message || '') ? 'Esse banco já está conectado. Para outro banco, escolha um diferente na autorização do MeuPluggy.'
-        : 'Pluggy: ' + (e?.message || 'erro na conexão'), 7000),
+      onError: e => toast('Pluggy: ' + (e?.message || 'erro na conexão'), 7000),
     });
     await pc.init();
   } catch (e) { toast(e.message, 6000); }
