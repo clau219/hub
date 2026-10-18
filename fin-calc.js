@@ -119,6 +119,8 @@ export const qtdTxt = v => v == null ? '–' : Number(v).toLocaleString('pt-BR',
 export const dataBr = iso => iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : '–';
 
 // ---------- Ativos (formato único para Pluggy, manual e cripto) ----------
+// Nome sem o sufixo jurídico longo: "CDB - NU FINANCEIRA S.A. - SOCIEDADE DE CREDITO, FINANCIAMENTO E INVESTIMENTO" → "CDB - NU FINANCEIRA S.A."
+export const nomeCurto = s => String(s || '').replace(/\s*[-–,]\s*SOCIEDADE\s+DE\s+CR[EÉ]DITO.*$/i, '').replace(/\s*[-–]\s*BANCO\s+M[UÚ]LTIPLO.*$/i, '').trim();
 const n = v => v == null || v === '' || isNaN(v) ? null : Number(v);
 export function deInvest(i, hoje = hojeIso()) {
   const classe = classeDe(i);
@@ -127,8 +129,8 @@ export function deInvest(i, hoje = hojeIso()) {
   const custo = n(i.aplicado) ?? (qtd != null && pm != null ? qtd * pm : n(i.rendimento) != null && valor != null ? valor - n(i.rendimento) : null);
   const resultado = n(i.rendimento) ?? (custo != null && valor != null ? valor - custo : null);
   return {
-    id: i.id, fonte: i.fonte || 'pluggy', nome: i.nome || i.ticker || 'Aplicação', ticker: i.ticker || '', classe, grupo: CLASSES[classe].grupo,
-    emissor: i.emissor || '', qtd, pm: pm ?? (custo != null && qtd ? custo / qtd : null), preco, valor, custo, resultado,
+    id: i.id, fonte: i.fonte || 'pluggy', nome: nomeCurto(i.nome) || i.ticker || 'Aplicação', ticker: i.ticker || '', classe, grupo: CLASSES[classe].grupo,
+    emissor: nomeCurto(i.emissor), qtd, pm: pm ?? (custo != null && qtd ? custo / qtd : null), preco, valor, custo, resultado,
     resPct: resultado != null && custo > 0 ? resultado / custo * 100 : null,
     vence: i.vence || null, dias: i.vence ? diasEntre(hoje, i.vence) : null, liquidez: liquidezDe(i, classe),
     taxa: taxaTxt(i), tesouro: classe === 'tesouro' ? tesouroTipo(i) : '', rend12m: n(i.rend_12m), liquido: n(i.liquido),
@@ -215,6 +217,32 @@ export function filtrar(ativos, { classe = '', renda = '', q = '' } = {}) {
   return ativos.filter(a => (!classe || (classe.startsWith('f:') ? CLASSES[a.classe].fatia === classe.slice(2) : a.classe === classe))
     && (!renda || a.grupo === renda)
     && (!busca || `${a.nome} ${a.ticker} ${a.emissor}`.toLowerCase().includes(busca)));
+}
+
+// ---------- Agrupamento (mesma classe, nome e rentabilidade numa linha) ----------
+// Grupo com 1 ativo devolve o próprio ativo; com mais, um objeto com os totais e .itens
+export function agrupar(ativos) {
+  const m = new Map();
+  for (const a of ativos) {
+    const k = `${a.classe}|${(a.ticker || a.nome).toLowerCase()}|${a.taxa}|${a.fonte === 'cripto' ? a.id : ''}`;
+    (m.get(k) || m.set(k, []).get(k)).push(a);
+  }
+  return [...m.entries()].map(([k, l]) => l.length === 1 ? l[0] : grupoDe(k, l));
+}
+function grupoDe(k, l) {
+  const vis = l.filter(a => !a.oculta), base = vis.length ? vis : l;
+  const t = totais(l);
+  const venc = base.map(a => a.vence).filter(Boolean).sort();
+  const dias = base.map(a => a.dias).filter(d => d != null && d >= 0);
+  const liqs = [...new Set(base.map(a => a.liquidez.txt))];
+  const qtd = base.every(a => a.qtd != null) ? base.reduce((s, a) => s + a.qtd, 0) : null;
+  const p = l[0];
+  return {
+    ...p, id: 'grp:' + k, itens: l, nItens: l.length, valor: t.valor, custo: t.custo || null, resultado: t.custo ? t.resultado : null, resPct: t.resPct,
+    vence: venc[0] || null, venceAte: venc.length > 1 ? venc[venc.length - 1] : null, dias: dias.length ? Math.min(...dias) : null,
+    liquidez: liqs.length === 1 ? p.liquidez : { cod: '', txt: 'Várias', diaria: base.every(a => a.liquidez.diaria) },
+    qtd, pm: qtd ? t.custo / qtd : null, liquido: null, rend12m: null, oculta: !vis.length, semPreco: base.some(a => a.semPreco),
+  };
 }
 
 const ORDENS = { valor: a => a.valor ?? -Infinity, resultado: a => a.resPct ?? -Infinity, peso: a => a.valor ?? -Infinity, nome: a => a.nome.toLowerCase(), vence: a => a.vence || '9999' };

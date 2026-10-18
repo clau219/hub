@@ -14,7 +14,8 @@ import { posicoes, M, atualizar as atualizarCripto, VELHO_MS, atualizando as cri
 // ---------- Estado da tela (preferências guardadas neste navegador) ----------
 const LS = 'hub:fin-painel';
 const salvo = (() => { try { return JSON.parse(localStorage.getItem(LS)) || {}; } catch { return {}; } })();
-export const est = { periodo: salvo.periodo || '1A', classe: '', renda: '', q: '', vis: salvo.vis || 'tabela', ordem: salvo.ordem || {}, fechados: new Set(salvo.fechados || []) };
+export const est = { periodo: salvo.periodo || '1A', classe: '', renda: '', q: '', vis: salvo.vis || 'tabela', ordem: salvo.ordem || {}, fechados: new Set(salvo.fechados || []),
+  abertos: new Set() }; // abertos: grupos de títulos expandidos na lista (só nesta visita)
 const guardar = () => { try { localStorage.setItem(LS, JSON.stringify({ periodo: est.periodo, vis: est.vis, ordem: est.ordem, fechados: [...est.fechados] })); } catch {} };
 
 // ---------- Dados derivados (uma vez por render) ----------
@@ -57,7 +58,7 @@ const filtroAtivo = () => !!(est.classe || est.renda || est.q.trim());
 // ---------- Render ----------
 export function painel(D, ctx) {
   fg.limpar();
-  C = { ...montarDados(D, ctx.catDe), D, ctx };
+  C = { ...montarDados(D, ctx.catDe), D, ctx, grupos: new Map() };
   precosCripto();
   gravarFotoCripto();
   const { todos } = C;
@@ -289,7 +290,9 @@ const COLS_RV = [['nome', 'Ativo'], ['qtd', 'Qtd.', 1], ['pm', 'Preço médio', 
 const COLS_RF = [['nome', 'Título'], ['taxa', 'Rentabilidade'], ['custo', 'Aplicado', 1], ['valor', 'Atual', 1], ['vence', 'Vencimento'], ['liq', 'Liquidez']];
 function blocoClasse(g) {
   const o = est.ordem[g.classe] || { col: 'valor', dir: -1 };
-  const ativos = fc.ordenar(g.ativos, o.col, o.dir);
+  // Títulos da mesma classe, nome e rentabilidade viram uma linha (fc.agrupar)
+  const ativos = fc.ordenar(fc.agrupar(g.ativos), o.col, o.dir);
+  ativos.filter(a => a.itens).forEach(a => C.grupos.set(a.id, a));
   const aberto = !est.fechados.has(g.classe);
   const cor = fc.corClasse(g.classe);
   const ord = `<div class="fn-ord" role="group" aria-label="Ordenar">Ordenar: ${[['valor', 'Valor'], ['resultado', 'Resultado'], ['peso', 'Peso'], ...(g.grupo === 'rf' ? [['vence', 'Vencimento']] : [])]
@@ -299,7 +302,7 @@ function blocoClasse(g) {
       tip: fg.tipTxt(a.nome, [['Valor', fc.money(a.valor)], ['Peso', fc.pct(fc.peso(a, C.tot.valor), 2, false)]]) })), { attr: 'data-ativo' })
       : tabela(g, ativos, o);
   return `<details class="fn-cl" data-cl="${g.classe}" ${aberto ? 'open' : ''}>
-    <summary><i class="fn-dot-cl" style="background:${cor}"></i><span class="fn-cl-n">${h(g.nome)}</span><small class="muted">${g.n} ativo${g.n === 1 ? '' : 's'}</small>
+    <summary><i class="fn-dot-cl" style="background:${cor}"></i><span class="fn-cl-n">${h(g.nome)}</span><small class="muted">${g.n} ativo${g.n === 1 ? '' : 's'}${ativos.length < g.ativos.length ? ` em ${ativos.length} grupo${ativos.length === 1 ? '' : 's'}` : ''}</small>
       <b>${fc.money(g.valor, 0)}</b><span class="fn-cl-p">${fc.pct(g.peso, 2, false)}</span>
       ${g.resPct != null ? `<span class="${g.resultado >= 0 ? 'fn-pos' : 'fn-neg'} fn-cl-r">${fc.pct(g.resPct)}</span>` : ''}</summary>
     <div class="fn-cl-b">${ord}${corpo}</div>
@@ -313,14 +316,52 @@ function tabela(g, ativos, o) {
     const on = o.col === k;
     return `<th class="${num ? 'num' : ''}" ${on ? `aria-sort="${o.dir < 0 ? 'descending' : 'ascending'}"` : ''}>${ordena ? `<button data-ord="${g.classe}:${k}">${l}${on ? (o.dir < 0 ? ' ↓' : ' ↑') : ''}</button>` : l}</th>`;
   }).join('');
-  return `<div class="table-wrap"><table class="table fn-tx fn-at"><thead><tr>${th}</tr></thead><tbody>${ativos.map(a => g.grupo === 'rv' ? linhaRv(a) : linhaRf(a)).join('')}</tbody></table></div>`;
+  const linha = (a, sub) => g.grupo === 'rv' ? linhaRv(a, sub) : linhaRf(a, sub);
+  return `<div class="table-wrap"><table class="table fn-tx fn-at"><thead><tr>${th}</tr></thead><tbody>${ativos.map(a => a.itens
+    ? linhaGrupo(g, a) + (est.abertos.has(a.id) ? fc.ordenar(a.itens, 'vence', 1).map(x => linha(x, true)).join('') : '')
+    : linha(a)).join('')}</tbody></table></div>`;
+}
+// Linha-resumo de um grupo de títulos; clique abre/fecha os títulos logo abaixo
+function linhaGrupo(g, a) {
+  const aberto = est.abertos.has(a.id);
+  const nome = `<td><div class="fn-desc"><span class="fn-caret" aria-hidden="true">${aberto ? '▾' : '▸'}</span>${a.ticker ? `<b>${h(a.ticker)}</b> ` : ''}${h(a.ticker && a.ticker !== a.nome ? '' : a.nome)}${a.tesouro ? ` <span class="chip-static">${a.tesouro}</span>` : ''}</div>
+    <small class="muted"><span class="fn-badge fn-badge-n">${a.nItens} títulos</span> ${h(subtitulo(a))}</small></td>`;
+  const venc = a.vence ? `${fc.dataBr(a.vence)}${a.venceAte ? ` a ${fc.dataBr(a.venceAte)}` : ''}<br><small class="${a.dias != null && a.dias <= 30 ? 'fn-badge fn-badge-alerta' : 'muted'}">${a.dias != null ? `próximo em ${a.dias} dias` : ''}</small>` : '<span class="muted">sem vencimento</span>';
+  const cls = `fn-grp ${a.oculta ? 'fn-fora' : ''} ${a.dias != null && a.dias <= 30 ? 'fn-vence-logo' : ''}`;
+  const attrs = `data-grp="${h(a.id)}" tabindex="0" role="button" aria-expanded="${aberto}"`;
+  return g.grupo === 'rv'
+    ? `<tr class="${cls}" ${attrs}>${nome}<td class="num">${fc.qtdTxt(a.qtd)}</td><td class="num">${a.pm != null ? fc.money(a.pm) : '–'}</td><td class="num">${a.preco != null ? fc.money(a.preco) : '–'}</td>
+      <td class="num"><b>${fc.money(a.valor)}</b></td><td class="num">${res(a)}</td><td class="num">${fc.pct(fc.peso(a, C.tot.valor), 2, false)}</td></tr>`
+    : `<tr class="${cls}" ${attrs}>${nome}<td>${h(a.taxa) || '<span class="muted">–</span>'}</td><td class="num">${fc.money(a.custo)}</td>
+      <td class="num"><b>${fc.money(a.valor)}</b>${a.resultado != null ? `<br><small class="${a.resultado >= 0 ? 'fn-pos' : 'fn-neg'}">${fc.money(a.resultado)}</small>` : ''}</td>
+      <td>${venc}</td><td>${a.liquidez.txt ? `<span class="${a.liquidez.diaria ? 'fn-badge fn-badge-liq' : ''}">${h(a.liquidez.txt)}</span>` : '–'}</td></tr>`;
+}
+// Emissor e origem, sem repetir o que já está no nome
+const subtitulo = a => [a.emissor && !a.nome.toLowerCase().includes(a.emissor.toLowerCase()) ? a.emissor : '', origem(a)].filter(Boolean).join(' · ');
+function detalheGrupo(a) {
+  if (!a) return;
+  const itens = fc.ordenar(a.itens, 'vence', 1);
+  const d = modal(`${a.ticker || a.nome} · ${a.nItens} títulos`, `
+    <div class="fn-det-kpis">
+      <div><span>Valor atual</span><b>${fc.money(a.valor)}</b></div>
+      <div><span>Aplicado</span><b>${fc.money(a.custo)}</b></div>
+      <div><span>Resultado</span><b class="${(a.resultado ?? 0) >= 0 ? 'fn-pos' : 'fn-neg'}">${fc.money(a.resultado)}</b><small>${fc.pct(a.resPct)}</small></div>
+      <div><span>Peso</span><b>${fc.pct(fc.peso(a, C.tot.valor), 2, false)}</b></div>
+    </div>
+    <p class="muted small">${h([a.taxa, subtitulo(a)].filter(Boolean).join(' · '))}. Toque num título para ver os detalhes dele.</p>
+    <div class="table-wrap"><table class="table fn-tx fn-at"><thead><tr><th>Vencimento</th><th class="num">Aplicado</th><th class="num">Atual</th><th class="num">Resultado</th></tr></thead><tbody>
+      ${itens.map(x => `<tr data-item="${h(x.id)}" tabindex="0" class="${x.oculta ? 'fn-fora' : ''}"><td>${x.vence ? `${fc.dataBr(x.vence)}<br><small class="muted">em ${x.dias} dias</small>` : (x.ticker || x.nome)}</td>
+        <td class="num">${fc.money(x.custo)}</td><td class="num"><b>${fc.money(x.valor)}</b></td><td class="num">${res(x)}</td></tr>`).join('')}
+    </tbody></table></div>`);
+  d.querySelector('#modalBody').classList.add('fn-det');
+  d.querySelectorAll('tr[data-item]').forEach(r => r.onclick = () => detalhe(r.dataset.item));
 }
 const res = a => a.resultado == null ? '<span class="muted">–</span>'
   : `<span class="${a.resultado >= 0 ? 'fn-pos' : 'fn-neg'}">${fc.money(a.resultado)}<br><small>${fc.pct(a.resPct)}</small></span>`;
 const origem = a => a.fonte === 'manual' ? 'cadastrado no Hub' : a.fonte === 'cripto' ? 'tela Cripto' : nomeBanco(a.item_id);
 const nomeBanco = id => C.D.items.find(x => x.id === id)?.nome || 'banco';
-function linhaRv(a) {
-  return `<tr data-ativo="${h(a.id)}" class="${a.oculta ? 'fn-fora' : ''}" tabindex="0">
+function linhaRv(a, sub = false) {
+  return `<tr data-ativo="${h(a.id)}" class="${a.oculta ? 'fn-fora' : ''} ${sub ? 'fn-sub' : ''}" tabindex="0">
     <td><div class="fn-desc">${a.ticker ? `<b>${h(a.ticker)}</b> ` : ''}${a.ticker && a.ticker !== a.nome ? `<span class="muted">${h(a.nome)}</span>` : a.ticker ? '' : h(a.nome)}</div>
       <small class="muted">${h(a.fonte === 'cripto' ? a.emissor || 'tela Cripto' : origem(a))}${a.semPreco ? ' · sem cotação' : ''}${a.oculta ? ' · fora dos totais' : ''}</small>
       ${a.divergente ? '<br><small class="fn-badge fn-badge-alerta">carteira ≠ lançado</small>' : ''}</td>
@@ -333,10 +374,10 @@ function vencTxt(a) {
   const logo = a.dias != null && a.dias <= 30;
   return `${fc.dataBr(a.vence)}<br><small class="${logo ? 'fn-badge fn-badge-alerta' : 'muted'}">${a.dias < 0 ? 'vencido' : a.dias === 0 ? 'vence hoje' : `em ${a.dias} dias`}</small>`;
 }
-function linhaRf(a) {
-  return `<tr data-ativo="${h(a.id)}" class="${a.oculta ? 'fn-fora' : ''} ${a.dias != null && a.dias <= 30 && a.dias >= 0 ? 'fn-vence-logo' : ''}" tabindex="0">
-    <td><div class="fn-desc">${h(a.nome)}${a.tesouro ? ` <span class="chip-static">${a.tesouro}</span>` : ''}</div>
-      <small class="muted">${h([a.emissor, origem(a)].filter(Boolean).join(' · '))}${a.oculta ? ' · fora dos totais' : ''}</small></td>
+function linhaRf(a, sub = false) {
+  return `<tr data-ativo="${h(a.id)}" class="${a.oculta ? 'fn-fora' : ''} ${sub ? 'fn-sub' : ''} ${a.dias != null && a.dias <= 30 && a.dias >= 0 ? 'fn-vence-logo' : ''}" tabindex="0">
+    <td><div class="fn-desc">${sub ? '↳ Título' : h(a.nome)}${a.tesouro && !sub ? ` <span class="chip-static">${a.tesouro}</span>` : ''}</div>
+      <small class="muted">${h(sub ? origem(a) : subtitulo(a))}${a.oculta ? ' · fora dos totais' : ''}</small></td>
     <td>${h(a.taxa) || '<span class="muted">–</span>'}${a.rend12m != null ? `<br><small class="muted">${fc.pct(a.rend12m, 2, false)} em 12 meses</small>` : ''}</td>
     <td class="num">${fc.money(a.custo)}</td>
     <td class="num"><b>${fc.money(a.valor)}</b>${a.resultado != null ? `<br><small class="${a.resultado >= 0 ? 'fn-pos' : 'fn-neg'}">${fc.money(a.resultado)}</small>` : ''}</td>
@@ -345,6 +386,12 @@ function linhaRf(a) {
   </tr>`;
 }
 function cardAtivo(a, cor) {
+  if (a.itens) return `<button class="fn-acard fn-acard-grp ${a.oculta ? 'fn-fora' : ''}" data-ativo="${h(a.id)}" style="--c:${cor}">
+    <span class="fn-acard-n">${h(a.ticker || a.nome)}</span><small><span class="fn-badge fn-badge-n">${a.nItens} títulos</span> ${h(a.taxa)}</small>
+    <b>${fc.money(a.valor)}</b>
+    ${a.resultado != null ? `<small class="${a.resultado >= 0 ? 'fn-pos' : 'fn-neg'}">${fc.money(a.resultado)} (${fc.pct(a.resPct)})</small>` : ''}
+    <small class="muted">${a.vence ? `vencimentos de ${fc.dataBr(a.vence)}${a.venceAte ? ` a ${fc.dataBr(a.venceAte)}` : ''}` : ''}</small>
+  </button>`;
   return `<button class="fn-acard ${a.oculta ? 'fn-fora' : ''} ${a.grupo === 'rf' && a.dias != null && a.dias <= 30 && a.dias >= 0 ? 'fn-vence-logo' : ''}" data-ativo="${h(a.id)}" style="--c:${cor}">
     <span class="fn-acard-n">${h(a.ticker || a.nome)}</span>${a.ticker && a.ticker !== a.nome ? `<small class="muted">${h(a.nome)}</small>` : ''}
     <b>${fc.money(a.valor)}</b>
@@ -380,6 +427,11 @@ export function ligar(el, ctx) {
     r.addEventListener('click', abrir);
     if (r.tagName !== 'BUTTON') r.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); abrir(); } });
   });
+  el.querySelectorAll('tr[data-grp]').forEach(r => {
+    const alternar = () => { const id = r.dataset.grp; if (est.abertos.has(id)) est.abertos.delete(id); else est.abertos.add(id); re(); };
+    r.addEventListener('click', alternar);
+    r.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); alternar(); } });
+  });
   el.querySelectorAll('[data-novo]').forEach(b => b.onclick = () => b.dataset.novo === 'ativo' ? formAtivo() : formMov(b.dataset.novo));
   el.querySelectorAll('[data-ir]').forEach(b => b.onclick = () => ctx.irAba(b.dataset.ir));
   fg.montar(el);
@@ -400,6 +452,7 @@ function precosCripto() {
 // ---------- Detalhe do ativo ----------
 const TIPO_MOV = { aporte: 'Aporte', resgate: 'Resgate', provento: 'Provento', imposto: 'Imposto', transferencia: 'Transferência' };
 function detalhe(id) {
+  if (id.startsWith('grp:')) return detalheGrupo(C.grupos.get(id));
   const a = C.todos.find(x => x.id === id);
   if (!a) return;
   const movs = C.D.mov.filter(m => m.invest_id === id).sort((x, y) => y.data.localeCompare(x.data));
