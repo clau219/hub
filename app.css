@@ -946,3 +946,5 @@ kbd { font: 600 11px/1 var(--f); border: 1px solid var(--line-2); border-bottom-
 .fn-carts form { margin-top: 10px; }
 .cr-sub { font-size: 17px; margin: 4px 0 12px; }
 .cr-oc-kpis { grid-template-columns: minmax(0, 340px); }
+.cr-oc-kpis .kpi b { white-space: normal; overflow-wrap: anywhere; }
+.moeda-seg button { min-width: 40px; }

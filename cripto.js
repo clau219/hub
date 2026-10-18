@@ -25,9 +25,11 @@ export const LIMITE_DECLARACAO = 30000; // operações no mês sem corretora bra
 // ---------------------------------------------------------------
 // Mercado
 // ---------------------------------------------------------------
+import { conv, cod, definirTaxa } from './moeda.js';
 export const M = (() => {
   try { return JSON.parse(localStorage.getItem(KEY)) || null; } catch { return null; }
 })() || { coins: {}, global: null, fng: null, dolar: null, at: 0 };
+definirTaxa(M.dolar);
 let emCurso = null;
 
 async function getJson(url) {
@@ -55,6 +57,7 @@ export function atualizar(ids) {
     let dolar = dol.status === 'fulfilled' ? +dol.value.USDBRL?.bid : null;
     if (!dolar && u.bitcoin) dolar = brl.value.find(c => c.id === 'bitcoin')?.current_price / u.bitcoin.current_price;
     dolar ||= M.dolar;
+    definirTaxa(dolar);
     const coins = {};
     for (const c of brl.value) {
       coins[c.id] = {
@@ -213,7 +216,10 @@ export function preco(v, cur = 'BRL') {
   const o = a >= 1000 ? { maximumFractionDigits: 0 } : a >= 1 || a === 0 ? { minimumFractionDigits: 2, maximumFractionDigits: 2 } : { maximumSignificantDigits: 4 };
   return Number(v).toLocaleString('pt-BR', { style: 'currency', currency: cur, ...o });
 }
-export const reais = v => v == null || isNaN(v) ? '—' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// reais/precoV seguem a moeda escolhida (R$/US$); brl e preco(v, 'BRL') ficam sempre em reais (imposto, coluna "Preço R$")
+export const brl = v => v == null || isNaN(v) ? '—' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+export const reais = v => v == null || isNaN(v) ? '—' : Number(conv(v)).toLocaleString('pt-BR', { style: 'currency', currency: cod(), minimumFractionDigits: 2, maximumFractionDigits: 2 });
+export const precoV = v => preco(conv(v), cod());
 export const compacto = (v, cur = 'BRL') => v == null ? '—' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: cur, notation: 'compact', maximumFractionDigits: 2 });
 export const qtd = v => v == null ? '' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 8 });
 export function pct(v, cls = true) {

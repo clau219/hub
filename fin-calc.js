@@ -99,16 +99,18 @@ export const diasEntre = (a, b) => Math.round((Date.parse(b + 'T12:00:00Z') - Da
 export const PERIODOS = [['1M', 30], ['3M', 91], ['6M', 182], ['1A', 365], ['Tudo', 0]];
 export const inicioPeriodo = (p, hoje = hojeIso()) => { const d = PERIODOS.find(x => x[0] === p)?.[1]; return d ? somaDias(hoje, -d) : '0000-01-01'; };
 
-// ---------- Formatação pt-BR (com modo privacidade) ----------
+// ---------- Formatação pt-BR (com modo privacidade e moeda R$/US$) ----------
+// Os valores chegam sempre em reais; conv() passa para dólar quando o usuário escolhe US$.
+import { conv, cod, simbolo } from './moeda.js';
 export const priv = { on: false };
-const OCULTO = 'R$ ••••';
+const oculto = () => `${simbolo()} ••••`;
 export function money(v, casas = 2) {
   if (v == null || isNaN(v)) return '–';
-  if (priv.on) return OCULTO;
-  return Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: casas, maximumFractionDigits: casas });
+  if (priv.on) return oculto();
+  return Number(conv(v)).toLocaleString('pt-BR', { style: 'currency', currency: cod(), minimumFractionDigits: casas, maximumFractionDigits: casas });
 }
-export const moneyC = v => v == null || isNaN(v) ? '–' : priv.on ? OCULTO : Math.abs(v) >= 1e6
-  ? Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', notation: 'compact', maximumFractionDigits: 1 }) : money(v, 0);
+export const moneyC = v => v == null || isNaN(v) ? '–' : priv.on ? oculto() : Math.abs(conv(v)) >= 1e6
+  ? Number(conv(v)).toLocaleString('pt-BR', { style: 'currency', currency: cod(), notation: 'compact', maximumFractionDigits: 1 }) : money(v, 0);
 export function pct(v, casas = 2, sinal = true) {
   if (v == null || !isFinite(v)) return '–';
   return (sinal && v > 0 ? '+' : '') + Number(v).toLocaleString('pt-BR', { minimumFractionDigits: casas, maximumFractionDigits: casas }) + '%';

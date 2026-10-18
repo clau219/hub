@@ -1,10 +1,11 @@
 import { S, save, del, load } from './store.js';
 import * as db from './db.js';
 import { h, today, fmtDate, mesNome } from './util.js';
+import * as moedaV from './moeda.js';
 import { modal, toast, confirmInline, closeModal } from './ui.js';
 import {
   M, VELHO_MS, PADRAO, TIPOS, CORRETORAS, LIMITE_ISENCAO, LIMITE_DECLARACAO, FNG_PT,
-  atualizar, atualizando, buscar, preco, reais, compacto, qtd, pct, sparkline, posicoes, calcular,
+  atualizar, atualizando, buscar, preco, precoV, reais, brl, compacto, qtd, pct, sparkline, posicoes, calcular,
   paraCsv, interpretarCsv, resolverSimbolos, CSV_COLS, lerNumero, coinLabel,
   H, STABLES, atualizarSinais, sinaisAtualizando, sinaisVencidos, anotarDominancia, indicadores, progresso,
 } from './cripto.js';
@@ -124,6 +125,7 @@ export function render(el) {
   <div class="view-head">
     <h1>Cripto</h1>
     <div class="seg" role="tablist">${[['mercado', 'Mercado'], ['carteira', 'Carteira'], ['sinais', 'Sinais']].map(([k, l]) => `<button role="tab" aria-selected="${aba === k}" class="${aba === k ? 'on' : ''}" data-aba="${k}">${l}</button>`).join('')}</div>
+    ${moedaV.botao()}
     <span class="cr-at muted small" id="crAt">${atualizadoHa()}</span>
     <button class="btn" id="crRef" ${atualizando() ? 'disabled' : ''}>Atualizar</button>
     ${aba === 'mercado' ? '<button class="btn primary" id="crAdd">Adicionar moeda</button>' : aba === 'carteira' ? '<button class="btn primary" id="crTx">Novo lançamento</button>' : ''}
@@ -133,6 +135,7 @@ export function render(el) {
 
   el.querySelectorAll('[data-aba]').forEach(b => b.onclick = () => { history.replaceState(null, '', '#/cripto?' + b.dataset.aba); aba = b.dataset.aba; render(el); });
   el.querySelector('#crRef').onclick = () => refresh(true);
+  moedaV.ligarBotao(el, () => render(el));
   el.querySelector('#crAdd')?.addEventListener('click', addMoeda);
   el.querySelector('#crTx')?.addEventListener('click', () => txForm());
   ({ mercado: bindMercado, carteira: bindCarteira, sinais: bindSinais })[aba](el);
@@ -502,12 +505,12 @@ function blocoOnchain() {
     <h2>Carteiras na blockchain <span class="count">${linhas.length}</span></h2>
     <p class="muted small">${OC.carteiras.map(c => h(c.nome || 'Carteira')).join(', ')} · lidas pelo endereço público${lido ? `, última leitura ${fmtDate(lido.slice(0, 10))}` : ' (ainda não lidas)'}.
       Somadas aos lançamentos no <a href="#/financas?painel">Painel de Finanças</a>; para preço médio e resultado, lance as compras aqui com a corretora da carteira.</p>
-    ${linhas.length ? `<div class="kpis cr-oc-kpis"><div class="kpi big"><span>Valor nas carteiras</span><b>${reais(total)}</b><small>${M.dolar ? 'US$ ' + (total / M.dolar).toLocaleString('pt-BR', { maximumFractionDigits: 0 }) : ''}</small></div></div>
+    ${linhas.length ? `<div class="kpis cr-oc-kpis"><div class="kpi big"><span>Valor nas carteiras</span><b>${reais(total)}</b><small>${moedaV.emDolar() ? brl(total) : M.dolar ? 'US$ ' + (total / M.dolar).toLocaleString('pt-BR', { maximumFractionDigits: 0 }) : ''}</small></div></div>
     <div class="table-wrap"><table class="table">
       <thead><tr><th>Moeda</th><th class="num">Quantidade</th><th class="num">Preço atual</th><th class="num">Valor</th><th class="num">24h</th><th>Onde</th></tr></thead>
       <tbody>${linhas.map(x => `<tr>
         <td><span class="coin">${x.c?.img ? `<img src="${h(x.c.img)}" alt="" width="20" height="20" loading="lazy">` : '<i class="coin-ph"></i>'}<b>${h(x.c?.nome || x.nome || x.simbolo)}</b><span class="muted">${h(x.c?.simbolo || x.simbolo)}</span></span></td>
-        <td class="num">${qtd(x.qtd)}</td><td class="num">${preco(x.p)}</td><td class="num"><b>${reais(x.valor)}</b></td><td class="num">${pct(x.c?.ch24)}</td>
+        <td class="num">${qtd(x.qtd)}</td><td class="num">${precoV(x.p)}</td><td class="num"><b>${reais(x.valor)}</b></td><td class="num">${pct(x.c?.ch24)}</td>
         <td class="muted small">${h([...new Set(x.onde)].join(', '))}</td></tr>`).join('')}</tbody>
     </table></div>` : '<p class="empty">Nenhum saldo encontrado ainda. Em Finanças, clique em Atualizar.</p>'}
     <p class="small"><a href="#/financas?contas">Gerenciar carteiras</a></p>
@@ -527,7 +530,7 @@ function carteira() {
   return `${blocoOnchain()}
   ${OC.carteiras.length ? '<h2 class="cr-sub">Lançamentos (corretoras e compras)</h2>' : ''}
   <div class="kpis">
-    <div class="kpi big"><span>Valor atual</span><b>${reais(tot.valor)}</b><small>${M.dolar ? 'US$ ' + (tot.valor / M.dolar).toLocaleString('pt-BR', { maximumFractionDigits: 0 }) : ''}</small></div>
+    <div class="kpi big"><span>Valor atual</span><b>${reais(tot.valor)}</b><small>${moedaV.emDolar() ? brl(tot.valor) : M.dolar ? 'US$ ' + (tot.valor / M.dolar).toLocaleString('pt-BR', { maximumFractionDigits: 0 }) : ''}</small></div>
     <div class="kpi"><span>Custo total</span><b>${reais(tot.custo)}</b></div>
     <div class="kpi"><span>Resultado</span><b class="${tot.resultado >= 0 ? 'up' : 'down'}">${reais(tot.resultado)}</b><small>${pct(tot.resPct)}</small></div>
     <div class="kpi"><span>Variação 24h</span><b class="${tot.valor - tot.ontem >= 0 ? 'up' : 'down'}">${reais(tot.valor - tot.ontem)}</b><small>${pct(tot.ch24)}</small></div>
@@ -540,8 +543,8 @@ function carteira() {
       <thead><tr><th>Moeda</th><th class="num">Quantidade</th><th class="num">Preço médio</th><th class="num">Custo total</th><th class="num">Preço atual</th><th class="num">Valor atual</th><th class="num">Resultado</th><th class="num">%</th><th class="num">24h</th></tr></thead>
       <tbody>${ativos.sort((a, b) => (b.valor || 0) - (a.valor || 0)).map(p => `<tr>
         <td><span class="coin">${p.cot?.img ? `<img src="${h(p.cot.img)}" alt="" width="20" height="20" loading="lazy">` : '<i class="coin-ph"></i>'}<b>${h(p.nome || p.simbolo)}</b><span class="muted">${h(p.simbolo)}</span>${p.aviso ? ' <span class="late-lbl small" title="Há vendas/transferências maiores que o saldo: falta histórico de compras">⚠</span>' : ''}</span></td>
-        <td class="num">${qtd(p.qtd)}</td><td class="num">${preco(p.medio)}</td><td class="num">${reais(p.custo)}</td>
-        <td class="num">${preco(p.cot?.brl)}</td><td class="num"><b>${reais(p.valor)}</b></td>
+        <td class="num">${qtd(p.qtd)}</td><td class="num">${precoV(p.medio)}</td><td class="num">${reais(p.custo)}</td>
+        <td class="num">${precoV(p.cot?.brl)}</td><td class="num"><b>${reais(p.valor)}</b></td>
         <td class="num ${p.resultado >= 0 ? 'up' : 'down'}">${reais(p.resultado)}</td><td class="num">${pct(p.resPct)}</td><td class="num">${pct(p.cot?.ch24)}</td></tr>`).join('')}
       </tbody>
       ${fechadas.length ? `<tfoot><tr><td colspan="9" class="muted small">Posições zeradas: ${fechadas.map(p => `${h(p.simbolo)} (resultado ${reais(p.realizado)})`).join(', ')}</td></tr></tfoot>` : ''}
@@ -663,14 +666,14 @@ function vendasMes(vendas) {
       <tbody>${vendas.map(v => {
         const [y, m] = v.mes.split('-');
         const acima = v.total > LIMITE_ISENCAO;
-        return `<tr><td>${mesNome(+m - 1)} ${y}</td><td class="num">${v.n}</td><td class="num"><b>${reais(v.total)}</b></td>
-          <td class="num ${v.resultado >= 0 ? 'up' : 'down'}">${reais(v.resultado)}</td>
+        return `<tr><td>${mesNome(+m - 1)} ${y}</td><td class="num">${v.n}</td><td class="num"><b>${brl(v.total)}</b></td>
+          <td class="num ${v.resultado >= 0 ? 'up' : 'down'}">${brl(v.resultado)}</td>
           <td class="small">${Object.entries(v.porCorretora).map(([c, x]) => `${h(c)}: ${compacto(x)}`).join(' · ')}</td>
           <td>${acima ? `<span class="tag" style="--c:var(--late)">Acima de ${compacto(LIMITE_ISENCAO)}</span>${v.resultado > 0 ? ' <span class="small">ganho tributável, DARF até o fim do mês seguinte</span>' : ''}`
             : v.total > LIMITE_DECLARACAO ? `<span class="tag" style="--c:var(--flores)">Acima de ${compacto(LIMITE_DECLARACAO)}</span> <span class="small">verifique a declaração mensal</span>`
             : '<span class="tag" style="--c:var(--alug)">Dentro da isenção</span>'}</td></tr>`;
       }).join('')}</tbody></table></div>
-    <p class="muted small">Referência: vendas de até ${reais(LIMITE_ISENCAO)} no mês têm o ganho isento de IR; acima disso, o ganho é tributado e o DARF vence no último dia útil do mês seguinte. Operações em corretoras estrangeiras ou entre carteiras próprias acima de ${reais(LIMITE_DECLARACAO)} no mês podem exigir declaração mensal à Receita. As regras mudam: confirme com seu contador.</p>
+    <p class="muted small">Referência (sempre em reais): vendas de até ${brl(LIMITE_ISENCAO)} no mês têm o ganho isento de IR; acima disso, o ganho é tributado e o DARF vence no último dia útil do mês seguinte. Operações em corretoras estrangeiras ou entre carteiras próprias acima de ${brl(LIMITE_DECLARACAO)} no mês podem exigir declaração mensal à Receita. As regras mudam: confirme com seu contador.</p>
   </section>`;
 }
 

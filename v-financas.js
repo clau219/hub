@@ -9,6 +9,7 @@ import * as db from './db.js';
 import { h, today, addDays, fmtDate, localDate, AREAS, mesNome } from './util.js';
 import { modal, toast } from './ui.js';
 import * as fc from './fin-calc.js';
+import * as moedaV from './moeda.js';
 import * as carteira from './v-fin-carteira.js';
 
 const ABAS = [['painel', 'Painel'], ['fluxo', 'Fluxo de caixa'], ['lancamentos', 'Lançamentos'], ['contas', 'Contas']];
@@ -141,7 +142,8 @@ export function render(el) {
   <div class="view-head fn-head">
     <h1>Finanças</h1>
     <div class="seg" role="tablist">${ABAS.map(([k, l]) => `<button role="tab" aria-selected="${k === aba}" class="${k === aba ? 'on' : ''}" data-aba="${k}">${l}</button>`).join('')}</div>
-    <span class="muted small">${statusTxt()}</span>
+    <span class="muted small">${[statusTxt(), moedaV.notaCotacao()].filter(Boolean).join(' · ')}</span>
+    ${moedaV.botao()}
     <button class="btn fn-olho" id="fnOlho" aria-pressed="${fc.priv.on}" title="${fc.priv.on ? 'Mostrar valores' : 'Ocultar valores'}" aria-label="${fc.priv.on ? 'Mostrar valores' : 'Ocultar valores'}">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>${fc.priv.on ? '<path d="M3 3l18 18"/>' : ''}</svg></button>
     ${conectado || D.carteiras.length ? `<button class="btn" id="fnSync" ${sincronizando ? 'disabled' : ''}>${sincronizando ? 'Atualizando…' : 'Atualizar'}</button>` : ''}
@@ -153,6 +155,7 @@ export function render(el) {
     : aba === 'painel' ? carteira.painel(D, ctx) : aba === 'fluxo' ? (conectado ? resumo() : conectar()) : aba === 'lancamentos' ? (conectado ? lancamentos() : conectar())
       : (conectado ? contas() : conectar() + carteirasCripto())}</div>`;
   if (D.at && aba === 'painel') carteira.ligar(el, ctx);
+  moedaV.ligarBotao(el, () => render(el));
   el.querySelector('#fnOlho').onclick = () => { fc.priv.on = !fc.priv.on; try { localStorage.setItem(PRIV, fc.priv.on ? '1' : '0'); } catch {} render(el); };
 
   el.querySelectorAll('[data-aba]').forEach(b => b.onclick = () => irAba(b.dataset.aba));
