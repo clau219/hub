@@ -1,7 +1,8 @@
 // Painel da carteira (aba Finanças → Painel): indicadores, gráficos, filtros e as listas de
 // Renda Variável (por classe) e Renda Fixa (por tipo). Os números vêm todos de fin-calc.js.
 // Fontes: investimentos do banco (Pluggy, fin_invest), ativos cadastrados à mão (fin_invest fonte 'manual')
-// e criptomoedas da tela Cripto (crypto_tx, sem copiar dados). Movimentos: fin_inv_mov.
+// e criptomoedas: compras da tela Cripto (crypto_tx) + saldos das carteiras lidos da blockchain (cripto_saldos).
+// Movimentos: fin_inv_mov.
 import { S } from './store.js';
 import * as db from './db.js';
 import { h } from './util.js';
@@ -20,7 +21,7 @@ const guardar = () => { try { localStorage.setItem(LS, JSON.stringify({ periodo:
 let C = null; // contexto do último render: ativos, totais, séries
 function montarDados(D, catDe) {
   const hoje = fc.hojeIso();
-  const cripto = (S.crypto_tx || []).length ? posicoes(S.crypto_tx).ativos.map(fc.deCripto) : [];
+  const cripto = fc.mesclarCripto((S.crypto_tx || []).length ? posicoes(S.crypto_tx).lista : [], D.saldosCripto, M.coins, { dolar: M.dolar, carteiras: D.carteiras });
   const todos = [...D.inv.map(i => fc.deInvest(i, hoje)), ...cripto];
   const tot = fc.totais(todos);
   const vis = D.contas.filter(c => !c.oculta);
@@ -28,9 +29,27 @@ function montarDados(D, catDe) {
   const faturas = vis.filter(c => c.tipo === 'CREDIT').reduce((t, c) => t + Number(c.saldo || 0), 0);
   const patrimonio = contas - faturas + tot.valor;
   // Série completa + ponto de hoje com os valores atuais (a foto do servidor pode ser de horas atrás)
-  const serie = comHoje(fc.evolucao({ hist: D.hist, snaps: D.snap, cripto: S.crypto_snap || [] }), { dia: hoje, investido: tot.valor, contas: contas - faturas, valor: patrimonio });
+  const { histInv, criptoSerie } = series(D);
+  const serie = comHoje(fc.evolucao({ hist: histInv, snaps: D.snap, cripto: criptoSerie }), { dia: hoje, investido: tot.valor, contas: contas - faturas, valor: patrimonio });
   const extras = D.tx.filter(t => t.valor > 0 && catDe(t) === 'Rendimentos');
-  return { hoje, todos, tot, contas, faturas, patrimonio, serie, extras };
+  return { hoje, todos, tot, contas, faturas, patrimonio, serie, extras, histInv, criptoSerie, cripto };
+}
+// Histórico de cripto: a foto diária do painel ('cripto-total', já com as carteiras da blockchain);
+// antes da primeira foto, a da tela Cripto (só compras lançadas)
+const CRIPTO_TOTAL = 'cripto-total';
+function series(D) {
+  const histInv = D.hist.filter(r => r.invest_id !== CRIPTO_TOTAL);
+  const fotos = D.hist.filter(r => r.invest_id === CRIPTO_TOTAL).map(r => ({ dia: r.dia, valor_brl: r.saldo }));
+  const ini = fotos.reduce((m, f) => f.dia < m ? f.dia : m, '9999');
+  return { histInv, criptoSerie: [...(S.crypto_snap || []).filter(s => s.dia < ini), ...fotos] };
+}
+// Grava a foto de hoje do valor em cripto (uma vez por dia, com cotação fresca e tudo com preço)
+let fotoCripto = '';
+function gravarFotoCripto() {
+  if (db.mode !== 'supabase' || fotoCripto === C.hoje || !C.cripto.length || C.cripto.some(a => a.semPreco) || Date.now() - (M.at || 0) > VELHO_MS) return;
+  fotoCripto = C.hoje;
+  const saldo = +C.cripto.reduce((t, a) => t + a.valor, 0).toFixed(2);
+  db.client().from('fin_invest_hist').upsert({ invest_id: CRIPTO_TOTAL, dia: C.hoje, saldo }, { onConflict: 'invest_id,dia' }).then(({ error }) => { if (error) fotoCripto = ''; });
 }
 const comHoje = (serie, p) => [...serie.filter(x => x.dia !== p.dia), p];
 const filtroAtivo = () => !!(est.classe || est.renda || est.q.trim());
@@ -40,6 +59,7 @@ export function painel(D, ctx) {
   fg.limpar();
   C = { ...montarDados(D, ctx.catDe), D, ctx };
   precosCripto();
+  gravarFotoCripto();
   const { todos } = C;
   if (!todos.length && !D.contas.length) return vazio();
   const vis = fc.filtrar(todos, est);
@@ -148,7 +168,7 @@ function serieFiltrada() {
   const f = idsFiltro();
   if (!f.ids) return C.serie;
   const t = fc.totais(C.vis);
-  return comHoje(fc.evolucao({ hist: C.D.hist, snaps: C.D.snap, cripto: S.crypto_snap || [], ...f }), { dia: C.hoje, investido: t.valor, contas: 0, valor: t.valor });
+  return comHoje(fc.evolucao({ hist: C.histInv, snaps: C.D.snap, cripto: C.criptoSerie, ...f }), { dia: C.hoje, investido: t.valor, contas: 0, valor: t.valor });
 }
 
 function cartaoEvolucao() {
@@ -302,8 +322,9 @@ const nomeBanco = id => C.D.items.find(x => x.id === id)?.nome || 'banco';
 function linhaRv(a) {
   return `<tr data-ativo="${h(a.id)}" class="${a.oculta ? 'fn-fora' : ''}" tabindex="0">
     <td><div class="fn-desc">${a.ticker ? `<b>${h(a.ticker)}</b> ` : ''}${a.ticker && a.ticker !== a.nome ? `<span class="muted">${h(a.nome)}</span>` : a.ticker ? '' : h(a.nome)}</div>
-      <small class="muted">${h(origem(a))}${a.semPreco ? ' · sem cotação' : ''}${a.oculta ? ' · fora dos totais' : ''}</small></td>
-    <td class="num">${fc.qtdTxt(a.qtd)}</td><td class="num">${fc.money(a.pm)}</td><td class="num">${a.preco != null ? fc.money(a.preco) : '<span class="muted">–</span>'}</td>
+      <small class="muted">${h(a.fonte === 'cripto' ? a.emissor || 'tela Cripto' : origem(a))}${a.semPreco ? ' · sem cotação' : ''}${a.oculta ? ' · fora dos totais' : ''}</small>
+      ${a.divergente ? '<br><small class="fn-badge fn-badge-alerta">carteira ≠ lançado</small>' : ''}</td>
+    <td class="num">${fc.qtdTxt(a.qtd)}</td><td class="num">${a.pm != null ? fc.money(a.pm) : '<span class="muted" title="Lance as compras na tela Cripto">–</span>'}</td><td class="num">${a.preco != null ? fc.money(a.preco) : '<span class="muted">–</span>'}</td>
     <td class="num"><b>${fc.money(a.valor)}</b></td><td class="num">${res(a)}</td><td class="num">${fc.pct(fc.peso(a, C.tot.valor), 2, false)}</td>
   </tr>`;
 }
@@ -364,11 +385,16 @@ export function ligar(el, ctx) {
   fg.montar(el);
 }
 
-// Cotações de cripto: usa o cache da tela Cripto e atualiza se estiver velho
+// Cotações de cripto: usa o cache da tela Cripto e atualiza se estiver velho ou faltar moeda.
+// Pede junto as moedas do quadro da tela Cripto (a consulta substitui o cache inteiro).
+let tentou = '';
 function precosCripto() {
-  const ids = (S.crypto_tx || []).length ? posicoes(S.crypto_tx).ativos.map(p => p.coin_id) : [];
-  if (!ids.length || criptoAtualizando() || Date.now() - (M.at || 0) < VELHO_MS) return;
-  atualizarCripto(ids).then(() => C?.ctx.rerender()).catch(() => {});
+  const ids = C.cripto.map(a => a.coin_id).filter(Boolean);
+  if (!ids.length || criptoAtualizando()) return;
+  const falta = ids.some(id => !M.coins[id]);
+  if (Date.now() - (M.at || 0) < VELHO_MS && (!falta || tentou === ids.join())) return;
+  tentou = ids.join();
+  atualizarCripto([...ids, ...(S.crypto_watch || []).map(w => w.coin_id)]).then(() => C?.ctx.rerender()).catch(() => {});
 }
 
 // ---------- Detalhe do ativo ----------
@@ -398,6 +424,11 @@ function detalhe(id) {
     </div>
     ${graf || '<p class="muted small">O gráfico deste ativo aparece depois de 2 dias de histórico.</p>'}
     <dl class="fn-det-info">${info.map(([k, v]) => `<dt>${h(k)}</dt><dd>${h(v)}</dd>`).join('')}</dl>
+    ${a.porLocal?.length ? `<h3 class="fn-det-h">Onde está</h3><div class="table-wrap"><table class="table fn-tx"><thead><tr><th>Local</th><th class="num">Quantidade</th><th class="num">Valor</th></tr></thead><tbody>
+      ${a.porLocal.map(l => `<tr><td>${h(l.onde)}<br><small class="muted">${l.blockchain ? 'lido da blockchain' : 'compras lançadas na tela Cripto'}</small></td><td class="num">${fc.qtdTxt(l.qtd)}</td><td class="num">${a.preco != null ? fc.money(l.qtd * a.preco) : '–'}</td></tr>`).join('')}
+    </tbody></table></div>` : ''}
+    ${a.divergente ? `<p class="banner warn">Na tela Cripto estão lançados ${fc.qtdTxt(a.divergente.lancado)} ${h(a.ticker)} na carteira, mas a blockchain mostra ${fc.qtdTxt(a.divergente.carteira)}. O Painel usa o valor da blockchain; o preço médio vem das compras lançadas.</p>` : ''}
+    ${a.fonte === 'cripto' && a.semCusto ? '<p class="muted small">Sem compras lançadas na tela Cripto, não dá para calcular preço médio e resultado desta moeda.</p>' : ''}
     <h3 class="fn-det-h">Histórico de movimentos</h3>
     ${movs.length ? `<div class="table-wrap"><table class="table fn-tx"><thead><tr><th>Data</th><th>Tipo</th><th class="num">Valor</th><th class="num">Qtd.</th><th></th></tr></thead><tbody>
       ${movs.map(m => `<tr><td class="fn-data">${fc.dataBr(m.data)}</td><td>${TIPO_MOV[m.tipo] || h(m.tipo)}${m.tipo === 'provento' && m.subtipo ? ` <small class="muted">${h(fc.PROVENTO_TXT[m.subtipo] || m.subtipo)}</small>` : ''}

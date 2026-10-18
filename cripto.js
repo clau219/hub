@@ -16,7 +16,7 @@ export const PADRAO = [
 export const TIPOS = {
   compra: 'Compra', venda: 'Venda', transferencia: 'Transferência', recebimento: 'Recebimento / staking',
 };
-export const CORRETORAS = ['Binance', 'Mercado Bitcoin', 'Foxbit', 'Coinbase', 'Bybit', 'OKX', 'Nubank', 'Ledger', 'Trezor', 'MetaMask'];
+export const CORRETORAS = ['Binance', 'Mercado Bitcoin', 'Foxbit', 'Coinbase', 'Bybit', 'OKX', 'Nubank', 'OneKey', 'Rabby', 'Ledger', 'Trezor', 'MetaMask'];
 
 // Referências da Receita (confira com o contador; mudam por lei/IN)
 export const LIMITE_ISENCAO = 35000; // vendas no mês até isso: ganho isento de IR

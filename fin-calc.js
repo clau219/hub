@@ -133,14 +133,48 @@ export function deInvest(i, hoje = hojeIso()) {
     oculta: !!i.oculta, item_id: i.item_id || null, raw: i,
   };
 }
-// p: posição de cripto calculada em cripto.js (posicoes)
-export function deCripto(p) {
-  return {
-    id: 'cg-' + p.coin_id, fonte: 'cripto', nome: p.nome || p.simbolo, ticker: (p.simbolo || '').toUpperCase(), classe: 'cripto', grupo: 'rv',
-    emissor: Object.keys(p.corretoras || {}).filter(c => p.corretoras[c] > 1e-10).join(', '), qtd: p.qtd, pm: p.medio, preco: p.cot?.brl ?? null,
-    valor: p.valor, custo: p.custo, resultado: p.resultado, resPct: p.resPct, vence: null, dias: null, liquidez: liquidezDe({}, 'cripto'),
-    taxa: '', tesouro: '', rend12m: null, liquido: null, oculta: false, item_id: null, coin_id: p.coin_id, semPreco: p.valor == null, raw: p,
-  };
+// Cripto = compras da tela Cripto (custo e preço médio) + saldos lidos da blockchain (carteiras de autocustódia).
+// lista: posicoes(crypto_tx).lista (com .corretoras); saldos: cripto_saldos; coins: cotações (M.coins); carteiras: cripto_carteiras.
+// Quantidade = blockchain (quando a moeda está numa carteira lida) + o que está lançado em outras corretoras (ex.: Nubank).
+// Custo = preço médio das compras lançadas × quantidade total (suposição: as moedas da carteira custaram o mesmo).
+const REDE_NOME = { bitcoin: 'Bitcoin', ethereum: 'Ethereum', base: 'Base', arbitrum: 'Arbitrum', optimism: 'OP Mainnet', polygon: 'Polygon', bsc: 'BNB Chain', avalanche: 'Avalanche' };
+export const redeNome = r => REDE_NOME[r] || r;
+export function mesclarCripto(lista = [], saldos = [], coins = {}, { dolar = null, carteiras = [] } = {}) {
+  const nomes = carteiras.map(c => (c.nome || '').trim()).filter(Boolean).map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const autocust = new RegExp(['onekey', 'rabby', ...nomes].join('|'), 'i');
+  const nomeCart = id => carteiras.find(c => c.id === id)?.nome || 'Carteira';
+  const grupos = new Map();
+  const g = k => grupos.get(k) || grupos.set(k, { L: null, S: [] }).get(k);
+  for (const m of lista) if (m.qtd > 1e-10 || m.custo > 0) g(m.coin_id).L = m;
+  for (const s of saldos) if (+s.quantidade > 0) g(s.coin_id || `tk:${s.chain}:${s.token}`).S.push(s);
+  const out = [];
+  for (const [chave, { L, S }] of grupos) {
+    const corr = L?.corretoras || {};
+    const fora = Object.entries(corr).filter(([c, q]) => q > 1e-10 && !autocust.test(c));
+    const qFora = fora.reduce((t, [, q]) => t + q, 0);
+    const qAutoLanc = Object.entries(corr).filter(([c, q]) => q > 1e-10 && autocust.test(c)).reduce((t, [, q]) => t + q, 0);
+    const qOn = S.reduce((t, s) => t + Number(s.quantidade), 0);
+    const qtd = S.length ? qOn + qFora : (L?.qtd || 0);
+    if (qtd < 1e-12) continue;
+    const coin = L?.coin_id || S[0]?.coin_id || null;
+    const c = coin ? coins[coin] : null;
+    const preco = c?.brl ?? (S[0]?.preco_usd && dolar ? S[0].preco_usd * dolar : null);
+    const pm = L && L.qtd > 1e-10 ? L.custo / L.qtd : null;
+    const custo = pm != null ? pm * qtd : null;
+    const valor = preco != null ? qtd * preco : null;
+    const resultado = valor != null && custo != null ? valor - custo : null;
+    const onde = [...S.map(s => `${nomeCart(s.carteira_id)} · ${redeNome(s.chain)}`), ...fora.map(([n]) => n)];
+    out.push({
+      id: coin ? 'cg-' + coin : chave, fonte: 'cripto', nome: c?.nome || L?.nome || S[0]?.nome || coin, ticker: (c?.simbolo || L?.simbolo || S[0]?.simbolo || '').toUpperCase(),
+      classe: 'cripto', grupo: 'rv', emissor: [...new Set(onde)].join(', '), qtd, pm, preco, valor, custo, resultado, resPct: resultado != null && custo > 0 ? resultado / custo * 100 : null,
+      vence: null, dias: null, liquidez: liquidezDe({}, 'cripto'), taxa: '', tesouro: '', rend12m: null, liquido: null, oculta: false, item_id: null,
+      coin_id: coin, semPreco: valor == null, semCusto: custo == null,
+      divergente: S.length > 0 && qAutoLanc > 0 && Math.abs(qAutoLanc - qOn) > Math.max(qOn, qAutoLanc) * 0.01 ? { lancado: qAutoLanc, carteira: qOn } : null,
+      porLocal: [...S.map(s => ({ onde: `${nomeCart(s.carteira_id)} · ${redeNome(s.chain)}`, qtd: Number(s.quantidade), blockchain: true })), ...fora.map(([n, q]) => ({ onde: n, qtd: q }))],
+      raw: { L, S },
+    });
+  }
+  return out;
 }
 
 const soma = (l, k) => l.reduce((t, a) => t + (a[k] ?? 0), 0);

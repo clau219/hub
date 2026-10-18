@@ -34,7 +34,7 @@ const PLUGGY = {
 let aba = 'painel';
 let mes = today().slice(0, 7);
 let filtro = { q: '', conta: '', cat: '', semCat: false, negocio: '' };
-let D = { items: [], contas: [], tx: [], regras: [], inv: [], mov: [], snap: [], hist: [], status: null, at: 0, erro: '' };
+let D = { items: [], contas: [], tx: [], regras: [], inv: [], mov: [], snap: [], hist: [], carteiras: [], saldosCripto: [], status: null, criptoStatus: null, at: 0, erro: '' };
 let carregando = false, sincronizando = false;
 let viewEl = null;
 
@@ -72,17 +72,21 @@ async function carregar(force) {
           if (data.length < 1000) return out;
         }
       };
-      const [tx, it, ct, rg, st, inv, mov, snap, hist] = await Promise.all([
+      const [tx, it, ct, rg, st, inv, mov, snap, hist, cart, sal, cst] = await Promise.all([
         todas('fin_tx', 'data', q => q.gte('data', desde)), sb.from('fin_items').select('*'), sb.from('fin_contas').select('*'), sb.from('fin_regras').select('*'),
         sb.from('app_config').select('value').eq('key', 'fin_status').maybeSingle(), todas('fin_invest', 'atualizado_em', q => q, true),
-        todas('fin_inv_mov', 'data', q => q, true), sb.from('fin_snap').select('*').order('dia'), todasHist(sb)]);
+        todas('fin_inv_mov', 'data', q => q, true), sb.from('fin_snap').select('*').order('dia'), todasHist(sb),
+        sb.from('cripto_carteiras').select('*').order('criado_em'), sb.from('cripto_saldos').select('*'),
+        sb.from('app_config').select('value').eq('key', 'cripto_status').maybeSingle()]);
       const e = it.error || ct.error || rg.error;
       if (e) throw e;
       let status = null; try { status = JSON.parse(st.data?.value || 'null'); } catch {}
-      D = { items: it.data, contas: ct.data, tx, regras: rg.data, inv, mov, snap: snap.error ? [] : snap.data, hist, status, at: Date.now(), erro: '' };
+      let criptoStatus = null; try { criptoStatus = JSON.parse(cst.data?.value || 'null'); } catch {}
+      D = { items: it.data, contas: ct.data, tx, regras: rg.data, inv, mov, snap: snap.error ? [] : snap.data, hist,
+        carteiras: cart.error ? [] : cart.data, saldosCripto: sal.error ? [] : sal.data, status, criptoStatus, at: Date.now(), erro: '' };
     } else {
-      const [items, contas, tx, regras, inv, mov, snap, hist] = await Promise.all(['fin_items', 'fin_contas', 'fin_tx', 'fin_regras', 'fin_invest', 'fin_inv_mov', 'fin_snap', 'fin_invest_hist'].map(t => db.all(t)));
-      D = { items, contas, tx: tx.filter(t => t.data >= desde).sort((a, b) => b.data.localeCompare(a.data)), regras, inv, mov, snap, hist, status: null, at: Date.now(), erro: '' };
+      const [items, contas, tx, regras, inv, mov, snap, hist, carteiras, saldosCripto] = await Promise.all(['fin_items', 'fin_contas', 'fin_tx', 'fin_regras', 'fin_invest', 'fin_inv_mov', 'fin_snap', 'fin_invest_hist', 'cripto_carteiras', 'cripto_saldos'].map(t => db.all(t)));
+      D = { items, contas, tx: tx.filter(t => t.data >= desde).sort((a, b) => b.data.localeCompare(a.data)), regras, inv, mov, snap, hist, carteiras, saldosCripto, status: null, criptoStatus: null, at: Date.now(), erro: '' };
     }
   } catch (e) {
     D.erro = /fin_|relation|does not exist/i.test(e.message || '') ? 'As tabelas de finanças ainda não existem: rode supabase/2026-10-17_financas.sql.'
@@ -109,7 +113,9 @@ async function sincronizar(body = {}) {
   if (db.mode !== 'supabase') throw new Error('A sincronização só funciona com o Supabase configurado.');
   sincronizando = true; if (viewEl) render(viewEl);
   try {
-    const { data, error } = await db.client().functions.invoke('fin-sync', { body });
+    // Botão Atualizar: bancos e carteiras de cripto juntos
+    const [{ data, error }] = await Promise.all([db.client().functions.invoke('fin-sync', { body }),
+      !body.item && !body.connect && D.carteiras.length ? lerCarteiras() : null]);
     if (error) throw error;
     if (data?.erro) throw new Error(data.erro);
     toast(data?.novos ? `${data.novos} lançamento${data.novos > 1 ? 's' : ''} novo${data.novos > 1 ? 's' : ''}` : 'Finanças em dia');
@@ -135,13 +141,14 @@ export function render(el) {
     <span class="muted small">${statusTxt()}</span>
     <button class="btn fn-olho" id="fnOlho" aria-pressed="${fc.priv.on}" title="${fc.priv.on ? 'Mostrar valores' : 'Ocultar valores'}" aria-label="${fc.priv.on ? 'Mostrar valores' : 'Ocultar valores'}">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>${fc.priv.on ? '<path d="M3 3l18 18"/>' : ''}</svg></button>
-    ${conectado ? `<button class="btn" id="fnSync" ${sincronizando ? 'disabled' : ''}>${sincronizando ? 'Atualizando…' : 'Atualizar'}</button>` : ''}
+    ${conectado || D.carteiras.length ? `<button class="btn" id="fnSync" ${sincronizando ? 'disabled' : ''}>${sincronizando ? 'Atualizando…' : 'Atualizar'}</button>` : ''}
   </div>
   ${D.erro ? `<p class="banner">${h(D.erro)}</p>` : ''}
   ${D.status?.erro ? `<p class="banner">Pluggy: ${h(D.status.erro)}</p>` : ''}
+  ${D.criptoStatus?.erro ? `<p class="banner">Carteiras cripto: ${h(D.criptoStatus.erro)}</p>` : ''}
   <div class="fn-corpo">${!D.at ? (aba === 'painel' ? carteira.skeleton() : '<p class="empty">Carregando…</p>')
     : aba === 'painel' ? carteira.painel(D, ctx) : aba === 'fluxo' ? (conectado ? resumo() : conectar()) : aba === 'lancamentos' ? (conectado ? lancamentos() : conectar())
-      : (conectado ? contas() : conectar())}</div>`;
+      : (conectado ? contas() : conectar() + carteirasCripto())}</div>`;
   if (D.at && aba === 'painel') carteira.ligar(el, ctx);
   el.querySelector('#fnOlho').onclick = () => { fc.priv.on = !fc.priv.on; try { localStorage.setItem(PRIV, fc.priv.on ? '1' : '0'); } catch {} render(el); };
 
@@ -156,6 +163,9 @@ export function render(el) {
   el.querySelectorAll('tr[data-tx]').forEach(r => r.onclick = () => editarTx(D.tx.find(t => t.id === r.dataset.tx)));
   el.querySelectorAll('[data-conta]').forEach(b => b.onclick = () => editarConta(conta(b.dataset.conta)));
   el.querySelector('#fnVerInv')?.addEventListener('click', () => irAba('painel'));
+  el.querySelector('#fnCart')?.addEventListener('submit', novaCarteira);
+  el.querySelectorAll('[data-del-cart]').forEach(b => b.onclick = () => apagarCarteira(b.dataset.delCart));
+  el.querySelector('#fnLerCart')?.addEventListener('click', async () => { try { const r = await lerCarteiras(); toast(r?.erro ? r.erro : 'Carteiras lidas', 5000); } catch (e) { toast(e.message, 5000); } await carregar(true); });
   const fq = el.querySelector('#fnQ');
   if (fq) {
     fq.oninput = () => { filtro.q = fq.value; const p = fq.selectionStart; render(el); const n = el.querySelector('#fnQ'); n.focus(); n.setSelectionRange(p, p); };
@@ -413,9 +423,60 @@ function contas() {
       ${c.oculta ? '<small>fora dos totais</small>' : ''}
     </button>`).join('') || '<p class="empty">Nenhuma conta ainda.</p>'}</div>
   </section>`).join('')}
+  ${carteirasCripto()}
   ${D.items.length < 5 ? conectar(true) : ''}
   ${D.regras.length ? `<section class="block"><h2>Regras de classificação</h2><p class="muted small">Aplicadas aos lançamentos novos. Para mudar uma, crie outra com o mesmo trecho a partir de um lançamento.</p>
     <ul class="fn-regras">${D.regras.map(r => `<li>"${h(r.contem)}" → <b>${h(r.categoria || '')}</b>${r.negocio ? ` · ${h(area(r.negocio).nome)}` : ''}${r.casa ? ` · ${h(casaNome(r.casa))}` : ''}</li>`).join('')}</ul></section>` : ''}`;
+}
+
+// ---------- Carteiras cripto (autocustódia, só leitura pelo endereço público) ----------
+const redeDe = e => /^0x[0-9a-fA-F]{40}$/.test(e) ? 'evm' : /^(bc1|[13])[a-zA-HJ-NP-Z0-9]{25,62}$/.test(e) ? 'btc' : '';
+async function lerCarteiras(carteira) {
+  if (db.mode !== 'supabase') return null;
+  const { data, error } = await db.client().functions.invoke('cripto-carteiras', { body: carteira ? { carteira } : {} });
+  if (error) throw error;
+  return data;
+}
+function carteirasCripto() {
+  const sal = id => D.saldosCripto.filter(s => s.carteira_id === id);
+  return `<section class="block fn-carts">
+    <h2>Carteiras cripto (autocustódia)</h2>
+    <p class="muted small">OneKey, Rabby e outras: o Hub lê os saldos na blockchain pelo <b>endereço público</b>, 2 vezes por dia. Só leitura.
+      <b>Nunca</b> informe as palavras de recuperação (seed) nem chave privada.</p>
+    ${D.carteiras.map(c => `<div class="fn-cart">
+      <div class="fn-cart-h"><b>${h(c.nome || 'Carteira')}</b><span class="chip-static">${c.rede === 'btc' ? 'Bitcoin' : 'EVM (todas as redes 0x)'}</span>
+        <code title="${h(c.endereco)}">${h(c.endereco.slice(0, 8))}…${h(c.endereco.slice(-6))}</code>
+        <button class="link-btn" data-del-cart="${h(c.id)}">Remover</button></div>
+      ${c.erro ? `<p class="small fn-neg">${h(c.erro)}</p>` : ''}
+      <p class="muted small">${c.lido_em ? `Lida em ${fmtDate(localDate(c.lido_em))}` : 'Ainda não lida'}${sal(c.id).length ? ': ' + sal(c.id).map(s => `${fc.qtdTxt(+(+s.quantidade).toPrecision(6))} ${h(s.simbolo)} (${h(fc.redeNome(s.chain))})`).join(', ') : ''}</p>
+    </div>`).join('')}
+    <form id="fnCart" class="fn-form">
+      <label>Endereço público<input name="endereco" required placeholder="0x… ou bc1…" autocomplete="off" spellcheck="false"></label>
+      <label>Nome<input name="nome" placeholder="Ex.: OneKey" value="${D.carteiras.length ? '' : 'OneKey'}"></label>
+      <button class="btn primary">Adicionar</button>
+      ${D.carteiras.length ? '<button type="button" class="btn" id="fnLerCart">Ler agora</button>' : ''}
+    </form>
+  </section>`;
+}
+async function novaCarteira(ev) {
+  ev.preventDefault();
+  const f = Object.fromEntries(new FormData(ev.target));
+  const endereco = f.endereco.trim(), rede = redeDe(endereco);
+  if (/^(\w+\s+){11,}\w+$/.test(endereco)) { ev.target.endereco.value = ''; return toast('Isso parece uma frase de recuperação: não foi salva. Informe só o endereço público.', 8000); }
+  if (!rede) return toast('Endereço não reconhecido: use um endereço Bitcoin (bc1…, 1…, 3…) ou EVM (0x… com 42 caracteres).', 6000);
+  if (D.carteiras.some(c => c.endereco.toLowerCase() === endereco.toLowerCase())) return toast('Esse endereço já está cadastrado.');
+  try {
+    const c = await db.insert('cripto_carteiras', { nome: f.nome.trim() || 'Carteira', rede, endereco });
+    toast('Lendo a carteira na blockchain…', 4000);
+    const r = await lerCarteiras(c.id);
+    if (r?.erro) toast(r.erro, 6000);
+  } catch (e) { toast(e.message, 6000); }
+  await carregar(true);
+}
+async function apagarCarteira(id) {
+  if (!confirm('Remover esta carteira do Hub? Os saldos lidos saem do Painel (a carteira em si não é afetada).')) return;
+  try { await db.remove('cripto_carteiras', id); } catch (e) { toast(e.message, 5000); }
+  await carregar(true);
 }
 
 function editarConta(c) {
