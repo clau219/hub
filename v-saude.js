@@ -1,14 +1,16 @@
 // Saúde: dados do Garmin (sono, VFC, FC de repouso, Body Battery, passos, estresse, atividades).
-// Os dados chegam pelo script do PC (pasta HUB\garmin), não pelo navegador. Esta tela só lê.
+// Os dados chegam pela função garmin-sync do Supabase (de hora em hora, 7h–23h, e pelo botão Atualizar).
 import { S } from './store.js';
 import * as db from './db.js';
 import { h, today, addDays, fmtDate, dow, weekdayShort, localDate } from './util.js';
 import { insights } from './saude-insights.js';
+import { toast } from './ui.js';
 
 const PERIODOS = [[7, '7 dias'], [30, '30 dias'], [90, '90 dias'], [365, '1 ano']];
 let periodo = 30;
 let D = { daily: [], acts: [], status: null, ultimo: null, desde: null, at: 0, erro: '' };
 let carregando = false;
+let sincronizando = false;
 let viewEl = null;
 const CFG = {}; // gráficos desenhados, para o hover
 
@@ -79,6 +81,7 @@ export function render(el) {
     <h1>Saúde</h1>
     <div class="seg" role="tablist">${PERIODOS.map(([k, l]) => `<button role="tab" aria-selected="${k === periodo}" class="${k === periodo ? 'on' : ''}" data-per="${k}">${l}</button>`).join('')}</div>
     <span class="muted small">${statusTxt()}</span>
+    ${db.mode === 'supabase' ? `<button class="btn" id="sdSync" ${sincronizando ? 'disabled' : ''}>${sincronizando ? 'Atualizando…' : 'Atualizar'}</button>` : ''}
   </div>
   ${D.erro ? `<p class="banner">${h(D.erro)}</p>` : ''}
   ${D.status?.erro ? `<p class="banner">Garmin: ${h(D.status.erro)}</p>` : ''}
@@ -104,6 +107,21 @@ export function render(el) {
     periodo = +b.dataset.per; history.replaceState(null, '', '#/saude?' + periodo); render(el);
   });
   el.querySelectorAll('.sd-hit').forEach(bindHover);
+  el.querySelector('#sdSync')?.addEventListener('click', sincronizar);
+}
+
+// Puxa o Garmin agora (função garmin-sync), sem esperar a rodada de hora em hora
+async function sincronizar() {
+  if (sincronizando) return;
+  sincronizando = true; if (viewEl && naTela()) render(viewEl);
+  try {
+    const { data, error } = await db.client().functions.invoke('garmin-sync', { body: { dias: 2 } });
+    const erro = data?.erro || error?.message;
+    if (erro) toast('Garmin: ' + erro, 5000);
+    else toast(`Garmin atualizado${data?.habitos ? `, ${data.habitos} hábito(s) marcados` : ''}`);
+  } catch (e) { toast('Garmin: ' + (e.message || e), 5000); }
+  sincronizando = false;
+  await carregar(true);
 }
 
 function statusTxt() {
