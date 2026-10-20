@@ -54,7 +54,7 @@ describe('ical-feed', () => {
     assert.equal(ev.find(e => e.UID === 'bk-b3@hub').SUMMARY, 'Casa Frida: bloqueado');
     assert.equal(b2.DTSTAMP, '20261019T150000Z');
   });
-  test('reserva sem origem não mostra "(null)" no título', { todo: 'ical-feed: no cal=alugueis o título usa (${b.origem}) mesmo quando origem é null → "Casa Frida: reserva (null)"' }, async () => {
+  test('reserva sem origem não mostra "(null)" no título', async () => {
     const ev = eventos(await (await get('token=segredo')).text());
     assert.doesNotMatch(ev.find(e => e.UID === 'bk-b4@hub').SUMMARY, /null/);
   });

@@ -31,6 +31,8 @@ const tipoNome = t => TIPOS[t] || (t ? t.replace(/_/g, ' ').replace(/^./, c => c
 async function carregar(force) {
   const desde = addDays(today(), -Math.max(periodo + 30, 120));
   if (carregando || (!force && D.desde && D.desde <= desde && Date.now() - D.at < 5 * 60e3)) return;
+  // Depois de uma falha, só tenta de novo pelo botão Atualizar ou passado 1 minuto (o render() do finally chamaria carregar() sem parar)
+  if (!force && D.falhaEm && Date.now() - D.falhaEm < 60e3) return;
   carregando = true;
   try {
     if (db.mode === 'supabase') {
@@ -57,6 +59,7 @@ async function carregar(force) {
     }
   } catch (e) {
     D.erro = 'Não foi possível carregar os dados de saúde: ' + (e.message || e);
+    D.falhaEm = Date.now();
   } finally {
     carregando = false;
     if (viewEl && naTela()) render(viewEl);
@@ -89,7 +92,7 @@ export function render(el) {
       ? `As atividades continuam chegando (a última em ${fmtDate(D.ultAtiv)}), mas o Garmin não tem passos, sono nem FC do dia a dia desde <b>${fmtDate(D.ultimo, { long: true })}</b>. Confira se o relógio está sendo usado fora dos treinos e se o "Monitoramento de atividades" está ligado nele.`
       : `O relógio não manda dados desde <b>${fmtDate(D.ultimo, { long: true })}</b>. Abra o app Garmin Connect no celular perto do relógio para sincronizar; o Hub pega o que chegar na próxima rodada.`}
     ${D.ultimo < ini ? `<button class="link-btn" data-per="365">Ver o último ano</button>` : ''}</p>` : ''}
-  ${!temDados ? (D.at ? vazio() : '<p class="empty">Carregando…</p>') : `
+  ${!temDados ? (D.at ? vazio() : D.erro ? '' : '<p class="empty">Carregando…</p>') : `
   ${coach()}
   ${tiles(porDia)}
   ${gigs(porDia)}

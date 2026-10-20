@@ -38,6 +38,4 @@ Para ver os `console.warn/error` do Hub: `HUB_TESTE_LOG=1 npm test`.
 
 Aparecem como `todo` e não quebram a suíte. Quando o bug for corrigido, tire o `todo` do teste.
 
-1. **Saúde** (`v-saude.js`, `carregar()`): se a leitura do banco falha, a tela tenta de novo sem parar (dezenas de consultas por segundo ao Supabase).
-2. **Paleta Ctrl+K** (`palette.js`): Finanças não aparece em "Ir para".
-3. **ical-feed**: reserva sem origem aparece como "Casa X: reserva (null)" no calendário de Aluguéis.
+Nenhum no momento (os 3 encontrados em 19/10/2026 — loop da Saúde quando o banco falha, Finanças fora da paleta e "(null)" no ical-feed — foram corrigidos).

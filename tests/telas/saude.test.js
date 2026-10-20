@@ -100,17 +100,12 @@ describe('Saúde: situações especiais', () => {
     await trocarDados({}, { supabase: true });
     const b = banco();
     b.falhas.health_daily = 'permission denied for table health_daily';
-    // trava de segurança: depois de 30 tentativas a falha some, para o teste não rodar para sempre
-    let visto = '';
-    b.aoConsultar = t => {
-      if (t !== 'health_daily') return;
-      visto ||= $$('#view .banner').map(texto).find(x => /permission denied/.test(x)) || '';
-      if (b.consultas.filter(c => c.tabela === t).length >= 30) delete b.falhas.health_daily;
-    };
     await abrir();
+    const visto = $$('#view .banner').map(texto).find(x => /permission denied/.test(x)) || '';
     assert.match(visto, /Não foi possível carregar os dados de saúde: permission denied/);
+    assert.equal($('#view .empty')?.textContent.includes('Carregando') ?? false, false, 'com erro não fica "Carregando…" para sempre');
   });
-  test('falha ao ler o banco não fica tentando de novo sem parar', { todo: 'v-saude.js carregar(): no erro, D.at não muda; o render() do finally chama carregar() de novo e repete sem pausa (martela o Supabase)' }, async () => {
+  test('falha ao ler o banco não fica tentando de novo sem parar', async () => {
     globalThis.__relogio.avancar(6 * 60e3);
     await trocarDados({}, { supabase: true });
     const b = banco();

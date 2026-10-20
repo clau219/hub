@@ -21,7 +21,7 @@ Deno.serve(async req => {
     ]);
     const nome = (id: string) => props?.find(p => p.id === id)?.nome || id;
     for (const b of bks || []) {
-      const titulo = b.status === 'bloqueio' ? `${nome(b.property_id)}: bloqueado` : `${nome(b.property_id)}: ${b.hospede || 'reserva'} (${b.origem})`;
+      const titulo = b.status === 'bloqueio' ? `${nome(b.property_id)}: bloqueado` : `${nome(b.property_id)}: ${b.hospede || 'reserva'}${b.origem ? ` (${b.origem})` : ''}`;
       evs.push(vevent(`bk-${b.id}`, stamp, titulo, `DTSTART;VALUE=DATE:${b.checkin.replace(/-/g, '')}`, `DTEND;VALUE=DATE:${b.checkout.replace(/-/g, '')}`, b.notas));
     }
   } else if (cal === 'diretas') {

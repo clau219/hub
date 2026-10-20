@@ -87,7 +87,7 @@ describe('paleta (Ctrl+K)', () => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }));
     assert.equal($('#pal').open, false);
   });
-  test('Finanças está em "Ir para"', { todo: 'palette.js: a lista IR não tem "financas" (a tela existe no menu, mas não na busca)' }, () => {
+  test('Finanças está em "Ir para"', () => {
     pal.abrir();
     digitar('finan');
     assert.ok(itens().includes('Finanças'));

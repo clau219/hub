@@ -253,7 +253,7 @@ svg.ico { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColo
 .card-next span { font-weight: 700; }
 .card-next.late { color: var(--late); }
 .card-next.today span { color: var(--brand); }
-.card footer { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+.card footer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
 .card footer:empty { display: none; }
 .card footer .wa { margin-left: auto; }
 
