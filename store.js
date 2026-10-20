@@ -166,8 +166,9 @@ export function atencao() {
 }
 
 // ---------------------------------------------------------------
-// Conflitos de agenda: gig no mesmo dia de um check-in/check-out, ou na véspera de um check-out
-// (tocou de noite, tem casa para entregar de manhã). Marcar como "ciente" vale só neste aparelho.
+// Conflitos de agenda: gig no mesmo dia de um check-in, ou na véspera de um check-out
+// (tocou de noite, tem casa para entregar de manhã). Check-out no dia da gig não conflita: a casa é
+// entregue de manhã e a gig é à noite. Marcar como "ciente" vale só neste aparelho.
 // ---------------------------------------------------------------
 const CIENTE = 'hub:conflitos-ok';
 const lerCiente = () => { try { return new Set(JSON.parse(localStorage.getItem(CIENTE) || '[]')); } catch { return new Set(); } };
@@ -186,7 +187,7 @@ export function conflitos(dias = 30) {
   }
   for (const g of gigs) {
     for (const m of movs) {
-      const mesmoDia = m.dia === g.data_evento;
+      const mesmoDia = m.tipo === 'Check-in' && m.dia === g.data_evento;
       const manhaSeguinte = m.tipo === 'Check-out' && m.dia === addDays(g.data_evento, 1);
       if (!mesmoDia && !manhaSeguinte) continue;
       const chave = `${g.id}|${m.b.id}|${m.tipo}`;

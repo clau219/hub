@@ -130,10 +130,11 @@ describe('conflitos gig × check-in/out', () => {
     bookings: [
       reserva({ id: 'b1', property_id: 'QS39', checkin: '2026-10-24', checkout: '2026-10-27' }),
       reserva({ id: 'b2', property_id: 'QS40', checkin: '2026-10-20', checkout: '2026-10-25' }),
+      reserva({ id: 'b4', property_id: 'QS50', checkin: '2026-10-21', checkout: '2026-10-24' }), // check-out de manhã, gig à noite: não conflita
       reserva({ id: 'b3', property_id: 'QS50', status: 'bloqueio', checkin: '2026-10-24', checkout: '2026-10-26' }),
     ],
   }));
-  test('mesmo dia e check-out na manhã seguinte; ignora perdido, longe, não-DJ e bloqueio', () => {
+  test('check-in no dia e check-out na manhã seguinte; ignora check-out no dia, perdido, longe, não-DJ e bloqueio', () => {
     const c = store.conflitos();
     assert.deepEqual(c.map(x => x.chave), ['g1|b1|Check-in', 'g1|b2|Check-out']);
     assert.equal(c[0].title, 'Gig Ana × Check-in Casa Frida');
