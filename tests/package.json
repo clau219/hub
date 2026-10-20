@@ -1,0 +1,18 @@
+{
+  "name": "hub-testes",
+  "private": true,
+  "type": "module",
+  "description": "Suite de testes do Hub: cada arquivo roda em processo próprio, sem rede e sem o Supabase real",
+  "scripts": {
+    "test": "node --import ./helpers/ambiente.js --experimental-transform-types --test --test-force-exit --test-reporter=spec \"unit/*.test.js\" \"telas/*.test.js\" \"funcoes/*.test.js\"",
+    "test:unit": "node --import ./helpers/ambiente.js --experimental-transform-types --test --test-force-exit --test-reporter=spec \"unit/*.test.js\"",
+    "test:telas": "node --import ./helpers/ambiente.js --experimental-transform-types --test --test-force-exit --test-reporter=spec \"telas/*.test.js\"",
+    "test:funcoes": "node --import ./helpers/ambiente.js --experimental-transform-types --test --test-force-exit --test-reporter=spec \"funcoes/*.test.js\""
+  },
+  "devDependencies": {
+    "@happy-dom/global-registrator": "^21.0.3",
+    "happy-dom": "^21.0.3",
+    "rrule": "^2.8.1",
+    "zod": "^4.6.7"
+  }
+}
