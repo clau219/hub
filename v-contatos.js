@@ -48,7 +48,7 @@ export function contactForm(c = {}) {
       <label>Instagram<input name="instagram" value="${h(c.instagram)}"></label>
     </div>
     <label>Notas<textarea name="notas" rows="2">${h(c.notas)}</textarea></label>
-    ${ds.length ? `<div class="quotes"><b>Oportunidades</b>${ds.sort((a, b) => (b.data_evento || '').localeCompare(a.data_evento || '')).map(d => `<button type="button" class="link-btn" data-d="${d.id}">${d.data_evento ? fmtDate(d.data_evento, { year: true }) + ': ' : ''}${h(d.titulo)} (${etapa(d.etapa).nome}${d.valor ? ', ' + brl(d.valor) : ''})</button>`).join('')}</div>` : ''}
+    ${ds.length ? `<div class="quotes"><b>Oportunidades</b>${ds.sort((a, b) => (b.data_evento || '').localeCompare(a.data_evento || '')).map(d => `<button type="button" class="link-btn" data-d="${d.id}">${d.data_evento ? fmtDate(d.data_evento, { year: true }) + ': ' : ''}${h(d.titulo)} (${etapa(d.etapa, d.negocio).nome}${d.valor ? ', ' + brl(d.valor) : ''})</button>`).join('')}</div>` : ''}
   `, {
     extra: c.id ? `${wa ? `<a class="btn" href="${wa}" target="_blank" rel="noopener">WhatsApp</a>` : ''}<button type="button" class="btn" id="cTouch">Falei hoje</button><button type="button" class="btn" id="cDeal">Nova oportunidade</button>` : '',
     onSubmit: async f => { await save('contacts', f, c.id); toast('Contato salvo'); },

@@ -111,9 +111,26 @@ describe('Escapando (atencao)', () => {
     assert.equal(a.paradoparado.title, 'Festa: sem movimento há 9 dias');
     assert.equal(a.paradoparado.sub, 'Próxima ação: Ligar');
     assert.equal(a.atrasadaatrasada.sub, 'Ana');
+    assert.equal(a['passouevento passou'].title, 'Casamento: o evento já passou');
     assert.equal(a['passouevento passou'].sub, 'Mover para Realizado e cobrar');
     assert.equal(a.b1atrasada.title, 'Enviar orçamento · Casa Frida');
     assert.equal(a.b1atrasada.sub, 'Bia, check-in 25/10');
+  });
+});
+
+describe('Escapando: data passou, com o próximo passo de cada negócio', () => {
+  before(() => semear({
+    deals: [
+      deal({ id: 'eng', negocio: 'consultoria', etapa: 'fechado', titulo: 'Reforma', data_evento: '2026-10-10' }),
+      deal({ id: 'alug', negocio: 'aluguel', etapa: 'fechado', titulo: 'Pedro', data_evento: '2026-10-10' }),
+    ],
+  }));
+  test('engenharia vai para Entregue; aluguel reservado: receber o saldo', () => {
+    const a = Object.fromEntries(store.atencao().filter(x => x.motivo === 'evento passou').map(x => [x.ref.id, x]));
+    assert.equal(a.eng.title, 'Reforma: a data já passou');
+    assert.equal(a.eng.sub, 'Mover para Entregue e cobrar');
+    assert.equal(a.alug.title, 'Pedro: o check-in já passou');
+    assert.equal(a.alug.sub, 'Receber o saldo e marcar como pago');
   });
 });
 

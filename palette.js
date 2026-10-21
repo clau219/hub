@@ -27,7 +27,7 @@ function resultados(qRaw) {
     add('Oportunidades', S.deals.map(d => {
       const nome = contactName(d.contato_id) || d.titulo;
       return { n: Math.max(nota(nome, q), nota(d.titulo, q), nota(d.local, q) && 1), ord: d.data_evento || d.created_at,
-        t: nome, s: [etapa(d.etapa).nome, AREAS[d.negocio]?.nome, d.data_evento && fmtDate(d.data_evento)].filter(Boolean).join(' · '), go: () => dealForm(d) };
+        t: nome, s: [etapa(d.etapa, d.negocio).nome, AREAS[d.negocio]?.nome, d.data_evento && fmtDate(d.data_evento)].filter(Boolean).join(' · '), go: () => dealForm(d) };
     }));
     add('Contatos', S.contacts.map(c => ({ n: Math.max(nota(c.nome, q), nota(c.telefone, q) && 1, nota(c.email, q) && 1), ord: c.ultima_interacao,
       t: c.nome, s: [c.tipo, c.telefone].filter(Boolean).join(' · '), wa: waLink(c.telefone), go: () => contactForm(c) })));

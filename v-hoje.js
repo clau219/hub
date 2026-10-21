@@ -1,5 +1,5 @@
 import { S, items, atencao, prop, ocupacao, save, marcarCiente } from './store.js';
-import { h, today, addDays, fmtDate, relDate, weekdayShort, areaTag, brl, hhmm } from './util.js';
+import { h, today, addDays, fmtDate, relDate, weekdayShort, areaTag, brl, hhmm, AREAS, NEGOCIOS_PIPE, abertasDe, etapaNoFluxo, etapa } from './util.js';
 import { openItem, dealDone, snooze, toggleTask, taskForm, dealForm, toast, etapaDone, dealWa, aposWhats } from './ui.js';
 import { CONFIG } from './config.js';
 import * as habitos from './habitos.js';
@@ -199,12 +199,15 @@ function ligarGestos(el) {
   });
 }
 
+// Um resumo por negócio: total aberto e quantas em cada etapa (com os nomes daquele negócio)
 function pipeResumo() {
-  const ab = S.deals.filter(d => ['lead', 'orcamento', 'negociacao', 'fechado', 'realizado'].includes(d.etapa));
-  if (!ab.length) return '<p class="empty">Nenhuma oportunidade aberta.</p>';
-  const grupos = [['lead', 'Contatos'], ['orcamento', 'Orçamentos enviados'], ['negociacao', 'Negociando'], ['fechado', 'Fechados'], ['realizado', 'A receber']];
-  return `<dl class="pipe-sum">${grupos.map(([k, l]) => {
-    const g = ab.filter(d => d.etapa === k); if (!g.length) return '';
-    return `<div><dt>${l}</dt><dd>${g.length}<small>${brl(g.reduce((s, d) => s + (+d.valor || 0), 0))}</small></dd></div>`;
-  }).join('')}</dl><a class="link" href="#/pipeline">Abrir pipeline</a>`;
+  const linhas = NEGOCIOS_PIPE.map(n => {
+    const ab = S.deals.filter(d => (d.negocio || 'dj') === n && abertasDe(n).includes(etapaNoFluxo(d)));
+    if (!ab.length) return '';
+    const etapas = abertasDe(n).map(id => [etapa(id, n).nome, ab.filter(d => etapaNoFluxo(d) === id).length]).filter(([, q]) => q);
+    return `<div><dt>${AREAS[n].nome}<small class="pipe-et">${etapas.map(([nome, q]) => `${q} ${h(nome.toLowerCase())}`).join(' · ')}</small></dt>
+      <dd>${ab.length}<small>${brl(ab.reduce((s, d) => s + (+d.valor || 0), 0))}</small></dd></div>`;
+  }).join('');
+  if (!linhas) return '<p class="empty">Nenhuma oportunidade aberta.</p>';
+  return `<dl class="pipe-sum">${linhas}</dl><a class="link" href="#/pipeline">Abrir pipeline</a>`;
 }

@@ -60,16 +60,42 @@ export const AREAS = {
 };
 export const areaTag = a => `<span class="tag" style="--c:${(AREAS[a] || AREAS.inbox).cor}">${h((AREAS[a] || { nome: a }).nome)}</span>`;
 
-export const ETAPAS = [
-  { id: 'lead', nome: 'Contato', sug: 'Enviar orçamento', dias: 1 },
-  { id: 'orcamento', nome: 'Orçamento enviado', sug: 'Follow-up do orçamento', dias: 3 },
-  { id: 'negociacao', nome: 'Negociando', sug: 'Fechar e pedir sinal', dias: 2 },
-  { id: 'fechado', nome: 'Fechado', sug: 'Confirmar detalhes do evento', dias: 7 },
-  { id: 'realizado', nome: 'Realizado', sug: 'Cobrar pagamento', dias: 1 },
-  { id: 'pago', nome: 'Pago' },
-  { id: 'perdido', nome: 'Perdido' },
+// Etapas abertas de cada negócio. Os ids são os mesmos para todos (o banco não muda):
+// o que muda é o nome, a próxima ação sugerida e quais etapas existem.
+const ENCERRADAS = [{ id: 'pago', nome: 'Pago' }, { id: 'perdido', nome: 'Perdido' }];
+const SERVICO = [
+  { id: 'lead', nome: 'Contato', sug: 'Enviar proposta', dias: 1 },
+  { id: 'orcamento', nome: 'Proposta enviada', sug: 'Follow-up da proposta', dias: 3 },
+  { id: 'fechado', nome: 'Em andamento', sug: 'Atualizar o cliente', dias: 7 },
+  { id: 'realizado', nome: 'Entregue', sug: 'Cobrar pagamento', dias: 1 },
 ];
-export const etapa = id => ETAPAS.find(e => e.id === id) || { nome: id };
+export const FLUXOS = {
+  dj: [
+    { id: 'lead', nome: 'Contato', sug: 'Enviar orçamento', dias: 1 },
+    { id: 'orcamento', nome: 'Orçamento enviado', sug: 'Follow-up do orçamento', dias: 3 },
+    { id: 'negociacao', nome: 'Negociando', sug: 'Fechar e pedir sinal', dias: 2 },
+    { id: 'fechado', nome: 'Fechado', sug: 'Confirmar detalhes do evento', dias: 7 },
+    { id: 'realizado', nome: 'Realizado', sug: 'Cobrar pagamento', dias: 1 },
+  ],
+  consultoria: SERVICO,
+  aluguel: [
+    { id: 'lead', nome: 'Contato', sug: 'Enviar valor e disponibilidade', dias: 1 },
+    { id: 'orcamento', nome: 'Orçamento enviado', sug: 'Follow-up do orçamento', dias: 1 },
+    { id: 'fechado', nome: 'Reservado', sug: 'Receber o saldo', dias: 7 },
+  ],
+  flores: SERVICO,
+};
+// Ordem das faixas no Pipeline
+export const NEGOCIOS_PIPE = ['dj', 'consultoria', 'aluguel', 'flores'];
+const fluxoAberto = negocio => FLUXOS[negocio === 'alugueis' ? 'aluguel' : negocio] || FLUXOS.dj;
+export const fluxo = negocio => [...fluxoAberto(negocio), ...ENCERRADAS];
+export const abertasDe = negocio => fluxoAberto(negocio).map(e => e.id);
+// Etapa em que a oportunidade aparece no quadro do negócio: "Negociando" antigo de quem não tem essa etapa conta como orçamento
+export const etapaNoFluxo = d => (d.etapa === 'negociacao' && !abertasDe(d.negocio).includes('negociacao') ? 'orcamento' : d.etapa);
+export const ETAPAS = fluxo('dj');
+// Sem negócio, usa os nomes do DJ (que tem todas as etapas)
+export const etapa = (id, negocio) => fluxo(negocio).find(e => e.id === id) || ETAPAS.find(e => e.id === id) || { nome: id };
+// Todas as etapas que contam como aberta em algum negócio
 export const ABERTAS = ['lead', 'orcamento', 'negociacao', 'fechado', 'realizado'];
 
 // ---------- WhatsApp ----------
@@ -84,11 +110,20 @@ export function waLink(tel, txt = '') {
 export function msgDeal(d, nome) {
   const n = (nome || '').trim().split(/\s+/)[0] || '';
   const oi = n ? `Oi, ${n}!` : 'Oi!';
-  const dj = d.negocio === 'dj';
-  const quem = dj ? 'Claudio (DJ CLAU)' : 'Claudio';
+  if (d.negocio === 'aluguel' || d.negocio === 'alugueis') return {
+    lead: `${oi} Aqui é o Claudio. Me passa as datas e quantas pessoas que eu já te mando o valor e a disponibilidade?`,
+    orcamento: `${oi} Tudo bem? Conseguiu ver o valor? As datas ainda estão livres, mas podem fechar a qualquer momento.`,
+    fechado: `${oi} Sua reserva está garantida${d.data_evento ? ` para ${fmtDate(d.data_evento)}` : ''}! Segue a chave PIX para o saldo:`,
+  }[d.etapa] || oi;
+  if (d.negocio !== 'dj') return {
+    lead: `${oi} Aqui é o Claudio. Me conta um pouco mais do que você precisa para eu te mandar uma proposta?`,
+    orcamento: `${oi} Tudo bem? Conseguiu ver a proposta? Se quiser, ajusto o que precisar.`,
+    fechado: `${oi} Passando para te atualizar sobre o andamento do serviço.`,
+    realizado: `${oi} Serviço entregue! Obrigado pela confiança. Segue a chave PIX para o pagamento:`,
+  }[d.etapa] || oi;
   return {
-    lead: `${oi} Aqui é o ${quem}. ${dj ? 'Me passa a data, o local e o horário do evento que eu já te mando o orçamento?' : 'Me conta um pouco mais do que você precisa para eu te mandar uma proposta?'}`,
-    orcamento: `${oi} Tudo bem? Conseguiu ver ${dj ? 'o orçamento' : 'a proposta'}? Se quiser, ajusto o que precisar.`,
+    lead: `${oi} Aqui é o Claudio (DJ CLAU). Me passa a data, o local e o horário do evento que eu já te mando o orçamento?`,
+    orcamento: `${oi} Tudo bem? Conseguiu ver o orçamento? Se quiser, ajusto o que precisar.`,
     negociacao: `${oi} Para garantir a data, fechamos com um sinal. Posso te mandar o contrato?`,
     fechado: `${oi} Passando para alinhar os detalhes${d.data_evento ? ` do dia ${fmtDate(d.data_evento)}` : ''}. Algum horário bom para conversarmos?`,
     realizado: `${oi} Obrigado pela confiança! Segue a chave PIX para o pagamento do saldo:`,

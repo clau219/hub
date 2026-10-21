@@ -1,6 +1,6 @@
 // Estado em memória: carrega tudo (volume pessoal é pequeno) e recarrega após mudanças.
 import * as db from './db.js';
-import { today, addDays, diffDays, localDate, hhmm, ABERTAS } from './util.js';
+import { today, addDays, diffDays, localDate, hhmm, ABERTAS, abertasDe, etapa } from './util.js';
 import { CONFIG } from './config.js';
 import { acompanhada, pendentes, prazo } from './hospedagem.js';
 
@@ -150,8 +150,12 @@ export function atencao() {
       out.push({ kind: 'acao', motivo: 'atrasada', date: d.data_proxima_acao, area: d.negocio, title: d.proxima_acao, sub: contactName(d.contato_id) || d.titulo, ref: d });
     else if (['orcamento', 'negociacao'].includes(d.etapa) && d.updated_at && diffDays(localDate(d.updated_at), hoje) >= CONFIG.DIAS_ESQUECIDO && d.data_proxima_acao > hoje)
       out.push({ kind: 'acao', motivo: 'parado', date: localDate(d.updated_at), area: d.negocio, title: `${d.titulo}: sem movimento há ${diffDays(localDate(d.updated_at), hoje)} dias`, sub: 'Próxima ação: ' + d.proxima_acao, ref: d });
-    if (d.etapa === 'fechado' && d.data_evento && d.data_evento < hoje)
-      out.push({ kind: 'acao', motivo: 'evento passou', date: d.data_evento, area: d.negocio, title: `${d.titulo}: o evento já passou`, sub: 'Mover para Realizado e cobrar', ref: d });
+    if (d.etapa === 'fechado' && d.data_evento && d.data_evento < hoje) {
+      // Depois de "Fechado/Em andamento" vem a etapa de cobrar; no aluguel (Reservado) é marcar como pago
+      const seguinte = abertasDe(d.negocio)[abertasDe(d.negocio).indexOf('fechado') + 1];
+      const quando = d.negocio === 'aluguel' ? 'o check-in' : d.negocio === 'dj' ? 'o evento' : 'a data';
+      out.push({ kind: 'acao', motivo: 'evento passou', date: d.data_evento, area: d.negocio, title: `${d.titulo}: ${quando} já passou`, sub: seguinte ? `Mover para ${etapa(seguinte, d.negocio).nome} e cobrar` : 'Receber o saldo e marcar como pago', ref: d });
+    }
   }
   for (const t of S.tasks) if (!t.feito && t.prazo && t.prazo < hoje)
     out.push({ kind: 'tarefa', motivo: 'atrasada', date: t.prazo, area: t.area, title: t.titulo, ref: t });

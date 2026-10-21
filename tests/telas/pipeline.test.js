@@ -1,4 +1,4 @@
-// Tela Pipeline (computador): quadro por etapa, filtro por negócio, mover cartão (teclado e arrastar), fechados.
+// Tela Pipeline (computador): faixas por negócio com as etapas de cada um, filtro por negócio, mover cartão (teclado e arrastar), fechados.
 import { test, describe, before, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { hub, $, $$, texto, clicar, enviarModal, preencher } from '../helpers/dom.js';
@@ -22,13 +22,27 @@ before(async () => {
   el = $('#view');
 });
 beforeEach(async () => { await trocarDados(DADOS()); P.render(el); $('#modal').open && $('#modal').close(); });
-const col = id => $(`.col[data-etapa="${id}"]`);
+const col = (id, n = 'dj') => $(`.col[data-etapa="${id}"][data-negocio="${n}"]`);
+const nomesCols = sel => $$(sel).map(c => texto(c.querySelector('h2')).replace(/\s*\d.*$/, ''));
 
 describe('quadro', () => {
-  test('5 colunas abertas com contagem e soma', () => {
-    assert.deepEqual($$('.col').map(c => c.dataset.etapa), ['lead', 'orcamento', 'negociacao', 'fechado', 'realizado']);
+  test('"Todos": uma faixa por negócio; faixa sem nada aberto vira uma linha', () => {
+    assert.deepEqual($$('.lane').map(l => l.dataset.negocio || 'vazia'), ['dj', 'consultoria', 'vazia', 'vazia']);
+    assert.match(texto($$('.lane.vazia')[0]), /Aluguéis.*nenhuma oportunidade aberta/);
+  });
+  test('cada negócio com as suas etapas', () => {
+    assert.deepEqual(nomesCols('.col[data-negocio="dj"]'), ['Contato', 'Orçamento enviado', 'Negociando', 'Fechado', 'Realizado']);
+    assert.deepEqual(nomesCols('.col[data-negocio="consultoria"]'), ['Contato', 'Proposta enviada', 'Em andamento', 'Entregue']);
     assert.equal(nb(texto(col('lead').querySelector('h2'))), 'Contato 2R$ 1.500');
     assert.match(texto(col('orcamento')), /Vazio/);
+  });
+  test('"Negociando" antigo de engenharia aparece em Proposta enviada', () => {
+    assert.ok(col('orcamento', 'consultoria').querySelector('.card[data-id=d3]'));
+  });
+  test('filtro de Aluguéis mostra Contato, Orçamento enviado e Reservado', async () => {
+    await clicar('[data-f=aluguel]');
+    assert.deepEqual(nomesCols('.col'), ['Contato', 'Orçamento enviado', 'Reservado']);
+    await clicar('[data-f=todos]');
   });
   test('cartão: cliente, valor, evento, próxima ação atrasada e WhatsApp', () => {
     const c = $('.card[data-id=d1]');
@@ -50,6 +64,19 @@ describe('quadro', () => {
     await clicar('[data-f=todos]');
     assert.equal($$('.card').length, 3);
   });
+  test('"+ nova" da faixa abre a oportunidade já no negócio, com as etapas dele', async () => {
+    await clicar('.lane.vazia [data-novo=aluguel]');
+    assert.equal($('#modal [name=negocio]').value, 'aluguel');
+    assert.deepEqual([...$('#modal [name=etapa]').options].map(o => o.textContent), ['Contato', 'Orçamento enviado', 'Reservado', 'Pago', 'Perdido']);
+    assert.equal($('#modal [name=proxima_acao]').value, 'Enviar valor e disponibilidade');
+  });
+  test('trocar o negócio no formulário troca a lista de etapas', async () => {
+    await clicar('#pNew');
+    const neg = $('#modal [name=negocio]');
+    neg.value = 'consultoria'; neg.dispatchEvent(new Event('change'));
+    assert.deepEqual([...$('#modal [name=etapa]').options].map(o => o.textContent), ['Contato', 'Proposta enviada', 'Em andamento', 'Entregue', 'Pago', 'Perdido']);
+    assert.equal($('#modal [name=proxima_acao]').value, 'Enviar proposta');
+  });
   test('pagos e perdidos numa tabela escondida', async () => {
     assert.equal(texto('#toggleClosed'), 'Mostrar pagos e perdidos (2)');
     await clicar('#toggleClosed');
@@ -59,9 +86,10 @@ describe('quadro', () => {
     $('#modal').close();
     await clicar('#toggleClosed');
   });
-  test('clicar no cartão abre a oportunidade', async () => {
+  test('clicar no cartão abre a oportunidade (etapa antiga continua na lista)', async () => {
     await clicar('.card[data-id=d3]');
     assert.equal($('#modal [name=etapa]').value, 'negociacao');
+    assert.deepEqual([...$('#modal [name=etapa]').options].map(o => o.textContent), ['Negociando', 'Contato', 'Proposta enviada', 'Em andamento', 'Entregue', 'Pago', 'Perdido']);
   });
 });
 
@@ -75,22 +103,33 @@ describe('mover cartão', () => {
     assert.equal(S.deals.find(d => d.id === 'd2').etapa, 'orcamento');
     assert.equal(texto('#toast'), 'Movido para Orçamento enviado');
   });
-  test('seta ← na primeira etapa não faz nada; Enter abre', async () => {
+  test('seta → na engenharia vai de Proposta enviada para Em andamento', () => {
+    $('.card[data-id=d3]').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    assert.equal(texto('#modalTitle'), 'Mover para Em andamento');
+    assert.equal($('#modal [name=proxima_acao]').value, 'Atualizar o cliente');
+  });
+  test('seta ← na primeira etapa não faz nada; Enter abre', () => {
     $('.card[data-id=d1]').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
     assert.equal($('#modal').open, false);
     $('.card[data-id=d1]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     assert.equal(texto('#modalTitle'), 'Oportunidade');
   });
-  test('soltar em "Fechado" sugere a data 3 dias antes do evento', async () => {
+  test('soltar em "Em andamento" sugere a data 3 dias antes da data marcada', async () => {
     const ev = new Event('drop', { bubbles: true, cancelable: true });
     ev.dataTransfer = { getData: () => 'd3' };
-    col('fechado').dispatchEvent(ev);
-    assert.equal(texto('#modalTitle'), 'Mover para Fechado');
+    col('fechado', 'consultoria').dispatchEvent(ev);
+    assert.equal(texto('#modalTitle'), 'Mover para Em andamento');
     assert.equal($('#modal [name=data_proxima_acao]').value, '2026-10-29');
     preencher($('#modal'), { proxima_acao: 'Mandar contrato' });
     await enviarModal();
     const d = S.deals.find(d => d.id === 'd3');
     assert.deepEqual([d.etapa, d.proxima_acao], ['fechado', 'Mandar contrato']);
+  });
+  test('soltar na faixa de outro negócio não abre nada', () => {
+    const ev = new Event('drop', { bubbles: true, cancelable: true });
+    ev.dataTransfer = { getData: () => 'd3' };
+    col('fechado').dispatchEvent(ev);
+    assert.equal($('#modal').open, false);
   });
   test('soltar na mesma coluna não abre nada', () => {
     const ev = new Event('drop', { bubbles: true, cancelable: true });

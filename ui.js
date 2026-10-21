@@ -1,4 +1,4 @@
-import { h, today, addDays, ETAPAS, AREAS, ABERTAS, etapa, hhmm, localDate, waLink, msgDeal } from './util.js';
+import { h, today, addDays, fluxo, AREAS, ABERTAS, etapa, hhmm, localDate, waLink, msgDeal } from './util.js';
 import { S, save, del, ensureContact, byId, contactName, contatoPorNome, prop } from './store.js';
 import { checklistHtml, bindChecklist, lerChecklist, alternar, ETAPAS_HOSP } from './hospedagem.js';
 import * as db from './db.js';
@@ -55,12 +55,18 @@ export function modal(title, body, { submit = 'Salvar', onSubmit, extra = '' } =
 export const closeModal = () => dlg().close();
 
 const opt = (v, label, sel) => `<option value="${h(v)}" ${v === sel ? 'selected' : ''}>${h(label)}</option>`;
+// Etapas do negócio; mantém a atual mesmo que o negócio não a tenha (dado antigo)
+const etapaOpts = (negocio, sel) => {
+  const l = fluxo(negocio);
+  if (sel && !l.some(x => x.id === sel)) l.unshift(etapa(sel));
+  return l.map(x => opt(x.id, x.nome, sel)).join('');
+};
 const contactsList = () => `<datalist id="dlContatos">${S.contacts.map(c => `<option value="${h(c.nome)}">`).join('')}</datalist>`;
 
 // ---------- Oportunidade (deal) ----------
 export function dealForm(d = {}, preset = {}) {
   d = { negocio: 'dj', etapa: 'lead', ...preset, ...d };
-  const e = etapa(d.etapa);
+  const e = etapa(d.etapa, d.negocio);
   const prox = d.proxima_acao ?? e.sug ?? '';
   const proxData = d.data_proxima_acao ?? (e.dias ? addDays(today(), e.dias) : '');
   const quotes = d.id ? S.quotes.filter(q => q.deal_id === d.id) : [];
@@ -70,7 +76,7 @@ export function dealForm(d = {}, preset = {}) {
       <label class="span2">Cliente / contratante<input name="contato" list="dlContatos" value="${h(contactName(d.contato_id) || d._contato)}" required autofocus></label>
       <label>Telefone / WhatsApp<input name="telefone" type="tel" inputmode="tel" value="${h(byId('contacts', d.contato_id)?.telefone)}" placeholder="(84) 99999-0000"></label>
       <label>Negócio<select name="negocio">${['dj', 'consultoria', 'flores', 'aluguel'].map(n => opt(n, AREAS[n].nome, d.negocio)).join('')}</select></label>
-      <label>Etapa<select name="etapa" id="fEtapa">${ETAPAS.map(x => opt(x.id, x.nome, d.etapa)).join('')}</select></label>
+      <label>Etapa<select name="etapa" id="fEtapa">${etapaOpts(d.negocio, d.etapa)}</select></label>
       <label>Valor (R$)<input name="valor" type="number" step="0.01" value="${h(d.valor)}"></label>
       <label>Data do evento<input name="data_evento" type="date" value="${h(d.data_evento)}"></label>
       <label>Início<input name="hora_inicio" type="time" value="${h(d.hora_inicio?.slice(0, 5))}"></label>
@@ -116,8 +122,19 @@ export function dealForm(d = {}, preset = {}) {
     m.querySelector('#fNext').hidden = !ABERTAS.includes(et);
     m.querySelector('#fPerda').hidden = et !== 'perdido' || d.etapa === 'perdido';
   };
+  const neg = () => m.querySelector('[name=negocio]').value;
+  // Trocar o negócio troca a lista de etapas; a etapa atual fica se existir no novo negócio
+  m.querySelector('[name=negocio]').onchange = () => {
+    const sel = m.querySelector('#fEtapa');
+    const antes = sel.value;
+    const atual = fluxo(neg()).some(x => x.id === antes) ? antes : 'lead';
+    sel.innerHTML = etapaOpts(neg(), atual);
+    sel.value = atual;
+    // Nova oportunidade: a sugestão de próxima ação acompanha o negócio; existente só muda se a etapa mudou
+    if (!d.id || atual !== antes) sel.dispatchEvent(new Event('change'));
+  };
   m.querySelector('#fEtapa').onchange = ev => {
-    const e2 = etapa(ev.target.value);
+    const e2 = etapa(ev.target.value, neg());
     if (e2.sug) {
       m.querySelector('[name=proxima_acao]').value = e2.sug;
       m.querySelector('[name=data_proxima_acao]').value = addDays(today(), e2.dias);
@@ -164,7 +181,7 @@ export function dealDone(d, { titulo = 'Ação feita. E agora?' } = {}) {
   modal(titulo, `
     <p class="muted">${h(d.titulo)}: “${h(d.proxima_acao)}”</p>
     <div class="grid2">
-      <label>Etapa<select name="etapa" id="fEtapa">${ETAPAS.map(x => opt(x.id, x.nome, d.etapa)).join('')}</select></label>
+      <label>Etapa<select name="etapa" id="fEtapa">${etapaOpts(d.negocio, d.etapa)}</select></label>
       <label>Quando<input name="data_proxima_acao" type="date" value="${addDays(today(), 3)}"></label>
       ${datasRapidas()}
       <label class="span2" id="fNextLbl">Próxima ação<input name="proxima_acao" value="" placeholder="ex.: Cobrar resposta" autofocus></label>
@@ -187,7 +204,7 @@ export function dealDone(d, { titulo = 'Ação feita. E agora?' } = {}) {
   const m = dlg();
   ligarDatas(m);
   m.querySelector('#fEtapa').onchange = ev => {
-    const e2 = etapa(ev.target.value);
+    const e2 = etapa(ev.target.value, d.negocio);
     m.querySelector('#fNextLbl').hidden = !e2.sug;
     m.querySelector('#fPerda').hidden = ev.target.value !== 'perdido';
     if (e2.sug) { m.querySelector('[name=proxima_acao]').value = e2.sug; m.querySelector('[name=data_proxima_acao]').value = addDays(today(), e2.dias); }

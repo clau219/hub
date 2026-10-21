@@ -76,6 +76,25 @@ describe('formatação e áreas', () => {
     assert.equal(U.etapa('orcamento').sug, 'Follow-up do orçamento');
     assert.deepEqual(U.etapa('xyz'), { nome: 'xyz' });
   });
+  test('etapas por negócio: mesmos ids, nomes e sugestões de cada um', () => {
+    assert.deepEqual(U.abertasDe('consultoria'), ['lead', 'orcamento', 'fechado', 'realizado']);
+    assert.deepEqual(U.abertasDe('flores'), U.abertasDe('consultoria'));
+    assert.deepEqual(U.abertasDe('aluguel'), ['lead', 'orcamento', 'fechado']);
+    assert.deepEqual(U.abertasDe('alugueis'), U.abertasDe('aluguel'));
+    assert.deepEqual(U.abertasDe(undefined), U.abertasDe('dj'));
+    assert.deepEqual(U.fluxo('aluguel').map(e => e.nome), ['Contato', 'Orçamento enviado', 'Reservado', 'Pago', 'Perdido']);
+    assert.equal(U.etapa('fechado', 'consultoria').nome, 'Em andamento');
+    assert.equal(U.etapa('realizado', 'consultoria').nome, 'Entregue');
+    assert.equal(U.etapa('fechado', 'aluguel').sug, 'Receber o saldo');
+    assert.equal(U.etapa('fechado', 'dj').nome, 'Fechado');
+    // Etapa que o negócio não tem cai no nome do DJ
+    assert.equal(U.etapa('negociacao', 'aluguel').nome, 'Negociando');
+  });
+  test('"Negociando" antigo fora do DJ aparece como orçamento', () => {
+    assert.equal(U.etapaNoFluxo({ negocio: 'consultoria', etapa: 'negociacao' }), 'orcamento');
+    assert.equal(U.etapaNoFluxo({ negocio: 'dj', etapa: 'negociacao' }), 'negociacao');
+    assert.equal(U.etapaNoFluxo({ negocio: 'aluguel', etapa: 'fechado' }), 'fechado');
+  });
 });
 
 describe('WhatsApp', () => {
@@ -102,6 +121,15 @@ describe('WhatsApp', () => {
     const eng = U.msgDeal({ etapa: 'orcamento', negocio: 'consultoria' }, '');
     assert.match(eng, /^Oi! Tudo bem\? Conseguiu ver a proposta\?/);
     assert.match(U.msgDeal({ etapa: 'lead', negocio: 'consultoria' }), /Aqui é o Claudio\. Me conta/);
+    assert.match(U.msgDeal({ etapa: 'fechado', negocio: 'consultoria' }), /andamento do serviço/);
+    assert.match(U.msgDeal({ etapa: 'realizado', negocio: 'flores' }), /Serviço entregue!.*PIX/);
+  });
+  test('msgDeal de aluguel: datas e pessoas, valor, reserva garantida com PIX', () => {
+    const al = e => U.msgDeal({ etapa: e, negocio: 'aluguel', data_evento: '2026-12-28' }, 'Pedro Alves');
+    assert.match(al('lead'), /^Oi, Pedro! .*datas e quantas pessoas/);
+    assert.match(al('orcamento'), /Conseguiu ver o valor\?/);
+    assert.match(al('fechado'), /reserva está garantida para 28 dez.*PIX para o saldo/);
+    assert.equal(al('pago'), 'Oi, Pedro!');
   });
 });
 

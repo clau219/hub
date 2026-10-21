@@ -75,8 +75,9 @@ describe('Hoje: conteúdo', () => {
     assert.match(texto(cx), /Ideia solta/);
     assert.doesNotMatch(texto(cx), /Pagar IPTU/);
   });
-  test('resumo do pipeline com contagem e valor por etapa', () => {
-    assert.deepEqual($$('.pipe-sum div').map(texto).map(s => s.replace(/ /g, ' ')), ['Contatos1R$ 800', 'Orçamentos enviados1R$ 2.000', 'Fechados1R$ 5.000']);
+  test('resumo do pipeline por negócio, com as etapas no nome de cada um', () => {
+    assert.deepEqual($$('.pipe-sum div').map(texto).map(s => s.replace(/\s+/g, ' ')),
+      ['DJ1 orçamento enviado · 1 fechado 2R$ 7.000', 'Engenharia1 contato 1R$ 800']);
   });
   test('hábitos com sequência de dias', () => {
     assert.match(texto('.habits h2'), /0 de 1 hoje/);
