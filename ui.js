@@ -40,13 +40,24 @@ export function modal(title, body, { submit = 'Salvar', onSubmit, extra = '' } =
     <button class="btn" value="cancel" formnovalidate>Cancelar</button>
     ${onSubmit ? `<button class="btn primary" value="ok">${h(submit)}</button>` : ''}`;
   const form = d.querySelector('#modalForm');
-  form.onsubmit = async ev => {
-    if (ev.submitter?.value !== 'ok') return;
-    ev.preventDefault();
+  const enviar = async () => {
     const data = Object.fromEntries(new FormData(form));
     form.querySelectorAll('input[type=checkbox]').forEach(c => (data[c.name] = c.checked));
     try { await onSubmit(data); d.close(); }
     catch (e) { console.error(e); d.querySelector('#modalErr').textContent = e.message || 'Não foi possível salvar.'; }
+  };
+  form.onsubmit = ev => {
+    if (ev.submitter?.value !== 'ok') return;
+    ev.preventDefault();
+    enviar();
+  };
+  // Enter num campo salva. Sem isto o navegador envia pelo primeiro botão do form, o × do topo, e a janela fecha sem salvar.
+  // Campo com sugestões (datalist) não salva: o Enter ali é para escolher a sugestão.
+  form.onkeydown = ev => {
+    if (ev.key !== 'Enter' || ev.defaultPrevented || ev.isComposing || !ev.target.matches('input, select')) return;
+    ev.preventDefault();
+    if (!onSubmit || ev.target.hasAttribute('list')) return;
+    if (form.reportValidity()) enviar();
   };
   d.showModal();
   setTimeout(() => d.querySelector('#modalBody [autofocus], #modalBody input, #modalBody select')?.focus(), 30);

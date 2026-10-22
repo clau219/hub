@@ -1,7 +1,7 @@
 // Pagamentos da oportunidade: sinal, parcelas e saldo (deals.pagamentos), no formulário, no cartão do Pipeline e no "Escapando".
 import { test, describe, before, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { hub, $, $$, texto, preencher, enviarModal, clicar } from '../helpers/dom.js';
+import { hub, $, $$, texto, preencher, enviarModal, clicar, esperar } from '../helpers/dom.js';
 import { abrirHub, trocarDados } from '../helpers/tela.js';
 
 let ui, S, P, store, util;
@@ -93,5 +93,44 @@ describe('cartão e Escapando', () => {
     await trocarDados(dados({ etapa: 'realizado', data_evento: '2026-10-10', proxima_acao: 'Cobrar', data_proxima_acao: '2026-10-25', pagamentos: [{ data: '2026-10-01', valor: 450 }] }));
     const s = store.atencao().find(x => x.motivo === 'saldo em aberto');
     assert.match(nb(s.title), /saldo de R\$ 1.050 em aberto/);
+  });
+});
+
+describe('Enter', () => {
+  const enter = el => el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  test('Enter num campo salva em vez de fechar a janela sem salvar', async () => {
+    await trocarDados(dados({ valor: '' })); // happy-dom marca 1500 com step 0.01 como inválido; o Chrome não
+    ui.dealForm(S.deals[0]);
+    m().querySelector('[name=local]').value = 'Barco, Pipa';
+    enter(m().querySelector('[name=local]'));
+    await esperar(10);
+    assert.equal(m().open, false, texto('#modalErr'));
+    assert.equal(S.deals[0].local, 'Barco, Pipa');
+  });
+  test('Enter no valor do pagamento registra o pagamento e a janela continua aberta', async () => {
+    await trocarDados(dados({ valor: '' }));
+    ui.dealForm(S.deals[0]);
+    m().querySelector('#pgValor').value = '450';
+    enter(m().querySelector('#pgValor'));
+    await esperar(10);
+    assert.equal(m().open, true);
+    assert.equal($$('#pgLista li').length, 1);
+    assert.equal(S.deals[0].pagamentos, undefined);
+  });
+  test('Enter no cliente (com sugestões) não salva nem fecha', async () => {
+    await trocarDados(dados({ valor: '' }));
+    ui.dealForm(S.deals[0]);
+    enter(m().querySelector('[name=contato]'));
+    await esperar(10);
+    assert.equal(m().open, true);
+  });
+  test('erro de validação no Enter aparece e a janela fica aberta', async () => {
+    await trocarDados(dados({ valor: '' }));
+    ui.dealForm(S.deals[0]);
+    m().querySelector('[name=proxima_acao]').value = ' ';
+    enter(m().querySelector('[name=local]'));
+    await esperar(10);
+    assert.equal(m().open, true);
+    assert.match(texto('#modalErr'), /próximo passo/);
   });
 });
