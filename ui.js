@@ -1,4 +1,4 @@
-import { h, today, addDays, fluxo, AREAS, ABERTAS, etapa, hhmm, localDate, waLink, msgDeal } from './util.js';
+import { h, today, addDays, fluxo, AREAS, ABERTAS, etapa, hhmm, localDate, waLink, msgDeal, brl, fmtDate, FORMAS_PGTO, recebido, saldoDeal } from './util.js';
 import { S, save, del, ensureContact, byId, contactName, contatoPorNome, prop } from './store.js';
 import { checklistHtml, bindChecklist, lerChecklist, alternar, ETAPAS_HOSP } from './hospedagem.js';
 import * as db from './db.js';
@@ -83,6 +83,18 @@ export function dealForm(d = {}, preset = {}) {
       <label>Fim<input name="hora_fim" type="time" value="${h(d.hora_fim?.slice(0, 5))}"></label>
       <label class="span2">Local<input name="local" value="${h(d.local)}"></label>
     </div>
+    <fieldset class="pgto" id="fPgto">
+      <legend>Pagamentos</legend>
+      <div id="pgResumo"></div>
+      <ul id="pgLista" class="pg-lista"></ul>
+      <div class="pg-add">
+        <input id="pgData" type="date" value="${today()}" aria-label="Data do pagamento">
+        <input id="pgValor" type="number" step="0.01" min="0" placeholder="Valor recebido" aria-label="Valor recebido">
+        <select id="pgForma" aria-label="Forma de pagamento">${FORMAS_PGTO.map(x => opt(x, x, 'Pix')).join('')}</select>
+        <button type="button" class="btn" id="pgAdd">Registrar</button>
+      </div>
+      <div class="quick-dates"><button type="button" class="chip" data-pct="30">Sinal 30%</button><button type="button" class="chip" data-pct="50">Sinal 50%</button><button type="button" class="chip" data-pct="saldo">Saldo</button></div>
+    </fieldset>
     <fieldset class="next" id="fNext">
       <legend>Próxima ação</legend>
       <div class="grid2">
@@ -98,6 +110,14 @@ export function dealForm(d = {}, preset = {}) {
   `, {
     extra: d.id ? `${dealWa(d) ? `<a class="btn wa" id="waDeal" href="${h(dealWa(d))}" target="_blank" rel="noopener">WhatsApp</a>` : ''}<button type="button" class="btn danger" id="delDeal">Excluir</button>` : '',
     onSubmit: async f => {
+      // Valor digitado e não registrado conta como pagamento: é o que se esquece de clicar
+      if (+m.querySelector('#pgValor').value > 0) addPg();
+      const total = { valor: f.valor, pagamentos: pgs };
+      const quitou = +f.valor > 0 && saldoDeal(total) === 0;
+      if (f.etapa === 'pago' && +f.valor > 0 && !quitou) {
+        pgs.push({ data: today(), valor: saldoDeal(total), forma: pgs.at(-1)?.forma || 'Pix' });
+        toast(`Saldo de ${brl(saldoDeal(total))} registrado hoje`);
+      } else if (f.etapa === 'realizado' && quitou) f.etapa = 'pago';
       const aberta = ABERTAS.includes(f.etapa);
       if (aberta && (!f.proxima_acao?.trim() || !f.data_proxima_acao))
         throw new Error('Defina a próxima ação e a data. Nada fica aberto sem um próximo passo.');
@@ -110,17 +130,51 @@ export function dealForm(d = {}, preset = {}) {
       const contato_id = await ensureContact(f.contato, f.negocio === 'dj' ? 'contratante' : 'cliente', f.telefone);
       const titulo = d.titulo || `${AREAS[f.negocio].nome} — ${f.contato}`;
       const row = { titulo, negocio: f.negocio, etapa: f.etapa, contato_id, valor: f.valor, data_evento: f.data_evento,
-        hora_inicio: f.hora_inicio, hora_fim: f.hora_fim, local: f.local, notas: f.notas,
+        hora_inicio: f.hora_inicio, hora_fim: f.hora_fim, local: f.local, notas: f.notas, pagamentos: pgs,
         proxima_acao: aberta ? f.proxima_acao.trim() : null, data_proxima_acao: aberta ? f.data_proxima_acao : null };
       await save('deals', row, d.id);
       toast(d.id ? 'Oportunidade salva' : 'Oportunidade criada');
     },
   });
   const m = dlg();
+  // Pagamentos: lista editada aqui e gravada só no Salvar
+  const pgs = (d.pagamentos || []).map(p => ({ ...p }));
+  const valorEl = m.querySelector('[name=valor]'), pgValor = m.querySelector('#pgValor');
+  const desenharPg = () => {
+    const total = { valor: valorEl.value, pagamentos: pgs }, rec = recebido(total), falta = saldoDeal(total), v = +valorEl.value || 0;
+    const pct = v ? Math.min(100, Math.round(rec / v * 100)) : 0;
+    m.querySelector('#pgResumo').innerHTML = !v && !rec ? '<p class="muted pg-dica">Preencha o valor para acompanhar sinal e saldo.</p>'
+      : `<div class="pg-resumo"><span>Recebido <b>${brl(rec)}</b>${v ? ` de ${brl(v)} (${pct}%)` : ''}</span>${v ? (falta ? `<span class="pg-falta">Falta <b>${brl(falta)}</b></span>` : '<span class="pg-ok">Quitado</span>') : ''}</div>
+        ${v ? `<div class="pg-barra"><i style="width:${pct}%"></i></div>` : ''}`;
+    m.querySelector('#pgLista').innerHTML = pgs.map((p, i) => `<li><span>${fmtDate(p.data)}</span><span>${h(p.forma || '')}</span><b>${brl(p.valor)}</b><button type="button" class="pg-del" data-i="${i}" aria-label="Remover pagamento">×</button></li>`).join('');
+  };
+  const addPg = () => {
+    const valor = Math.round(+pgValor.value * 100) / 100;
+    if (!(valor > 0)) return pgValor.focus();
+    pgs.push({ data: m.querySelector('#pgData').value || today(), valor, forma: m.querySelector('#pgForma').value });
+    pgs.sort((a, b) => a.data.localeCompare(b.data));
+    pgValor.value = '';
+    desenharPg();
+  };
+  m.querySelector('#pgAdd').onclick = addPg;
+  // Enter no valor registra o pagamento em vez de salvar a oportunidade
+  pgValor.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); addPg(); } });
+  m.querySelector('#pgLista').onclick = ev => { const b = ev.target.closest('.pg-del'); if (b) { pgs.splice(+b.dataset.i, 1); desenharPg(); } };
+  m.querySelectorAll('[data-pct]').forEach(b => b.onclick = () => {
+    const v = +valorEl.value || 0;
+    if (!v) { toast('Preencha o valor total primeiro'); return valorEl.focus(); }
+    const total = { valor: v, pagamentos: pgs };
+    pgValor.value = b.dataset.pct === 'saldo' ? saldoDeal(total) : Math.round(v * b.dataset.pct) / 100;
+    pgValor.focus();
+  });
+  valorEl.addEventListener('input', desenharPg);
+  desenharPg();
   const sync = () => {
     const et = m.querySelector('#fEtapa').value;
     m.querySelector('#fNext').hidden = !ABERTAS.includes(et);
     m.querySelector('#fPerda').hidden = et !== 'perdido' || d.etapa === 'perdido';
+    // Pagamento entra em cena a partir da negociação (sinal); antes só aparece se já houver algum
+    m.querySelector('#fPgto').hidden = !pgs.length && !['negociacao', 'fechado', 'realizado', 'pago'].includes(et);
   };
   const neg = () => m.querySelector('[name=negocio]').value;
   // Trocar o negócio troca a lista de etapas; a etapa atual fica se existir no novo negócio

@@ -98,6 +98,12 @@ export const etapa = (id, negocio) => fluxo(negocio).find(e => e.id === id) || E
 // Todas as etapas que contam como aberta em algum negócio
 export const ABERTAS = ['lead', 'orcamento', 'negociacao', 'fechado', 'realizado'];
 
+// Pagamentos de uma oportunidade (deals.pagamentos: [{data, valor, forma}]): sinal, parcelas e saldo
+export const FORMAS_PGTO = ['Pix', 'Dinheiro', 'Transferência', 'Cartão'];
+const centavos = v => Math.round(v * 100) / 100;
+export const recebido = d => centavos((d.pagamentos || []).reduce((s, p) => s + (+p.valor || 0), 0));
+export const saldoDeal = d => Math.max(0, centavos((+d.valor || 0) - recebido(d)));
+
 // ---------- WhatsApp ----------
 // Link wa.me com mensagem pronta. Aceita "(84) 99999-0000", "+55 84 9...", "084 9...".
 export function waLink(tel, txt = '') {

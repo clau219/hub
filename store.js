@@ -1,6 +1,6 @@
 // Estado em memória: carrega tudo (volume pessoal é pequeno) e recarrega após mudanças.
 import * as db from './db.js';
-import { today, addDays, diffDays, localDate, hhmm, ABERTAS, abertasDe, etapa } from './util.js';
+import { today, addDays, diffDays, localDate, hhmm, ABERTAS, abertasDe, etapa, brl, recebido, saldoDeal } from './util.js';
 import { CONFIG } from './config.js';
 import { acompanhada, pendentes, prazo } from './hospedagem.js';
 
@@ -154,8 +154,13 @@ export function atencao() {
       // Depois de "Fechado/Em andamento" vem a etapa de cobrar; no aluguel (Reservado) é marcar como pago
       const seguinte = abertasDe(d.negocio)[abertasDe(d.negocio).indexOf('fechado') + 1];
       const quando = d.negocio === 'aluguel' ? 'o check-in' : d.negocio === 'dj' ? 'o evento' : 'a data';
-      out.push({ kind: 'acao', motivo: 'evento passou', date: d.data_evento, area: d.negocio, title: `${d.titulo}: ${quando} já passou`, sub: seguinte ? `Mover para ${etapa(seguinte, d.negocio).nome} e cobrar` : 'Receber o saldo e marcar como pago', ref: d });
+      const falta = saldoDeal(d) ? `: falta ${brl(saldoDeal(d))}` : '';
+      out.push({ kind: 'acao', motivo: 'evento passou', date: d.data_evento, area: d.negocio, title: `${d.titulo}: ${quando} já passou`, sub: (seguinte ? `Mover para ${etapa(seguinte, d.negocio).nome} e cobrar` : 'Receber o saldo e marcar como pago') + falta, ref: d });
     }
+    // Realizado com saldo em aberto há mais de 3 dias: dinheiro escapando
+    if (d.etapa === 'realizado' && d.data_evento && saldoDeal(d) && diffDays(d.data_evento, hoje) > 3 && d.data_proxima_acao >= hoje)
+      out.push({ kind: 'acao', motivo: 'saldo em aberto', date: d.data_evento, area: d.negocio, title: `${d.titulo}: saldo de ${brl(saldoDeal(d))} em aberto`,
+        sub: `Recebido ${brl(recebido(d))} de ${brl(d.valor)}`, ref: d });
   }
   for (const t of S.tasks) if (!t.feito && t.prazo && t.prazo < hoje)
     out.push({ kind: 'tarefa', motivo: 'atrasada', date: t.prazo, area: t.area, title: t.titulo, ref: t });

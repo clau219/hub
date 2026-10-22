@@ -1,5 +1,5 @@
 import { S, contactName, save } from './store.js';
-import { h, FLUXOS, NEGOCIOS_PIPE, abertasDe, etapaNoFluxo, ABERTAS, AREAS, etapa, brl, relDate, today, fmtDate, addDays } from './util.js';
+import { h, FLUXOS, NEGOCIOS_PIPE, abertasDe, etapaNoFluxo, ABERTAS, AREAS, etapa, brl, relDate, today, fmtDate, addDays, recebido, saldoDeal } from './util.js';
 import { dealForm, modal, toast, dealWa, aposWhats } from './ui.js';
 
 let filtro = 'todos';
@@ -29,12 +29,21 @@ function lista(deals) {
     <div class="drop">${l.map(d => card(d, { comEtapa: true, comNegocio: filtro === 'todos' })).join('')}</div></section>`).join('') || '<p class="empty">Nenhuma oportunidade aberta.</p>';
 }
 
+// Fechado em diante: quanto já entrou e quanto falta
+function pgCard(d) {
+  if (!+d.valor || !(d.pagamentos?.length || ['fechado', 'realizado'].includes(d.etapa))) return '';
+  const rec = recebido(d), falta = saldoDeal(d);
+  if (!falta) return '<p class="card-pg ok">Quitado</p>';
+  return `<p class="card-pg">${rec ? `Recebido ${brl(rec)} · ` : '<span class="pg-sem">Sem sinal</span> · '}falta <b>${brl(falta)}</b></p>`;
+}
+
 function card(d, { comEtapa = false, comNegocio = false } = {}) {
   const late = d.data_proxima_acao && d.data_proxima_acao < today();
   const isToday = d.data_proxima_acao === today();
   return `<article class="card" draggable="true" data-id="${d.id}" tabindex="0" style="--c:${AREAS[d.negocio]?.cor}">
     <header><b>${h(contactName(d.contato_id) || d.titulo)}</b>${d.valor ? `<span>${brl(d.valor)}</span>` : ''}</header>
     ${d.data_evento || d.local ? `<p class="card-ev">${d.data_evento ? fmtDate(d.data_evento) : ''}${d.data_evento && d.local ? ', ' : ''}${h((d.local || '').split(',')[0])}</p>` : ''}
+    ${pgCard(d)}
     ${d.proxima_acao ? `<p class="card-next ${late ? 'late' : isToday ? 'today' : ''}"><span>${relDate(d.data_proxima_acao)}</span> ${h(d.proxima_acao)}</p>` : ''}
     <footer>${comEtapa ? `<span class="tag" style="--c:var(--ink)">${etapa(d.etapa, d.negocio).nome}</span>` : ''}${comNegocio ? `<span class="tag" style="--c:${AREAS[d.negocio]?.cor}">${AREAS[d.negocio]?.nome}</span>` : ''}${dealWa(d) ? `<a class="mini wa" href="${h(dealWa(d))}" target="_blank" rel="noopener" data-wa="${d.id}" draggable="false">WhatsApp</a>` : ''}</footer>
   </article>`;
