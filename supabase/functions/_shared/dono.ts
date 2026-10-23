@@ -52,9 +52,10 @@ export async function processarDono(sb: SB, m: MsgDono, { teste = false, enviar 
     r = { acao: 'midia', texto: m.tipo === 'audio' ? 'Áudio eu ainda não consigo ouvir 🙏 Me escreve que eu anoto.' : 'Por enquanto eu só leio texto. Foto de comprovante e boleto vêm na próxima fase.' };
   } else {
     let x: Comando;
+    let falha = '';
     try { x = await entender(sb, historico, m.texto); }
-    catch (err) { console.error('dono IA', err); x = null as any; }
-    r = x ? await executar(sb, x) : { acao: 'erro', texto: 'Não consegui falar com a IA agora. Tenta de novo daqui a pouco, ou registra pelo Hub.' };
+    catch (err) { console.error('dono IA', err); x = null as any; falha = String((err as Error)?.message || err).slice(0, 160); }
+    r = x ? await executar(sb, x) : { acao: 'erro', texto: `Não consegui falar com a IA agora. Tenta de novo daqui a pouco, ou registra pelo Hub.${falha ? `\n(${falha})` : ''}` };
   }
   const enviado = teste ? { wamid: `teste-dono-${crypto.randomUUID()}` } : await enviar(m.wa_id, r.texto);
   if (enviado) await sb.from('dono_msgs').insert({ wamid: enviado.wamid, direcao: 'out', texto: r.texto });
@@ -68,29 +69,41 @@ async function historicoDono(sb: SB) {
 }
 
 // ---------- IA: a frase vira um comando ----------
+// Sem campos nullable: a API de saída estruturada aceita no máximo 16 campos com tipo união (nullable conta), e
+// com mais ela recusa a chamada. A IA usa "" / 0 / "nenhum" para "não disse" e normalizar() devolve null.
+const ACOES = ['criar_oportunidade', 'a_receber', 'registrar_pagamento', 'lancar_gasto', 'criar_tarefa', 'concluir_tarefa', 'consultar', 'desfazer', 'corrigir', 'conversa'] as const;
 const ComandoSchema = z.object({
-  acao: z.enum(['criar_oportunidade', 'registrar_pagamento', 'lancar_gasto', 'criar_tarefa', 'concluir_tarefa', 'consultar', 'desfazer', 'corrigir', 'conversa']),
-  negocio: z.enum(['dj', 'aluguel', 'consultoria', 'argila']).nullable(),
-  cliente: z.string().nullable(),
-  valor: z.number().nullable(),
-  recebido: z.number().nullable(),
-  data: z.string().nullable(),
-  hora: z.string().nullable(),
-  local: z.string().nullable(),
-  titulo: z.string().nullable(),
-  etapa: z.enum(['lead', 'orcamento', 'fechado']).nullable(),
-  forma: z.enum(['Pix', 'Dinheiro', 'Transferência', 'Cartão']).nullable(),
-  categoria: z.string().nullable(),
-  casa: z.enum(['QS39', 'QS40', 'QS50']).nullable(),
-  area: z.enum(['inbox', 'dj', 'alugueis', 'consultoria', 'argila', 'casa', 'pessoal']).nullable(),
-  prioridade: z.number().int().nullable(),
-  consulta: z.enum(['hoje', 'amanha', 'semana', 'quem_deve', 'pendencias', 'casas_livres']).nullable(),
-  checkin: z.string().nullable(),
-  checkout: z.string().nullable(),
-  pessoas: z.number().int().nullable(),
-  resposta: z.string().nullable(),
+  acao: z.enum(ACOES),
+  negocio: z.enum(['nenhum', 'dj', 'aluguel', 'consultoria', 'argila']),
+  cliente: z.string(),
+  valor: z.number(),
+  recebido: z.number(),
+  data: z.string(),
+  hora: z.string(),
+  local: z.string(),
+  titulo: z.string(),
+  etapa: z.enum(['nenhum', 'lead', 'orcamento', 'fechado']),
+  forma: z.enum(['nenhum', 'Pix', 'Dinheiro', 'Transferência', 'Cartão']),
+  categoria: z.string(),
+  casa: z.enum(['nenhum', 'QS39', 'QS40', 'QS50']),
+  area: z.enum(['nenhum', 'inbox', 'dj', 'alugueis', 'consultoria', 'argila', 'casa', 'pessoal']),
+  prioridade: z.number().int(),
+  consulta: z.enum(['nenhum', 'hoje', 'amanha', 'semana', 'quem_deve', 'pendencias', 'casas_livres']),
+  checkin: z.string(),
+  checkout: z.string(),
+  pessoas: z.number().int(),
+  resposta: z.string(),
 });
-export type Comando = z.infer<typeof ComandoSchema>;
+type Bruto = z.infer<typeof ComandoSchema>;
+export type Comando = { acao: Bruto['acao']; negocio: 'dj' | 'aluguel' | 'consultoria' | 'argila' | null; cliente: string | null; valor: number | null;
+  recebido: number | null; data: string | null; hora: string | null; local: string | null; titulo: string | null; etapa: 'lead' | 'orcamento' | 'fechado' | null;
+  forma: 'Pix' | 'Dinheiro' | 'Transferência' | 'Cartão' | null; categoria: string | null; casa: 'QS39' | 'QS40' | 'QS50' | null;
+  area: 'inbox' | 'dj' | 'alugueis' | 'consultoria' | 'argila' | 'casa' | 'pessoal' | null; prioridade: number | null;
+  consulta: 'hoje' | 'amanha' | 'semana' | 'quem_deve' | 'pendencias' | 'casas_livres' | null; checkin: string | null; checkout: string | null;
+  pessoas: number | null; resposta: string | null };
+// "" / "nenhum" / 0 (ou negativo) → null
+export const normalizar = (b: Record<string, unknown>): Comando => Object.fromEntries(Object.entries(b).map(([k, v]) =>
+  [k, k === 'acao' ? v : v === '' || v === 'nenhum' || (typeof v === 'number' && !(v > 0)) || v == null ? null : typeof v === 'string' ? v.trim() || null : v])) as Comando;
 
 async function entender(sb: SB, historico: any[], texto: string): Promise<Comando> {
   const d = hoje();
@@ -100,6 +113,7 @@ async function entender(sb: SB, historico: any[], texto: string): Promise<Comand
 
 Ações:
 - criar_oportunidade: novo negócio/cliente/evento para o Pipeline ("+dj Anabela 15/11 3500", "orçamento de engenharia pro Marcos", "fechei o casamento da Júlia dia 20/12 por 4 mil"). negocio: dj (padrão quando não diz), aluguel, consultoria (engenharia/obra), argila. cliente: o nome da pessoa. data: data do evento. valor: valor total. recebido: quanto ele JÁ recebeu (só se disser que recebeu/pagou sinal; "sinal de 50%" sem dizer que recebeu NÃO é recebido). etapa: "fechado" se diz que fechou/confirmou, "orcamento" se diz que já mandou orçamento, senão "lead". local, hora (HH:MM) se disser. titulo: detalhes que sobrarem (tipo de evento etc.), curto.
+- a_receber: alguém deve dinheiro a ele, sem dizer que pagou ("tenho a receber 1300 do Nami", "o Nami me deve 1300", "falta o Marcos me pagar 800"). cliente, valor, negocio se der para saber, data do evento/serviço se disser, titulo com o que foi (se disser).
 - registrar_pagamento: recebeu dinheiro de um cliente ("recebi 1750 da Anabela no pix", "a Júlia pagou o saldo"). cliente, valor (nulo se disse "o saldo"/"o resto"), forma, data (só se não for hoje).
 - lancar_gasto: ele gastou/pagou algo ("gastei 120 de faxina na Frida", "paguei 300 de gás", "uber 25"). valor positivo, titulo = descrição curta, categoria (uma de: ${CATS_SAI.join(', ')}), casa se for de uma casa, negocio: aluguel se for das casas, dj se for do DJ (equipamento, transporte de gig), consultoria, argila; nulo se pessoal. data só se não for hoje.
 - criar_tarefa: algo a fazer ou lembrete ("me lembra de ligar pro contador amanhã", "comprar cabo XLR"). titulo curto no infinitivo, data = prazo (nulo se não disser), hora se disser, area (dj, alugueis, consultoria, argila, casa, pessoal, ou inbox se não der para saber), prioridade 1 se disser urgente/importante, senão 2.
@@ -109,7 +123,8 @@ Ações:
 - corrigir: corrige o último registro ("o valor é 3800", "era dia 16", "foi no dinheiro", "é da Casa Azul"). Preencha SÓ os campos que mudam (valor, data, hora, forma, categoria, casa, titulo, local, cliente, etapa).
 - conversa: cumprimento, agradecimento, pedido de ajuda ou algo que não se encaixa. resposta: frase curta e simpática; se ele pediu algo que você não sabe fazer, diga isso em uma frase.
 
-Datas em AAAA-MM-DD; sem ano = próxima ocorrência a partir de hoje; "sexta" = a próxima sexta. Valores em reais como número ("3,5 mil" = 3500, "4k" = 4000). Nunca invente dado que ele não disse: deixe nulo.
+Datas em AAAA-MM-DD; sem ano = próxima ocorrência a partir de hoje; "sexta" = a próxima sexta. Valores em reais como número ("3,5 mil" = 3500, "4k" = 4000). Nunca invente dado que ele não disse.
+Campo que não se aplica ou que ele não disse: texto vazio "", número 0, ou "nenhum" nas listas ("nulo" acima quer dizer isso).
 ${ultima ? `Último registro feito por você (é o que "desfaz"/"corrigir" alteram), há ${Math.round((Date.now() - Date.parse(ultima.criado_em)) / 60e3)} min: ${ultima.resumo}` : 'Nenhum registro nas últimas 24 h ("desfaz"/"corrigir" não têm o que alterar: use conversa).'}`;
   const conversa = historico.map(m => `${m.direcao === 'in' ? 'Claudio' : 'Hub'}: ${m.texto}`).join('\n');
   const r = await new Anthropic().messages.parse({
@@ -120,7 +135,7 @@ ${ultima ? `Último registro feito por você (é o que "desfaz"/"corrigir" alter
     messages: [{ role: 'user', content: `${conversa ? `<conversa_recente>\n${conversa}\n</conversa_recente>\n` : ''}<mensagem>${texto}</mensagem>` }],
   });
   if (r.stop_reason === 'refusal' || !r.parsed_output) throw new Error(`sem comando (${r.stop_reason})`);
-  return r.parsed_output;
+  return normalizar(r.parsed_output);
 }
 
 // ---------- execução ----------
@@ -128,6 +143,7 @@ export async function executar(sb: SB, x: Comando): Promise<{ acao: string; text
   const data = isoOk(x.data) ? x.data! : null;
   switch (x.acao) {
     case 'criar_oportunidade': return criarOportunidade(sb, x, data);
+    case 'a_receber': return aReceberDe(sb, x, data);
     case 'registrar_pagamento': return registrarPagamento(sb, x, data);
     case 'lancar_gasto': return lancarGasto(sb, x, data);
     case 'criar_tarefa': return criarTarefa(sb, x, data);
@@ -174,6 +190,36 @@ async function criarOportunidade(sb: SB, x: Comando, data: string | null) {
   await registrar(sb, 'criar_oportunidade', 'deals', d.id, null, d, resumo, criado ? { contato_criado: contato.id } : null);
   if (negocio === 'dj' && etapa === 'fechado') await sincronizarAgenda(sb);
   return { acao: 'criar_oportunidade', texto: resumo + RODAPE, deal_id: d.id };
+}
+
+// "Tenho a receber 1300 do Nami": se há oportunidade aberta dele, completa o valor (ou mostra o saldo);
+// se não há, cria uma já como Realizado, com a próxima ação "Cobrar pagamento"
+async function aReceberDe(sb: SB, x: Comando, data: string | null) {
+  const nome = x.cliente?.trim();
+  if (!nome) return { acao: 'pergunta', texto: 'Quem te deve?' };
+  if (!(x.valor && x.valor > 0)) return { acao: 'pergunta', texto: `Quanto ${nome} te deve?` };
+  const achados = await dealsDoCliente(sb, nome);
+  if (achados.length > 1) return { acao: 'pergunta', texto: `Achei ${achados.length} oportunidades de ${nome}:\n${achados.slice(0, 4).map(d => `• ${d.titulo}${d.data_evento ? ` (${dm(d.data_evento)})` : ''}${d.valor ? `, falta ${moeda(saldoDe(d))}` : ''}`).join('\n')}\nAbre no Hub e ajusta a certa.` };
+  if (achados.length === 1) {
+    const d = achados[0];
+    if (d.valor) return { acao: 'a_receber', texto: `*${d.titulo}* já está no Hub: ${moeda(recebidoDe(d))} recebido de ${moeda(+d.valor)} · falta ${moeda(saldoDe(d))}.${Math.abs(saldoDe(d) - x.valor) >= 0.01 ? `\nSe o certo é faltar ${moeda(x.valor)}, ajusta o valor no Hub.` : ''}` };
+    const patch = { valor: centavos(x.valor), updated_at: new Date().toISOString() };
+    await sb.from('deals').update(patch).eq('id', d.id);
+    const resumo = `💰 A receber: ${moeda(x.valor)} de *${d.titulo}*\n• Valor preenchido na oportunidade que já existia`;
+    await registrar(sb, 'a_receber', 'deals', d.id, pick(d, Object.keys(patch)), patch, resumo);
+    return { acao: 'a_receber', texto: resumo + RODAPE, deal_id: d.id };
+  }
+  const negocio = x.negocio || 'dj';
+  const { contato, criado } = await garantirContato(sb, nome, negocio === 'dj' ? 'contratante' : 'cliente');
+  const row = { titulo: `${NEGOCIO_NOME[negocio]} — ${contato.nome}`, negocio, etapa: 'realizado', contato_id: contato.id, valor: centavos(x.valor),
+    data_evento: data, notas: x.titulo?.trim() || null, pagamentos: [], proxima_acao: 'Cobrar pagamento', data_proxima_acao: addDays(hoje(), 1) };
+  const { data: d, error } = await sb.from('deals').insert(row).select('*').single();
+  if (error || !d) return { acao: 'erro', texto: `Não consegui anotar (${error?.message || 'erro no banco'}).` };
+  const resumo = [`💰 A receber: ${moeda(x.valor)} de *${d.titulo}*`, ...(data ? [`• Evento: ${diaDm(data)}`] : []),
+    '• Etapa: Realizado · próxima ação: Cobrar pagamento (amanhã)', ...(criado ? [`• Contato novo: ${contato.nome}`] : [])].join('\n');
+  // Registrada como criação: "o valor é ..." e "desfaz" funcionam igual
+  await registrar(sb, 'criar_oportunidade', 'deals', d.id, null, d, resumo, criado ? { contato_criado: contato.id } : null);
+  return { acao: 'a_receber', texto: resumo + RODAPE, deal_id: d.id };
 }
 
 async function registrarPagamento(sb: SB, x: Comando, data: string | null) {
@@ -281,7 +327,7 @@ async function corrigir(sb: SB, x: Comando, data: string | null) {
     if (valor == null || valor === atual[campo]) return;
     patch[campo] = valor; mudou.push(`${rotulo}: ${fmt(atual[campo])} → ${fmt(valor)}`);
   };
-  if (a.acao === 'criar_oportunidade') {
+  if (a.acao === 'criar_oportunidade' || a.acao === 'a_receber') {
     muda('valor', x.valor && x.valor > 0 ? centavos(x.valor) : null, 'valor', v => v == null ? '—' : moeda(+v));
     muda('data_evento', data, 'data', v => v ? dm(v) : '—');
     muda('hora_inicio', horaOk(x.hora), 'hora', v => v ? String(v).slice(0, 5) : '—');
@@ -357,7 +403,8 @@ export async function resumoDoDia(sb: SB, quando: 'manha' | 'noite') {
   const d = hoje();
   if (quando === 'manha') {
     const blocos = await blocosDoDia(sb, d, { pendencias: true, receber: true });
-    return `☀️ ${saudacao()}! ${cap(diaDm(d))}\n\n${blocos.join('\n\n') || 'Nada marcado e nada pendente. Dia livre 🙌'}`;
+    const s = saudacao();
+    return `${s === 'Bom dia' ? '☀️' : s === 'Boa tarde' ? '🌤️' : '🌙'} ${s}! ${cap(diaDm(d))}\n\n${blocos.join('\n\n') || 'Nada marcado e nada pendente. Dia livre 🙌'}`;
   }
   const amanha = addDays(d, 1);
   const blocos = await blocosDoDia(sb, amanha, {});
@@ -385,7 +432,9 @@ async function agendaDoDia(sb: SB, dia: string) {
     const local = e.dia_inteiro ? String(e.inicio).slice(0, 10) : dataLocal(e.inicio);
     if (local !== dia) continue;
     const h = e.dia_inteiro ? '' : horaLocal(e.inicio);
-    itens.push([h || '00:00', `• ${h ? h + ' ' : ''}${e.titulo}${e.local ? ` (${e.local})` : ''}`]);
+    // "DJ Clau — Makai" no local "Makai": não repete
+    const onde = e.local && !semAcento(e.titulo).includes(semAcento(e.local)) ? ` (${e.local})` : '';
+    itens.push([h || '00:00', `• ${h ? h + ' ' : ''}${e.titulo}${onde}`]);
   }
   const { data: ts } = await sb.from('tasks').select('titulo,prioridade').eq('feito', false).eq('prazo', dia);
   if (dia !== hoje()) for (const t of ts || []) itens.push(['zz', `• Tarefa: ${t.titulo}${t.prioridade === 1 ? ' ❗' : ''}`]);
@@ -497,7 +546,7 @@ const diaDm = (iso: string) => `${SEMANA[new Date(iso + 'T12:00:00Z').getUTCDay(
 const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
 const dias = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 864e5);
 const relDia = (iso: string) => { const n = dias(hoje(), iso); return n === 0 ? 'hoje' : n === 1 ? 'amanhã' : n === -1 ? 'ontem' : diaDm(iso); };
-const atraso = (iso: string) => { const n = dias(iso, hoje()); return n > 0 ? ` (${n} ${n === 1 ? 'dia' : 'dias'} atrasada)` : ''; };
+const atraso = (iso: string) => { const n = dias(iso, hoje()); return n > 0 ? ` (atraso de ${n} ${n === 1 ? 'dia' : 'dias'})` : ''; };
 const dataLocal = (ts: string) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date(ts));
 const horaLocal = (ts: string) => new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'America/Sao_Paulo' }).format(new Date(ts));
 const saudacao = () => { const h = +new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: 'America/Sao_Paulo' }).format(new Date()); return h >= 5 && h < 12 ? 'Bom dia' : h < 18 && h >= 12 ? 'Boa tarde' : 'Boa noite'; };

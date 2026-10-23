@@ -5,15 +5,16 @@ import assert from 'node:assert/strict';
 import { carregarFuncao, pedido, comCron, definirEnv } from '../helpers/funcao.js';
 import { novoBanco, banco } from '../helpers/fake-supabase.js';
 import { simular, limparRede, chamadasPara } from '../helpers/rede.js';
+import { z } from 'zod';
 
 const ENV = { WA_AGRUPAR_S: '0', ANTHROPIC_API_KEY: 'sk-teste', ZAPI_INSTANCE: 'INST1', ZAPI_TOKEN: 'tok1', ZAPI_CLIENT_TOKEN: 'cli1', ZAPI_WEBHOOK_KEY: 'chave-z' };
 const DONO = '5584996011991';
 const ZURL = /api\.z-api\.io\/instances\/INST1\/token\/tok1\/send-text/;
 const HOJE = '2026-10-19'; // segunda (relógio parado dos testes)
 
-// Comando completo que a IA devolveria (structured output): o teste diz só o que importa
-const CMD = x => ({ acao: 'conversa', negocio: null, cliente: null, valor: null, recebido: null, data: null, hora: null, local: null, titulo: null, etapa: null,
-  forma: null, categoria: null, casa: null, area: null, prioridade: null, consulta: null, checkin: null, checkout: null, pessoas: null, resposta: null, ...x });
+// Comando completo que a IA devolveria (structured output, sem null: "" / 0 / "nenhum"): o teste diz só o que importa
+const CMD = x => ({ acao: 'conversa', negocio: 'nenhum', cliente: '', valor: 0, recebido: 0, data: '', hora: '', local: '', titulo: '', etapa: 'nenhum',
+  forma: 'nenhum', categoria: '', casa: 'nenhum', area: 'nenhum', prioridade: 0, consulta: 'nenhum', checkin: '', checkout: '', pessoas: 0, resposta: '', ...x });
 const ia = x => { globalThis.__anthropic = { chamadas: [], responder: typeof x === 'function' ? x : () => CMD(x) }; };
 
 const DADOS = (x = {}) => comCron({
@@ -93,11 +94,19 @@ describe('canal do dono: quem é o dono', () => {
     const r = await diz(undefined, null, { text: undefined, audio: { audioUrl: 'https://x/a.ogg', mimeType: 'audio/ogg' } });
     assert.match(r, /escreve/i);
   });
-  test('IA fora do ar: avisa, sem gravar nada', async () => {
+  test('IA fora do ar: avisa com o motivo, sem gravar nada', async () => {
     novoBanco(DADOS());
     ia(() => { throw new Error('529 overloaded'); });
-    assert.match(await diz('+dj Ana 15/11'), /Não consegui falar com a IA/);
+    const r = await diz('+dj Ana 15/11');
+    assert.match(r, /Não consegui falar com a IA/);
+    assert.match(r, /529 overloaded/);
     assert.equal(banco().t('deals').length, 0);
+  });
+  test('esquema da IA sem campos de tipo união (a API recusa mais de 16; nullable conta)', async () => {
+    novoBanco(DADOS());
+    await diz('oi', { acao: 'conversa' });
+    const json = JSON.stringify(z.toJSONSchema(globalThis.__anthropic.chamadas[0].output_config.format.schema));
+    assert.equal((json.match(/"anyOf"|"type":\[/g) || []).length, 0);
   });
 });
 
@@ -139,6 +148,31 @@ describe('canal do dono: oportunidades', () => {
     novoBanco(DADOS());
     assert.match(await diz('+dj 15/11', { acao: 'criar_oportunidade', data: '2026-11-15' }), /nome do cliente/);
     assert.equal(banco().t('deals').length, 0);
+  });
+});
+
+describe('canal do dono: a receber', () => {
+  test('"tenho a receber 1300 do NAMI" sem oportunidade: cria como Realizado com "Cobrar pagamento"', async () => {
+    novoBanco(DADOS());
+    const r = await diz('tenho a receber 1300 do NAMI', { acao: 'a_receber', cliente: 'NAMI', valor: 1300 });
+    const d = banco().t('deals')[0];
+    assert.deepEqual([d.titulo, d.etapa, d.valor, d.proxima_acao, d.data_proxima_acao], ['DJ — NAMI', 'realizado', 1300, 'Cobrar pagamento', '2026-10-20']);
+    assert.match(r, /A receber: R\$ 1\.300 de \*DJ — NAMI\*/);
+    await diz('o valor é 1350', { acao: 'corrigir', valor: 1350 });
+    assert.equal(banco().t('deals')[0].valor, 1350);
+    await diz('desfaz', { acao: 'desfazer' });
+    assert.equal(banco().t('deals').length, 0);
+  });
+  test('oportunidade aberta sem valor: preenche o valor; com valor: mostra o saldo, sem mexer', async () => {
+    novoBanco(DADOS({ contacts: [{ id: 'c1', nome: 'Nami' }], deals: [{ id: 'd1', titulo: 'DJ — Nami', negocio: 'dj', etapa: 'realizado', contato_id: 'c1', valor: null, pagamentos: [] }] }));
+    await diz('o nami me deve 1300', { acao: 'a_receber', cliente: 'Nami', valor: 1300 });
+    assert.equal(banco().t('deals')[0].valor, 1300);
+    assert.equal(banco().t('deals').length, 1);
+    banco().t('deals')[0].pagamentos = [{ valor: 300 }];
+    const r = await diz('tenho a receber 900 do nami', { acao: 'a_receber', cliente: 'Nami', valor: 900 });
+    assert.match(r, /já está no Hub: R\$ 300 recebido de R\$ 1\.300 · falta R\$ 1\.000/);
+    assert.match(r, /Se o certo é faltar R\$ 900/);
+    assert.equal(banco().t('deals')[0].valor, 1300);
   });
 });
 
@@ -278,8 +312,8 @@ describe('canal do dono: consultas', () => {
     assert.match(r, /Entra: Casa Frida — Ana \(até 22\/10, airbnb\)/);
     assert.match(r, /Sai: Casa Azul — Bruno/);
     assert.doesNotMatch(r, /Terracota/);
-    assert.match(r, /Aluguéis — Eduardo: Responder WhatsApp \(2 dias atrasada\)/);
-    assert.match(r, /Tarefa: Pagar IPTU ❗ \(1 dia atrasada\)/);
+    assert.match(r, /Aluguéis — Eduardo: Responder WhatsApp \(atraso de 2 dias\)/);
+    assert.match(r, /Tarefa: Pagar IPTU ❗ \(atraso de 1 dia\)/);
     assert.doesNotMatch(r, /Futuro/);
   });
   test('"quem me deve?": saldo das oportunidades fechadas', async () => {
