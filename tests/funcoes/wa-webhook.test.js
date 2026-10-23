@@ -240,6 +240,55 @@ describe('wa-webhook: respostas automáticas', () => {
     simular('https://projeto.supabase.co/functions/v1/airbnb-quote', COTACAO);
     assert.equal((await teste({ texto: '17 a 20/11, 6 pessoas' })).corpo.texto, COTACAO.mensagem);
   });
+  // A 2ª chamada à IA (com <consulta_airbnb>) escreve a resposta; a 1ª extrai os dados
+  const duasIAs = (extracao, redacao) => responderIA(p => (p.system.includes('<consulta_airbnb>') ? (typeof redacao === 'function' ? redacao(p) : redacao) : extracao));
+  const COT2 = { checkin: '2026-11-17', checkout: '2026-11-20', noites: 3, adultos: 6,
+    casas: [{ id: 'QS40', nome: 'Casa Azul', status: 'livre', total: 1650, diaria: 550 }, { id: 'QS39', nome: 'Casa Frida', status: 'ocupada', alternativa: { checkin: '2026-11-21', checkout: '2026-11-24', total: 1500, diaria: 500 } }],
+    mensagem: 'Olá! Para 17/11 a 20/11: Casa Azul livre' };
+  test('a IA escreve a resposta com os números da consulta (foco na casa, nome, próximo passo)', async () => {
+    novoBanco(DADOS());
+    duasIAs(IA({ casa: 'QS40', checkin: '2026-11-17', checkout: '2026-11-20', hospedes: 6, datas_exatas: true }),
+      { texto: 'Oi, Ana! A Casa Azul está livre de 17 a 20/11 para 6 pessoas: R$ 1.650 no total (R$ 550 por noite). Quer que eu reserve?' });
+    simular('https://projeto.supabase.co/functions/v1/airbnb-quote', COT2);
+    const { corpo } = await teste({ texto: 'tem vaga na azul de 17 a 20/11 pra 6?' });
+    assert.equal(corpo.texto, 'Oi, Ana! A Casa Azul está livre de 17 a 20/11 para 6 pessoas: R$ 1.650 no total (R$ 550 por noite). Quer que eu reserve?');
+    const p = globalThis.__anthropic.chamadas[1];
+    assert.match(p.system, /- Casa Azul: LIVRE\. Total R\$ 1\.650 \(R\$ 550 por noite\)\./);
+    assert.match(p.system, /- Casa Frida: OCUPADA nessas datas\. Alternativa livre: de 21\/11 a 24\/11, total R\$ 1\.500/);
+    assert.match(p.system, /comece com um cumprimento curto usando o nome Ana/);
+    assert.match(p.system, /Nunca invente valor/);
+  });
+  test('valor que não está na consulta: descarta o texto da IA e manda a mensagem padrão', async () => {
+    novoBanco(DADOS());
+    duasIAs(IA({ casa: 'QS40', checkin: '2026-11-17', checkout: '2026-11-20', hospedes: 6, datas_exatas: true }),
+      { texto: 'A Casa Azul sai por R$ 1.400 com desconto!' });
+    simular('https://projeto.supabase.co/functions/v1/airbnb-quote', COT2);
+    assert.equal((await teste({ texto: 'azul 17 a 20/11, 6' })).corpo.texto, 'Olá! Para 17/11 a 20/11: Casa Azul livre');
+  });
+  test('texto sem nenhum valor havendo casa livre, ou IA fora do ar: mensagem padrão', async () => {
+    for (const redacao of [{ texto: 'Tem sim! Quer reservar?' }, () => { throw new Error('overloaded'); }]) {
+      novoBanco(DADOS());
+      duasIAs(IA({ checkin: '2026-11-17', checkout: '2026-11-20', hospedes: 6, datas_exatas: true }), redacao);
+      simular('https://projeto.supabase.co/functions/v1/airbnb-quote', COT2);
+      assert.equal((await teste({ texto: '17 a 20/11, 6' })).corpo.texto, 'Olá! Para 17/11 a 20/11: Casa Azul livre');
+    }
+  });
+  test('conversa em andamento: a IA é instruída a não cumprimentar; o aviso do que foi considerado vai para ela', async () => {
+    novoBanco(DADOS({ wa_messages: [{ id: 'r', wamid: 'r', wa_id: WA, autor: 'robo', texto: 'Oi!', enviado_em: '2026-10-19T14:00:00Z' }] }));
+    duasIAs(IA({ checkin: '2026-11-17', checkout: '2026-11-20', datas_exatas: false }), { texto: 'Para o feriado, a Casa Azul fica R$ 1.650. Considerei 2 pessoas; se forem mais, me avise.' });
+    simular('https://projeto.supabase.co/functions/v1/airbnb-quote', COT2);
+    const { corpo } = await teste({ texto: 'e no feriado?' });
+    assert.equal(corpo.texto, 'Para o feriado, a Casa Azul fica R$ 1.650. Considerei 2 pessoas; se forem mais, me avise.');
+    const p = globalThis.__anthropic.chamadas[1];
+    assert.match(p.system, /NÃO cumprimente/);
+    assert.match(p.system, /Diga também, com suas palavras: "Considerei de 17\/11 a 20\/11, para 2 pessoas\./);
+  });
+  test('a extração considera pessoas e casa ditas antes na conversa', async () => {
+    novoBanco(DADOS());
+    responderIA(IA({ assunto: 'outro' }));
+    await teste({ texto: 'e no Réveillon?' });
+    assert.match(globalThis.__anthropic.chamadas[0].system, /se o cliente disse antes \("somos 6"\) e não mudou, repita/);
+  });
   test('a IA sabe que escolher casa/data depois dos valores é disponibilidade, não reserva', async () => {
     novoBanco(DADOS());
     responderIA(IA({ assunto: 'outro' }));

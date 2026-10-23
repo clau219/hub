@@ -163,7 +163,7 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
   if (x.assunto !== 'disponibilidade_preco' && !duvida && !saudacao) return { deal_id, respondeu: false, motivo: `assunto "${x.assunto}": fica para você`, extracao: x };
 
   const datas = duvida || saudacao ? null : normalizarDatas(x);
-  let texto: string, cot: any = null;
+  let texto: string, cot: any = null, redigido: string | null = null;
   if (duvida) {
     texto = x.resposta!.trim();
   } else if (saudacao && !conversando(historico)) {
@@ -180,11 +180,14 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
     cot = await cotar(datas.checkin, datas.checkout, pessoas);
     const casasOk = (cot?.casas || []).filter((c: any) => c.status !== 'erro');
     if (!cot?.mensagem || !casasOk.length) return { deal_id, respondeu: false, motivo: 'consulta ao Airbnb falhou: fica para você', extracao: x, cotacao: cot };
-    texto = cot.mensagem;
     const supos = [!x.datas_exatas || datas.suposto ? `de ${dm(datas.checkin)} a ${dm(datas.checkout)}` : '', !x.hospedes ? `${pessoas} pessoas` : ''].filter(Boolean);
-    if (supos.length) texto += `\n\nConsiderei ${supos.join(', para ')}. Se for outra data ou mais gente, me avise que eu refaço.`;
+    const aviso = supos.length ? `Considerei ${supos.join(', para ')}. Se for outra data ou mais gente, me avise que eu refaço.` : '';
+    // A IA escreve a resposta com os números da consulta (foco na casa pedida, nome do cliente, próximo passo);
+    // se ela errar algum valor ou falhar, vai a mensagem padrão da airbnb-quote
+    redigido = await redigir(historico, cot, base, aviso, e.nome).catch(err => { console.error('redigir', err); return null; });
+    texto = redigido || cot.mensagem + (aviso ? `\n\n${aviso}` : '');
   }
-  texto = saudar(texto, historico);
+  if (!redigido) texto = saudar(texto, historico);
 
   const enviado = teste ? { wamid: `teste-out-${crypto.randomUUID()}` } : await enviar(e.wa_id, texto, e.phoneId);
   if (!enviado) return { deal_id, respondeu: false, motivo: 'falha ao enviar pelo WhatsApp', extracao: x };
@@ -311,7 +314,7 @@ Classifique a ÚLTIMA mensagem do cliente, usando as anteriores como contexto:
 
 Datas: converta para AAAA-MM-DD. Datas sem ano são a próxima ocorrência a partir de hoje. "Fim de semana" = sexta a domingo (saída no domingo). Feriados citados pelo nome (Réveillon, Carnaval etc.): use as datas do próximo feriado. Se o cliente der só a entrada e o número de noites, preencha noites e deixe checkout nulo. Se não houver data clara, deixe nulo: nunca invente.
 datas_exatas: true SOMENTE se o cliente disse o dia e o mês da entrada e também o dia da saída ou o número exato de noites (ex.: "de 17 a 20 de novembro", "dia 5/12, 3 noites"), ou se respondeu confirmando ("sim", "isso", "certo") as datas que o Robô perguntou. false quando usou expressões vagas: "fim de semana", "semana que vem", feriado pelo nome (Réveillon, Carnaval, Natal, Páscoa), só o mês, "umas X noites", "entre X e Y", "por volta de". Mesmo com datas_exatas false, preencha checkin/checkout com a sua melhor interpretação (o sistema consulta com essa interpretação e avisa o cliente do que considerou).
-casa: a casa citada pelo nome, ou "qualquer". hospedes: total de pessoas (adultos + crianças), nulo se não disser.
+casa: a casa citada pelo nome na última mensagem ou antes na conversa (se o cliente não mudou de ideia), ou "qualquer". hospedes: total de pessoas (adultos + crianças) considerando a conversa toda: se o cliente disse antes ("somos 6") e não mudou, repita; nulo só se nunca disse.
 resumo: até 8 palavras para o card, ex.: "Vaga 20-23/11, 6 pessoas, Casa Azul".
 resposta: só quando assunto = "duvida": a resposta para o cliente, em português do Brasil, curta e cordial, no tom de quem já está conversando (sem "Olá"), usando SOMENTE fatos das informações das casas, sem inventar nem prometer nada além delas. Nos outros assuntos, nulo.
 
@@ -340,6 +343,68 @@ function normalizarDatas(x: Extracao) {
   if (checkout <= x.checkin! || x.checkin! < hoje()) return null;
   if (dias(x.checkin!, checkout) > 60) return null;
   return { checkin: x.checkin!, checkout, suposto };
+}
+
+// ---------- IA: escreve a resposta de disponibilidade e valores ----------
+const RedacaoSchema = z.object({ texto: z.string() });
+const moeda = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: v % 1 ? 2 : 0, maximumFractionDigits: 2 });
+
+// O que a consulta ao Airbnb devolveu, em texto, com os valores no mesmo formato que a IA deve copiar
+function fatosCotacao(cot: any) {
+  const p = (n: number, s: string, pl: string) => `${n} ${n === 1 ? s : pl}`;
+  const alt = (a: any) => a ? ` Alternativa livre: de ${dm(a.checkin)} a ${dm(a.checkout)}, total ${moeda(a.total)}${a.diaria ? ` (${moeda(a.diaria)} por noite)` : ''}.` : '';
+  const linhas = (cot.casas || []).map((c: any) => {
+    if (c.status === 'livre') return `- ${c.nome}: LIVRE. Total ${moeda(c.total)}${c.diaria ? ` (${moeda(c.diaria)} por noite)` : ''}.`;
+    if (c.status === 'capacidade') return `- ${c.nome}: NÃO COMPORTA ${p(cot.adultos, 'hóspede', 'hóspedes')}.`;
+    if (c.status === 'min_noites') return `- ${c.nome}: nessa data pede no mínimo ${c.min_noites} noites.${alt(c.alternativa)}`;
+    if (c.status === 'erro') return `- ${c.nome}: não foi possível consultar agora (não fale dela).`;
+    return `- ${c.nome}: OCUPADA nessas datas.${alt(c.alternativa)}`;
+  });
+  return [`Período consultado: ${dm(cot.checkin)} a ${dm(cot.checkout)} (${p(cot.noites, 'noite', 'noites')}), ${p(cot.adultos, 'hóspede', 'hóspedes')}.`, ...linhas].join('\n');
+}
+
+// Todo "R$ ..." do texto precisa ser um valor da consulta; e, havendo casa livre ou alternativa, ao menos um valor precisa aparecer
+function valoresConferem(texto: string, cot: any) {
+  const ok = new Set<number>();
+  for (const c of cot.casas || []) for (const v of [c.total, c.diaria, c.alternativa?.total, c.alternativa?.diaria]) if (v != null) ok.add(Math.round(+v * 100));
+  const achados = [...texto.matchAll(/R\$\s*([\d.]+(?:,\d{1,2})?)/g)].map(m => Math.round(+m[1].replace(/\./g, '').replace(',', '.') * 100));
+  if (achados.some(v => !ok.has(v))) return false;
+  return ok.size === 0 || achados.length > 0;
+}
+
+async function redigir(historico: any[], cot: any, base: string, aviso: string, nomePerfil?: string | null) {
+  const nome = String(nomePerfil || '').trim().split(/\s+/)[0];
+  const primeiro = /^\p{L}{2,}$/u.test(nome) ? nome : '';
+  const emAndamento = conversando(historico);
+  const system = `Você responde, pelo WhatsApp, os clientes das casas de temporada do Claudio no Condomínio Pipa Natureza (Pipa/RN). Escreva a resposta para a ÚLTIMA mensagem do cliente.
+Tom: português do Brasil, cordial e direto, como uma pessoa da equipe (não um robô): frases curtas, no máximo 1 emoji, até 8 linhas. Use quebras de linha para separar casas.
+${emAndamento ? 'A conversa já está em andamento: NÃO cumprimente e NÃO comece com "Olá" ou "Oi".' : `É o começo da conversa: comece com um cumprimento curto${primeiro ? ` usando o nome ${primeiro}` : ''}.`}
+Regras:
+- Disponibilidade, datas e valores: use SOMENTE a consulta abaixo e copie os valores exatamente como estão escritos (ex.: "R$ 1.450"). Nunca invente valor, desconto, taxa, data ou disponibilidade, e não faça contas.
+- Se o cliente pediu uma casa específica, responda sobre ela primeiro. Cite as outras só se a pedida não estiver livre, como alternativa.
+- Se nenhuma casa estiver livre, ofereça as alternativas de data que a consulta trouxer; se não houver, peça outras datas.
+- Se a mensagem do cliente também perguntar algo que as informações das casas respondem (pets, horários, capacidade, comodidades), responda junto. Se perguntar algo que não está nelas, diga que o Claudio confirma em seguida.
+- Nunca confirme reserva, não peça dados pessoais e não fale de Pix.
+- Termine com o próximo passo, perguntando se quer reservar a casa livre${base.includes('Como funciona o pagamento') ? ' (pode dizer, em uma frase, como funciona o pagamento, conforme as informações)' : ''}.${aviso ? `\n- Diga também, com suas palavras: "${aviso}"` : ''}
+
+<consulta_airbnb>
+${fatosCotacao(cot)}
+</consulta_airbnb>
+<informacoes_das_casas>
+${base || '(nada cadastrado)'}
+</informacoes_das_casas>`;
+  const conversa = historico.map(m => `${m.autor === 'cliente' ? 'Cliente' : m.autor === 'robo' ? 'Atendimento' : 'Claudio'}: ${m.texto}`).join('\n');
+  const r = await new Anthropic().messages.parse({
+    model: 'claude-haiku-5-5',
+    max_tokens: 1500,
+    output_config: { effort: 'low', format: zodOutputFormat(RedacaoSchema) },
+    system,
+    messages: [{ role: 'user', content: `<conversa>\n${conversa}\n</conversa>` }],
+  });
+  const texto = r.parsed_output?.texto?.trim();
+  if (!texto) return null;
+  if (!valoresConferem(texto, cot)) { console.warn('redigir: valor que não está na consulta; vai a mensagem padrão'); return null; }
+  return texto;
 }
 
 async function cotar(checkin: string, checkout: string, adultos: number) {
