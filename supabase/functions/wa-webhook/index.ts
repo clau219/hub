@@ -5,6 +5,9 @@
 // - se for pergunta de disponibilidade/valor, junta o que o cliente já disse (wa_contacts.pedido), pergunta só o que
 //   falta (datas, confirmação de data vaga, saída, nº de pessoas) e, com tudo certo, consulta a airbnb-quote e responde;
 // - nenhum texto com campo a preencher ([nome], {data}, XX...) é enviado: fica para você;
+// - pergunta que só o Claudio responde (desconto, pet, festa, check-in antecipado, pagamento fora do Airbnb, reserva,
+//   informação que a base não tem): o robô diz "vou confirmar isso e já te retorno", o card fica pendente com a
+//   pergunta em destaque e vai um push;
 // - mensagens que você manda pelo app (ecos) ficam registradas e silenciam o robô naquela conversa.
 // O robô só informa disponibilidade e valor: nunca confirma reserva, não negocia e não responde o que não entendeu.
 //
@@ -18,7 +21,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
 import Anthropic from 'npm:@anthropic-ai/sdk@0.134.0';
 import { zodOutputFormat } from 'npm:@anthropic-ai/sdk@0.134.0/helpers/zod';
 import { z } from 'npm:zod@4.6.7';
-import { enviarZapi, lerBase, baseTexto, campoAPreencher } from '../_shared/wa.ts';
+import { enviarZapi, lerBase, baseTexto, campoAPreencher, avisarPush } from '../_shared/wa.ts';
 
 const SB_URL = Deno.env.get('SUPABASE_URL')!;
 const SB_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -159,10 +162,18 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
   if (x.resumo) await sb.from('deals').update({ proxima_acao: `${ACAO_RESPONDER}: ${x.resumo}`.slice(0, 140) }).eq('id', deal_id);
 
   // Dúvida que a base das casas responde: o robô responde só com os fatos da base (a IA escreveu a resposta)
+  // Pergunta que depende do Claudio: não inventa; avisa o cliente que vai confirmar, destaca no card e manda push
+  const paraClaudio = x.pergunta_claudio?.trim() || null;
+  // Mensagem que completa a reserva em andamento ("somos 4") e ainda traz uma pergunta para o Claudio: segue com
+  // datas/valores e avisa da pergunta; sem dados da reserva, só avisa que vai confirmar
+  const trouxeDados = !!(x.checkin || x.checkout || x.noites || x.hospedes);
+  const disponibilidade = x.assunto === 'disponibilidade_preco' || (!!paraClaudio && trouxeDados && !!conversa.pedido);
+  if (paraClaudio && !disponibilidade) return await encaminhar(sb, e, deal_id, x, paraClaudio, historico, teste);
+
   const duvida = x.assunto === 'duvida' && !!base && !!x.resposta?.trim();
   // Só cumprimento ("oi", "bom dia", "?") ou pedido genérico de informação: o robô dá as boas-vindas e pede as datas
   const saudacao = x.assunto === 'saudacao';
-  if (x.assunto !== 'disponibilidade_preco' && !duvida && !saudacao) return { deal_id, respondeu: false, motivo: `assunto "${x.assunto}": fica para você`, extracao: x };
+  if (!disponibilidade && !duvida && !saudacao) return { deal_id, respondeu: false, motivo: `assunto "${x.assunto}": fica para você`, extracao: x };
 
   // Disponibilidade/valor: soma o que o cliente disse agora ao que já tinha dito (estado por contato)
   const pedido = duvida || saudacao ? null : combinarPedido(conversa.pedido, x);
@@ -190,6 +201,7 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
     texto = redigido || cot.mensagem;
   }
   if (!redigido) texto = saudar(texto, historico);
+  if (paraClaudio && !redigido) texto += `\n\n${AVISO_CONFIRMAR_OUTRA}`;
 
   // Última barreira: nada com [campo], {campo}, XX... sai para o cliente
   const campo = campoAPreencher(texto);
@@ -217,8 +229,36 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
       : falta && !falta.datas && !falta.saida ? 'Acompanhar: o robô perguntou quantas pessoas' : 'Acompanhar: o robô pediu as datas';
     patch.data_proxima_acao = addDays(hoje(), 1);
   }
+  if (paraClaudio) { patch.proxima_acao = destaque(paraClaudio); patch.data_proxima_acao = hoje(); }
   await sb.from('deals').update(patch).eq('id', deal_id);
-  return { deal_id, respondeu: true, texto, extracao: x, teste };
+  if (paraClaudio && !teste) await avisar(sb, e, paraClaudio);
+  return { deal_id, respondeu: true, texto, extracao: x, teste, ...(paraClaudio ? { para_claudio: paraClaudio } : {}) };
+}
+
+// ---------- pergunta que só o Claudio responde ----------
+const AVISO_CONFIRMAR = 'Vou confirmar isso e já te retorno.';
+const AVISO_CONFIRMAR_OUTRA = 'Sobre a sua outra pergunta, vou confirmar e já te retorno.';
+const destaque = (q: string) => `❓ Cliente pergunta: ${q}`.slice(0, 140);
+
+async function encaminhar(sb: SB, e: Entrada, deal_id: string, x: Extracao, q: string, historico: any[], teste: boolean) {
+  await sb.from('deals').update({ proxima_acao: destaque(q), data_proxima_acao: hoje(), updated_at: new Date().toISOString() }).eq('id', deal_id);
+  // Já avisou o cliente e o Claudio ainda não respondeu: não repete o aviso nem o push (o card já mostra a pergunta nova)
+  const ultimaResposta = [...historico].reverse().find(m => m.autor !== 'cliente');
+  if (ultimaResposta?.autor === 'robo' && [AVISO_CONFIRMAR, AVISO_CONFIRMAR_OUTRA].some(a => String(ultimaResposta.texto).includes(a)))
+    return { deal_id, respondeu: false, motivo: 'pergunta para você: o cliente já sabe que você vai confirmar', extracao: x, para_claudio: q };
+  const texto = saudar(AVISO_CONFIRMAR, historico);
+  const enviado = teste ? { wamid: `teste-out-${crypto.randomUUID()}` } : await enviar(e.wa_id, texto, e.phoneId);
+  if (!enviado) return { deal_id, respondeu: false, motivo: 'falha ao enviar pelo WhatsApp', extracao: x, para_claudio: q };
+  await sb.from('wa_messages').insert({ wamid: enviado.wamid, wa_id: e.wa_id, deal_id, direcao: 'out', autor: 'robo', texto });
+  if (!teste) await avisar(sb, e, q);
+  return { deal_id, respondeu: true, texto, extracao: x, para_claudio: q, teste };
+}
+
+async function avisar(sb: SB, e: Entrada, q: string) {
+  const { data: c } = await sb.from('wa_contacts').select('nome').eq('wa_id', e.wa_id).maybeSingle();
+  const nome = String(c?.nome || e.nome || telefoneBonito(e.wa_id)).split(' ')[0];
+  await avisarPush(sb, { title: `${nome} perguntou algo que só você responde`, body: q, tag: 'wa-pergunta', url: `./#/whatsapp?c=${encodeURIComponent(e.wa_id)}` })
+    .catch(err => console.error('push', err));
 }
 
 // ---------- mensagem sua, enviada pelo app Business ----------
@@ -303,6 +343,7 @@ const ExtracaoSchema = z.object({
   datas_exatas: z.boolean(),
   resumo: z.string(),
   resposta: z.string().nullable(),
+  pergunta_claudio: z.string().nullable(),
 });
 type Extracao = z.infer<typeof ExtracaoSchema>;
 
@@ -323,6 +364,7 @@ Datas: converta para AAAA-MM-DD. Datas sem ano são a próxima ocorrência a par
 datas_exatas: true SOMENTE se as datas que o cliente disse são precisas, com dia e mês (ex.: "de 17 a 20 de novembro", "dia 5/12, 3 noites", "chego dia 17/11" — mesmo que ainda falte a saída), ou se respondeu confirmando ("sim", "isso", "certo") as datas que o Robô perguntou. false quando usou expressões vagas: "fim de semana", "semana que vem", feriado pelo nome (Réveillon, Carnaval, Natal, Páscoa), só o mês, dia sem o mês ("dia 20"), "umas X noites", "entre X e Y", "por volta de". Mesmo com datas_exatas false, preencha checkin/checkout com a sua melhor interpretação (o sistema pergunta ao cliente se está certo). Se nesta mensagem o cliente só respondeu o que o Robô perguntou (ex.: "fico até dia 20", "somos 4"), junte com o que ele já tinha dito antes na conversa.
 casa: a casa citada pelo nome na última mensagem ou antes na conversa (se o cliente não mudou de ideia), ou "qualquer". hospedes: total de pessoas (adultos + crianças) considerando a conversa toda: se o cliente disse antes ("somos 6") e não mudou, repita; nulo só se nunca disse.
 resumo: até 8 palavras para o card, ex.: "Vaga 20-23/11, 6 pessoas, Casa Azul".
+pergunta_claudio: se a ÚLTIMA mensagem do cliente traz uma pergunta ou pedido que só o dono (Claudio) pode decidir ou informar, escreva-a aqui, curta e em 3ª pessoa (ex.: "Pede desconto para 5 noites", "Quer levar um cachorro grande", "Quer fazer check-in às 8h", "Quer pagar por Pix fora do Airbnb"). Entram: desconto ou negociação de preço; pet, festa, evento ou visita quando as informações das casas não respondem; check-in antecipado ou checkout tardio; pagamento direto ou fora do Airbnb; fechar a reserva ou mandar comprovante; qualquer informação das casas que não está abaixo. Se a mesma mensagem também traz datas ou número de pessoas para a reserva, use assunto "disponibilidade_preco" e preencha pergunta_claudio. NÃO entram: o que o próprio cliente responde (datas, pessoas, casa), o que as informações das casas respondem, cumprimentos, agradecimentos e conversa. Senão, nulo.
 resposta: só quando assunto = "duvida": a resposta para o cliente, em português do Brasil, curta e cordial, no tom de quem já está conversando (sem "Olá"), usando SOMENTE fatos das informações das casas, sem inventar nem prometer nada além delas. Nunca escreva campos para preencher (colchetes, chaves, "XX", "nome do cliente"): o texto vai pronto para o cliente. Nos outros assuntos, nulo.
 
 <informacoes_das_casas>

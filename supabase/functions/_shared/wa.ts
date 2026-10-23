@@ -1,3 +1,5 @@
+import webpush from 'npm:web-push@3.6.7';
+
 // Peças comuns do WhatsApp das casas (wa-webhook e wa-responder): envio pela Z-API e a base de informações
 // das casas (app_config 'wa_base', preenchida na aba WhatsApp > Informações das casas).
 
@@ -51,4 +53,24 @@ export function baseTexto(base: Base, casas: { id: string; nome: string }[], { p
     if (cs.length) linhas.push(`${c.nome} (${c.id}):`, ...cs);
   }
   return linhas.join('\n');
+}
+
+// Push para os aparelhos com notificação ativa (mesmas chaves e inscrições da daily-digest e da wa-vigia)
+export async function avisarPush(sb: any, aviso: { title: string; body: string; tag: string; url: string }) {
+  const { data } = await sb.from('app_secrets').select('key,value').in('key', ['vapid_public', 'vapid_private']);
+  const k = Object.fromEntries((data || []).map((r: any) => [r.key, r.value]));
+  if (!k.vapid_public || !k.vapid_private) { console.error('push: chaves ausentes (ative as notificações em Ajustes)'); return 0; }
+  webpush.setVapidDetails('mailto:hub@clau219.github.io', k.vapid_public, k.vapid_private);
+  const { data: subs } = await sb.from('push_subscriptions').select('*');
+  let enviados = 0;
+  for (const s of subs || []) {
+    try { await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, JSON.stringify(aviso)); enviados++; }
+    catch (e) {
+      const code = (e as { statusCode?: number }).statusCode;
+      if (code === 404 || code === 410) await sb.from('push_subscriptions').delete().eq('id', s.id);
+      else console.error('push', code, (e as Error).message);
+    }
+  }
+  await sb.from('notifications_log').insert({ tipo: aviso.tag, titulo: aviso.title, corpo: aviso.body });
+  return enviados;
 }

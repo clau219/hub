@@ -418,6 +418,93 @@ describe('wa-webhook: pergunta o que falta e junta as respostas (várias trocas)
   });
 });
 
+describe('wa-webhook: pergunta que só o Claudio responde', () => {
+  // Push só sai na mensagem real (no modo teste não, para não tocar o celular): estas usam o webhook da Meta
+  const PUSH = { app_secrets: [{ key: 'cron_token', value: 'cron-teste' }, { key: 'vapid_public', value: 'pub' }, { key: 'vapid_private', value: 'priv' }],
+    push_subscriptions: [{ id: 's1', endpoint: 'https://push/celular', p256dh: 'p', auth: 'a' }] };
+  const comPush = (x = {}) => DADOS({ ...PUSH, ...x });
+  beforeEach(() => { globalThis.__webpush = { envios: [], falhar: null }; simular(/graph\.facebook\.com/, { messages: [{ id: 'wamid.r' + Math.random() }] }); });
+  const enviados = () => chamadasPara(/graph\.facebook\.com/).map(c => c.json().text.body);
+
+  test('desconto: o robô não inventa, avisa que vai confirmar, destaca a pergunta no card e manda push', async () => {
+    novoBanco(comPush());
+    responderIA(IA({ assunto: 'outro', resumo: 'Desconto 5 noites', pergunta_claudio: 'Pede desconto para 5 noites' }));
+    await webhook(msgCliente('Vocês fazem desconto para 5 noites?'));
+    assert.deepEqual(enviados(), ['Olá! Vou confirmar isso e já te retorno.']);
+    assert.equal(deal().proxima_acao, '❓ Cliente pergunta: Pede desconto para 5 noites');
+    assert.equal(deal().data_proxima_acao, '2026-10-19');
+    const push = globalThis.__webpush.envios;
+    assert.equal(push.length, 1);
+    assert.deepEqual([push[0].title, push[0].body, push[0].tag], ['Ana perguntou algo que só você responde', 'Pede desconto para 5 noites', 'wa-pergunta']);
+    assert.match(push[0].url, /#\/whatsapp\?c=5584991118864/);
+    assert.equal(banco().t('wa_messages').filter(m => m.autor === 'robo').length, 1);
+    assert.match(globalThis.__anthropic.chamadas[0].system, /pergunta_claudio: .*desconto.*check-in antecipado.*fora do Airbnb/s);
+  });
+
+  test('no meio da conversa (já pediu datas): "posso levar meu cachorro?" sem base de pets → avisa e destaca; depois a 2ª pergunta não repete aviso nem push', async () => {
+    novoBanco(comPush({ wa_contacts: [{ wa_id: WA, pedido: { casa: 'qualquer', checkin: '2026-11-17', checkout: '2026-11-20', noites: null, hospedes: null, datas_exatas: true, em: '2026-10-19T10:00:00Z' } }],
+      wa_messages: [{ id: 'r', wamid: 'r', wa_id: WA, autor: 'robo', texto: 'Para eu consultar de 17/11 a 20/11: quantas pessoas vão se hospedar?', enviado_em: '2026-10-19T14:00:00Z' }] }));
+    responderIA(IA({ assunto: 'outro', pergunta_claudio: 'Quer levar um cachorro grande' }));
+    await webhook(msgCliente('antes: posso levar meu cachorro? é grande'));
+    assert.deepEqual(enviados(), ['Vou confirmar isso e já te retorno.'], 'conversa em andamento: sem "Olá!"');
+    assert.equal(deal().proxima_acao, '❓ Cliente pergunta: Quer levar um cachorro grande');
+    assert.equal(globalThis.__webpush.envios.length, 1);
+    assert.equal(banco().t('wa_contacts')[0].pedido.checkin, '2026-11-17', 'o que o cliente já disse continua guardado');
+    responderIA(IA({ assunto: 'outro', pergunta_claudio: 'Quer saber se pode fazer churrasco com amigos' }));
+    await webhook(msgCliente('e pode fazer churrasco com uns amigos?'));
+    assert.equal(enviados().length, 1, 'não repete o aviso');
+    assert.equal(globalThis.__webpush.envios.length, 1, 'nem o push');
+    assert.equal(deal().proxima_acao, '❓ Cliente pergunta: Quer saber se pode fazer churrasco com amigos', 'o card mostra a pergunta nova');
+  });
+
+  test('datas + pergunta para o Claudio na mesma mensagem: pergunta o que falta das datas, avisa da outra e destaca', async () => {
+    novoBanco(comPush());
+    responderIA(IA({ checkin: '2026-11-17', checkout: '2026-11-20', datas_exatas: true, pergunta_claudio: 'Quer fazer check-in às 8h' }));
+    await webhook(msgCliente('tem vaga de 17 a 20/11? dá pra fazer check-in às 8h?'));
+    assert.deepEqual(enviados(), ['Olá! Para eu consultar de 17/11 a 20/11: quantas pessoas vão se hospedar?\n\nSobre a sua outra pergunta, vou confirmar e já te retorno.']);
+    assert.equal(deal().proxima_acao, '❓ Cliente pergunta: Quer fazer check-in às 8h');
+    assert.equal(globalThis.__webpush.envios.length, 1);
+  });
+
+  test('"somos 4. Posso levar meu cachorro?" completando a reserva em andamento: manda os valores e avisa da outra pergunta', async () => {
+    novoBanco(comPush({ wa_contacts: [{ wa_id: WA, pedido: { casa: 'qualquer', checkin: '2026-11-17', checkout: '2026-11-20', noites: null, hospedes: null, datas_exatas: true, em: '2026-10-19T10:00:00Z' } }],
+      wa_messages: [{ id: 'r', wamid: 'r', wa_id: WA, autor: 'robo', texto: 'Para eu consultar de 17/11 a 20/11: quantas pessoas vão se hospedar?', enviado_em: '2026-10-19T14:00:00Z' }] }));
+    simular('https://projeto.supabase.co/functions/v1/airbnb-quote', COTACAO);
+    responderIA(IA({ assunto: 'outro', hospedes: 4, pergunta_claudio: 'Quer levar um cachorro grande' }));
+    await webhook(msgCliente('somos 4. Posso levar meu cachorro? É grande'));
+    assert.deepEqual(chamadasPara(/airbnb-quote/)[0].json(), { checkin: '2026-11-17', checkout: '2026-11-20', adultos: 4 });
+    assert.deepEqual(enviados(), ['Para 17/11 a 20/11 (3 noites, 6 hóspedes):\n• Casa Azul: disponível, R$ 1.650 no total\n\nSobre a sua outra pergunta, vou confirmar e já te retorno.']);
+    assert.equal(deal().proxima_acao, '❓ Cliente pergunta: Quer levar um cachorro grande', 'o card continua esperando você');
+    assert.equal(globalThis.__webpush.envios.length, 1);
+  });
+  test('depois que o Claudio respondeu, uma nova pergunta para ele volta a ter aviso e push', async () => {
+    novoBanco(comPush({ wa_messages: [
+      { id: 'r', wamid: 'r', wa_id: WA, autor: 'robo', texto: 'Vou confirmar isso e já te retorno.', enviado_em: '2026-10-18T10:00:00Z' },
+      { id: 'c', wamid: 'c', wa_id: WA, autor: 'claudio', texto: 'Pode sim!', enviado_em: '2026-10-18T11:00:00Z' }] }));
+    responderIA(IA({ assunto: 'outro', pergunta_claudio: 'Quer pagar por Pix fora do Airbnb' }));
+    await webhook(msgCliente('posso pagar por pix direto com você?'));
+    assert.equal(enviados().length, 1);
+    assert.equal(globalThis.__webpush.envios.length, 1);
+  });
+
+  test('agradecimento ou conversa (sem pergunta para o Claudio) continua sem resposta e sem push', async () => {
+    novoBanco(comPush());
+    responderIA(IA({ assunto: 'outro', resumo: 'Agradeceu' }));
+    await webhook(msgCliente('obrigada!'));
+    assert.equal(enviados().length, 0);
+    assert.equal(globalThis.__webpush.envios.length, 0);
+    assert.equal(deal().proxima_acao, 'Responder WhatsApp: Agradeceu');
+  });
+
+  test('modo teste: avisa e destaca, mas não manda push', async () => {
+    novoBanco(comPush());
+    responderIA(IA({ assunto: 'confirmar_reserva', pergunta_claudio: 'Quer fechar a Casa Azul' }));
+    const { corpo } = await teste({ texto: 'quero fechar a azul' });
+    assert.deepEqual([corpo.respondeu, corpo.texto, corpo.para_claudio], [true, 'Olá! Vou confirmar isso e já te retorno.', 'Quer fechar a Casa Azul']);
+    assert.equal(globalThis.__webpush.envios.length, 0);
+  });
+});
+
 describe('wa-webhook: nenhum campo a preencher sai para o cliente', () => {
   test('resposta de dúvida com [nome]: não envia e deixa para você', async () => {
     novoBanco(DADOS({ app_config: [{ key: 'wa_base', value: JSON.stringify({ geral: { pets: 'Aceitamos pet pequeno.' } }) }] }));
