@@ -63,7 +63,7 @@ Deno.serve(async req => {
     if (!t?.wa_id || !(t?.texto || t?.midia)) return json({ error: 'informe teste.wa_id e teste.texto' }, 400);
     // teste.midia = {mime, base64}: simula um comprovante (foto/PDF) sem a Z-API
     const midia = t.midia?.base64 && t.midia?.mime ? { mime: String(t.midia.mime), base64: String(t.midia.base64) } : null;
-    const e: Entrada = { wa_id: String(t.wa_id).replace(/\D/g, ''), nome: t.nome, wamid: `teste-${crypto.randomUUID()}`, tipo: midia ? (midia.mime === 'application/pdf' ? 'document' : 'image') : 'text', texto: t.texto, ts: new Date(), midia };
+    const e: Entrada = { wa_id: String(t.wa_id).replace(/\D/g, ''), nome: t.nome, wamid: `teste-${crypto.randomUUID()}`, tipo: midia ? (midia.mime === 'application/pdf' ? 'document' : midia.mime.startsWith('audio/') ? 'audio' : 'image') : 'text', texto: t.texto, ts: new Date(), midia };
     if (!t.eco && await ehDono(sb, e.wa_id)) return json(await processarDono(sb, e, { teste: true, enviar: enviarDono }));
     return json(t.eco ? await processarEco(sb, e) : await processarEntrada(sb, e, { teste: true }));
   }
@@ -142,9 +142,10 @@ function conteudoZapi(m: any): { tipo: string; texto: string | null; midia?: Mid
   for (const tipo of ['image', 'video', 'audio', 'document', 'sticker', 'location', 'contact']) {
     if (!m[tipo]) continue;
     const leg = m[tipo].caption || m[tipo].fileName;
-    // Foto ou PDF pode ser o comprovante do sinal: guarda o link para a IA ler
-    const url = tipo === 'image' ? m.image.imageUrl : tipo === 'document' ? m.document.documentUrl : null;
-    const midia = url ? { url, mime: String(m[tipo].mimeType || (tipo === 'image' ? 'image/jpeg' : 'application/pdf')) } : null;
+    // Foto ou PDF pode ser o comprovante do sinal: guarda o link para a IA ler. Áudio só é ouvido no canal do dono.
+    const url = tipo === 'image' ? m.image.imageUrl : tipo === 'document' ? m.document.documentUrl : tipo === 'audio' ? m.audio.audioUrl : null;
+    const padrao = tipo === 'image' ? 'image/jpeg' : tipo === 'audio' ? 'audio/ogg' : 'application/pdf';
+    const midia = url ? { url, mime: String(m[tipo].mimeType || padrao).split(';')[0].trim() } : null;
     return { tipo, texto: `[${tipo}]${leg ? ' ' + leg : ''}`, midia };
   }
   return { tipo: 'outro', texto: null };

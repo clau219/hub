@@ -6,12 +6,14 @@ import { z } from 'npm:zod@4.6.7';
 // Hub trata como comando, não como cliente. A IA (Claude Haiku) transforma a frase em UMA ação de uma lista fechada;
 // a ação roda no banco e volta um recibo. "desfaz" ou "o valor é 3800" corrigem a última ação em até 24 h
 // (dono_acoes guarda o antes e o depois). Consultas (hoje, quem me deve, casa livre) só leem.
-// Também monta o resumo do dia que a função wa-dono manda às 7h30 e às 18h.
-// Fase 1: só texto. Áudio e foto (comprovante, boleto) e agir sobre clientes ficam para depois.
+// Também monta o resumo do dia que a função wa-dono manda às 7h30 e às 18h, e os lembretes com hora.
+// Áudio: transcrito (GROQ_API_KEY, ou OPENAI_API_KEY) e tratado como texto.
+// Foto/PDF: a IA lê o comprovante, boleto ou nota e PROPÕE o registro (wa_settings.dono_pendente); só grava com o "sim".
 
 type SB = any;
 type Enviar = (to: string, texto: string) => Promise<{ wamid: string } | null>;
-export type MsgDono = { wa_id: string; wamid: string; tipo: string; texto: string | null; ts: Date };
+type Midia = { url?: string; mime: string; base64?: string };
+export type MsgDono = { wa_id: string; wamid: string; tipo: string; texto: string | null; ts: Date; midia?: Midia | null };
 
 const NEGOCIO_NOME: Record<string, string> = { dj: 'DJ', aluguel: 'Aluguéis', consultoria: 'Engenharia', argila: 'Argila Lab' };
 const AREA_NOME: Record<string, string> = { inbox: 'Caixa de entrada', dj: 'DJ', alugueis: 'Aluguéis', consultoria: 'Engenharia', argila: 'Argila Lab', casa: 'Casa', pessoal: 'Pessoal' };
@@ -25,7 +27,7 @@ const ETAPA_NOME: Record<string, string> = { lead: 'Contato', orcamento: 'Orçam
 const ABERTAS = ['lead', 'orcamento', 'negociacao', 'fechado', 'realizado'];
 const CATS_SAI = ['Moradia', 'Contas da casa', 'Mercado', 'Alimentação fora', 'Transporte', 'Combustível', 'Saúde', 'Educação', 'Lazer',
   'Compras', 'Assinaturas', 'Impostos', 'Tarifas bancárias', 'Faxina e limpeza', 'Condomínio', 'Manutenção', 'Equipamento', 'Outros'];
-const AJUDA = 'Pode me pedir assim:\n• +dj Anabela 15/11 3500\n• recebi 1750 da Anabela no pix\n• gastei 120 de faxina na Frida\n• me lembra de ligar pro contador amanhã\n• o que tenho hoje? / quem me deve?\n• a Terracota tá livre de 20 a 23/11 pra 4?\nDepois de cada registro: "desfaz" ou "o valor é 3800".';
+const AJUDA = 'Pode me pedir assim (por texto ou áudio):\n• +dj Anabela 15/11 3500\n• recebi 1750 da Anabela no pix\n• gastei 120 de faxina na Frida\n• me lembra de ligar pro contador amanhã às 10h\n• o que tenho hoje? / quem me deve?\n• a Terracota tá livre de 20 a 23/11 pra 4?\n• foto ou PDF de comprovante ou boleto\nDepois de cada registro: "desfaz" ou "o valor é 3800".';
 
 // ---------- quem é o dono ----------
 const fim8 = (s: string) => String(s || '').replace(/\D/g, '').slice(-8);
@@ -47,16 +49,41 @@ export async function processarDono(sb: SB, m: MsgDono, { teste = false, enviar 
   const historico = await historicoDono(sb);
   await sb.from('dono_msgs').insert({ wamid: m.wamid, direcao: 'in', texto: m.texto, criado_em: m.ts.toISOString() });
 
-  let r: { texto: string; acao: string; [k: string]: unknown };
-  if (m.tipo !== 'text' || !m.texto?.trim()) {
-    r = { acao: 'midia', texto: m.tipo === 'audio' ? 'Áudio eu ainda não consigo ouvir 🙏 Me escreve que eu anoto.' : 'Por enquanto eu só leio texto. Foto de comprovante e boleto vêm na próxima fase.' };
-  } else {
+  let r: { texto: string; acao: string; [k: string]: unknown } | null = null;
+  let texto = m.tipo === 'text' ? m.texto?.trim() || '' : '';
+  let ouvido = '';
+  if (m.tipo === 'audio') {
+    try { texto = ouvido = m.midia ? await transcrever(m.midia) : ''; }
+    catch (err) {
+      console.error('dono áudio', err);
+      const semChave = (err as Error).message === 'sem chave';
+      r = { acao: 'erro', texto: semChave ? 'Áudio ainda não está ligado (falta a chave de transcrição no Supabase). Me escreve 🙏' : `Não consegui entender o áudio (${String((err as Error).message).slice(0, 120)}). Me escreve 🙏` };
+    }
+    if (!r && !texto) r = { acao: 'erro', texto: 'O áudio veio sem fala que eu entendesse. Me escreve 🙏' };
+  }
+  if (r) { /* erro do áudio já respondido */ }
+  else if (['image', 'document'].includes(m.tipo) && m.midia) r = await lerDocumento(sb, m);
+  else if (!texto) r = { acao: 'midia', texto: 'Esse tipo de mensagem eu não leio. Manda texto, áudio, foto ou PDF.' };
+  else {
     let x: Comando;
     let falha = '';
-    try { x = await entender(sb, historico, m.texto); }
+    const pend = await pendente(sb);
+    try { x = await entender(sb, historico, texto, pend); }
     catch (err) { console.error('dono IA', err); x = null as any; falha = String((err as Error)?.message || err).slice(0, 160); }
-    r = x ? await executar(sb, x) : { acao: 'erro', texto: `Não consegui falar com a IA agora. Tenta de novo daqui a pouco, ou registra pelo Hub.${falha ? `\n(${falha})` : ''}` };
+    if (!x) r = { acao: 'erro', texto: `Não consegui falar com a IA agora. Tenta de novo daqui a pouco, ou registra pelo Hub.${falha ? `\n(${falha})` : ''}` };
+    else if (x.acao === 'confirmar') {
+      r = pend ? await executar(sb, mesclar(pend.comando, x)) : { acao: 'conversa', texto: 'Não tem nada esperando confirmação.' };
+      if (pend) await limparPendente(sb);
+    } else if (x.acao === 'cancelar') {
+      r = { acao: 'cancelar', texto: pend ? 'Ok, descartei.' : 'Não tem nada para cancelar.' };
+      if (pend) await limparPendente(sb);
+    } else {
+      r = await executar(sb, x);
+      // Pediu outra coisa: a proposta do comprovante/boleto não fica esperando um "sim" solto mais tarde
+      if (pend) await limparPendente(sb);
+    }
   }
+  if (ouvido) r = { ...r!, texto: `🎙️ _"${ouvido.slice(0, 300)}"_\n\n${r.texto}` };
   const enviado = teste ? { wamid: `teste-dono-${crypto.randomUUID()}` } : await enviar(m.wa_id, r.texto);
   if (enviado) await sb.from('dono_msgs').insert({ wamid: enviado.wamid, direcao: 'out', texto: r.texto });
   return { dono: true, ...r, enviado: !!enviado };
@@ -71,7 +98,8 @@ async function historicoDono(sb: SB) {
 // ---------- IA: a frase vira um comando ----------
 // Sem campos nullable: a API de saída estruturada aceita no máximo 16 campos com tipo união (nullable conta), e
 // com mais ela recusa a chamada. A IA usa "" / 0 / "nenhum" para "não disse" e normalizar() devolve null.
-const ACOES = ['criar_oportunidade', 'a_receber', 'registrar_pagamento', 'lancar_gasto', 'criar_tarefa', 'concluir_tarefa', 'consultar', 'desfazer', 'corrigir', 'conversa'] as const;
+const ACOES = ['criar_oportunidade', 'a_receber', 'registrar_pagamento', 'lancar_gasto', 'criar_tarefa', 'concluir_tarefa', 'adiar', 'consultar', 'desfazer', 'corrigir',
+  'confirmar', 'cancelar', 'conversa'] as const;
 const ComandoSchema = z.object({
   acao: z.enum(ACOES),
   negocio: z.enum(['nenhum', 'dj', 'aluguel', 'consultoria', 'argila']),
@@ -105,27 +133,31 @@ export type Comando = { acao: Bruto['acao']; negocio: 'dj' | 'aluguel' | 'consul
 export const normalizar = (b: Record<string, unknown>): Comando => Object.fromEntries(Object.entries(b).map(([k, v]) =>
   [k, k === 'acao' ? v : v === '' || v === 'nenhum' || (typeof v === 'number' && !(v > 0)) || v == null ? null : typeof v === 'string' ? v.trim() || null : v])) as Comando;
 
-async function entender(sb: SB, historico: any[], texto: string): Promise<Comando> {
+async function entender(sb: SB, historico: any[], texto: string, pend: Pendente | null = null): Promise<Comando> {
   const d = hoje();
   const dia = new Intl.DateTimeFormat('pt-BR', { weekday: 'long', timeZone: 'America/Sao_Paulo' }).format(new Date());
   const ultima = await ultimaAcao(sb);
-  const system = `Você é o assistente do Claudio dentro do Hub, o sistema pessoal dele. Ele é DJ (DJ CLAU), engenheiro, tem a Argila Lab (ferramentas para cerâmica) e aluga 3 casas em Pipa/RN (QS39 = Casa Frida, QS40 = Casa Azul, QS50 = Casa Terracota). Ele escreve pelo WhatsApp, do jeito que fala. Transforme a ÚLTIMA mensagem dele em UMA ação. Hoje é ${dia}, ${d} (fuso de Brasília).
+  const lembrete = await ultimoLembrete(sb);
+  const system = `Você é o assistente do Claudio dentro do Hub, o sistema pessoal dele. Ele é DJ (DJ CLAU), engenheiro, tem a Argila Lab (ferramentas para cerâmica) e aluga 3 casas em Pipa/RN (QS39 = Casa Frida, QS40 = Casa Azul, QS50 = Casa Terracota). Ele escreve pelo WhatsApp, do jeito que fala. Transforme a ÚLTIMA mensagem dele em UMA ação. Hoje é ${dia}, ${d}, agora são ${agoraHHMM()} (fuso de Brasília).
 
 Ações:
 - criar_oportunidade: novo negócio/cliente/evento para o Pipeline ("+dj Anabela 15/11 3500", "orçamento de engenharia pro Marcos", "fechei o casamento da Júlia dia 20/12 por 4 mil"). negocio: dj (padrão quando não diz), aluguel, consultoria (engenharia/obra), argila. cliente: o nome da pessoa. data: data do evento. valor: valor total. recebido: quanto ele JÁ recebeu (só se disser que recebeu/pagou sinal; "sinal de 50%" sem dizer que recebeu NÃO é recebido). etapa: "fechado" se diz que fechou/confirmou, "orcamento" se diz que já mandou orçamento, senão "lead". local, hora (HH:MM) se disser. titulo: detalhes que sobrarem (tipo de evento etc.), curto.
 - a_receber: alguém deve dinheiro a ele, sem dizer que pagou ("tenho a receber 1300 do Nami", "o Nami me deve 1300", "falta o Marcos me pagar 800"). cliente, valor, negocio se der para saber, data do evento/serviço se disser, titulo com o que foi (se disser).
 - registrar_pagamento: recebeu dinheiro de um cliente ("recebi 1750 da Anabela no pix", "a Júlia pagou o saldo"). cliente, valor (nulo se disse "o saldo"/"o resto"), forma, data (só se não for hoje).
 - lancar_gasto: ele gastou/pagou algo ("gastei 120 de faxina na Frida", "paguei 300 de gás", "uber 25"). valor positivo, titulo = descrição curta, categoria (uma de: ${CATS_SAI.join(', ')}), casa se for de uma casa, negocio: aluguel se for das casas, dj se for do DJ (equipamento, transporte de gig), consultoria, argila; nulo se pessoal. data só se não for hoje.
-- criar_tarefa: algo a fazer ou lembrete ("me lembra de ligar pro contador amanhã", "comprar cabo XLR"). titulo curto no infinitivo, data = prazo (nulo se não disser), hora se disser, area (dj, alugueis, consultoria, argila, casa, pessoal, ou inbox se não der para saber), prioridade 1 se disser urgente/importante, senão 2.
-- concluir_tarefa: diz que fez algo ("liguei pro contador", "feito: comprar cabo"). titulo = o que fez.
+- criar_tarefa: algo a fazer ou lembrete ("me lembra de ligar pro contador amanhã", "comprar cabo XLR", "me lembra às 15h de pagar o boleto", "daqui 2 horas me lembra do forno"). titulo curto no infinitivo (sem a hora), data = prazo (nulo se não disser), hora = horário do aviso no WhatsApp (HH:MM) quando ele diz um horário ou um tempo relativo (calcule data e hora a partir de agora; "de manhã" = 09:00, "à tarde" = 14:00, "à noite" = 19:00), nulo se não falar de horário, area (dj, alugueis, consultoria, argila, casa, pessoal, ou inbox se não der para saber), prioridade 1 se disser urgente/importante, senão 2.
+- concluir_tarefa: diz que fez algo ("liguei pro contador", "feito: comprar cabo"). titulo = o que fez. Só "feito", "pronto", "já fiz" (resposta a um lembrete): titulo vazio.
+- adiar: quer o lembrete de novo mais tarde ("adia 1h", "me lembra de novo amanhã às 9", "depois"). data e hora do NOVO aviso, calculadas a partir de agora ("adia 1h" = agora + 1 hora; "depois" sem tempo = agora + 1 hora). titulo só se disser qual tarefa.
 - consultar: pergunta sobre a agenda ou o negócio. consulta: hoje ("o que tenho hoje?"), amanha, semana, quem_deve (quem deve dinheiro, o que falta receber), pendencias (o que está atrasado/pendente), casas_livres (se as casas estão livres e quanto custa: checkin, checkout, pessoas; casa se citar uma).
 - desfazer: quer desfazer/apagar o último registro ("desfaz", "apaga isso", "errei, cancela").
 - corrigir: corrige o último registro ("o valor é 3800", "era dia 16", "foi no dinheiro", "é da Casa Azul"). Preencha SÓ os campos que mudam (valor, data, hora, forma, categoria, casa, titulo, local, cliente, etapa).
+- confirmar: só quando há uma proposta esperando (abaixo) e ele concorda ("sim", "pode", "confirma", "isso", "ok"). Se junto corrigir algo ("sim, mas é da Casa Azul", "pode, foi 130", "é da Anabela"), preencha só esses campos.
+- cancelar: só quando há uma proposta esperando e ele recusa ("não", "descarta", "deixa pra lá").
 - conversa: cumprimento, agradecimento, pedido de ajuda ou algo que não se encaixa. resposta: frase curta e simpática; se ele pediu algo que você não sabe fazer, diga isso em uma frase.
 
 Datas em AAAA-MM-DD; sem ano = próxima ocorrência a partir de hoje; "sexta" = a próxima sexta. Valores em reais como número ("3,5 mil" = 3500, "4k" = 4000). Nunca invente dado que ele não disse.
 Campo que não se aplica ou que ele não disse: texto vazio "", número 0, ou "nenhum" nas listas ("nulo" acima quer dizer isso).
-${ultima ? `Último registro feito por você (é o que "desfaz"/"corrigir" alteram), há ${Math.round((Date.now() - Date.parse(ultima.criado_em)) / 60e3)} min: ${ultima.resumo}` : 'Nenhum registro nas últimas 24 h ("desfaz"/"corrigir" não têm o que alterar: use conversa).'}`;
+${pend ? `PROPOSTA ESPERANDO o "sim" dele (de um comprovante/boleto que ele mandou): ${pend.resumo}\n` : ''}${lembrete ? `Último lembrete enviado a ele, há ${Math.round((Date.now() - Date.parse(lembrete.lembrete_enviado_em)) / 60e3)} min: "${lembrete.titulo}" ("feito"/"adia" se referem a ele).\n` : ''}${ultima ? `Último registro feito por você (é o que "desfaz"/"corrigir" alteram), há ${Math.round((Date.now() - Date.parse(ultima.criado_em)) / 60e3)} min: ${ultima.resumo}` : 'Nenhum registro nas últimas 24 h ("desfaz"/"corrigir" não têm o que alterar: use conversa).'}`;
   const conversa = historico.map(m => `${m.direcao === 'in' ? 'Claudio' : 'Hub'}: ${m.texto}`).join('\n');
   const r = await new Anthropic().messages.parse({
     model: 'claude-haiku-5-5',
@@ -148,6 +180,7 @@ export async function executar(sb: SB, x: Comando): Promise<{ acao: string; text
     case 'lancar_gasto': return lancarGasto(sb, x, data);
     case 'criar_tarefa': return criarTarefa(sb, x, data);
     case 'concluir_tarefa': return concluirTarefa(sb, x);
+    case 'adiar': return adiar(sb, x, data);
     case 'consultar': return { acao: 'consultar', texto: await consultar(sb, x) };
     case 'desfazer': return desfazer(sb);
     case 'corrigir': return corrigir(sb, x, data);
@@ -267,29 +300,232 @@ async function lancarGasto(sb: SB, x: Comando, data: string | null) {
 async function criarTarefa(sb: SB, x: Comando, data: string | null) {
   const titulo = x.titulo?.trim();
   if (!titulo) return { acao: 'pergunta', texto: 'Qual a tarefa?' };
+  // Com hora: aviso no WhatsApp. Sem data, é hoje se o horário ainda não passou, senão amanhã
   const hora = horaOk(x.hora);
-  const row = { titulo: hora ? `${titulo} (${hora.slice(0, 5)})` : titulo, area: x.area || 'inbox', prazo: data, prioridade: x.prioridade === 1 ? 1 : 2, feito: false };
+  const dia = hora ? data || (hora.slice(0, 5) > agoraHHMM() ? hoje() : addDays(hoje(), 1)) : data;
+  const lembrete = hora ? momento(dia!, hora) : null;
+  const passou = !!lembrete && Date.parse(lembrete) <= Date.now();
+  const row = { titulo, area: x.area || 'inbox', prazo: dia, prioridade: x.prioridade === 1 ? 1 : 2, feito: false,
+    lembrete_em: passou ? null : lembrete, lembrete_enviado_em: null };
   const { data: t, error } = await sb.from('tasks').insert(row).select('*').single();
   if (error || !t) return { acao: 'erro', texto: `Não consegui criar a tarefa (${error?.message || 'erro no banco'}).` };
-  const resumo = `📝 Tarefa: ${t.titulo}\n• ${data ? relDia(data) : 'sem prazo'} · ${AREA_NOME[t.area] || t.area}${t.prioridade === 1 ? ' · prioridade alta' : ''}`;
+  const aviso = passou ? ' · ⚠️ esse horário já passou, não vou avisar' : lembrete ? ` · ⏰ aviso às ${hora!.slice(0, 5)} aqui` : '';
+  const resumo = `📝 Tarefa: ${t.titulo}\n• ${dia ? relDia(dia) : 'sem prazo'}${aviso} · ${AREA_NOME[t.area] || t.area}${t.prioridade === 1 ? ' · prioridade alta' : ''}`;
   await registrar(sb, 'criar_tarefa', 'tasks', t.id, null, t, resumo);
   return { acao: 'criar_tarefa', texto: resumo + RODAPE, task_id: t.id };
 }
 
 async function concluirTarefa(sb: SB, x: Comando) {
   const alvo = palavras(x.titulo || '');
-  if (!alvo.length) return { acao: 'pergunta', texto: 'Qual tarefa você concluiu?' };
+  if (!alvo.length) {
+    // "feito" logo depois de um lembrete
+    const l = await ultimoLembrete(sb);
+    if (!l || l.feito) return { acao: 'pergunta', texto: 'Qual tarefa você concluiu?' };
+    return concluir(sb, l);
+  }
   const { data: ts } = await sb.from('tasks').select('*').eq('feito', false);
   const pontos = (ts || []).map((t: any) => ({ t, n: palavras(t.titulo).filter(w => alvo.some(a => mesmaPalavra(a, w))).length })).filter((p: any) => p.n > 0)
     .sort((a: any, b: any) => b.n - a.n);
   if (!pontos.length) return { acao: 'pergunta', texto: `Não achei tarefa aberta parecida com "${x.titulo}".` };
   if (pontos.length > 1 && pontos[1].n === pontos[0].n) return { acao: 'pergunta', texto: `Qual delas?\n${pontos.filter((p: any) => p.n === pontos[0].n).slice(0, 4).map((p: any) => `• ${p.t.titulo}`).join('\n')}` };
-  const t = pontos[0].t;
+  return concluir(sb, pontos[0].t);
+}
+
+async function concluir(sb: SB, t: any) {
   const patch = { feito: true, feito_em: new Date().toISOString() };
   await sb.from('tasks').update(patch).eq('id', t.id);
   const resumo = `☑️ Concluída: ${t.titulo}`;
   await registrar(sb, 'concluir_tarefa', 'tasks', t.id, pick(t, Object.keys(patch)), patch, resumo);
   return { acao: 'concluir_tarefa', texto: resumo + RODAPE, task_id: t.id };
+}
+
+// "adia 1h" / "me lembra de novo amanhã às 9": o último lembrete enviado (ou a tarefa citada) ganha novo aviso
+async function adiar(sb: SB, x: Comando, data: string | null) {
+  let t: any = null;
+  const alvo = palavras(x.titulo || '');
+  if (alvo.length) {
+    const { data: ts } = await sb.from('tasks').select('*').eq('feito', false);
+    t = (ts || []).map((t: any) => ({ t, n: palavras(t.titulo).filter(w => alvo.some(a => mesmaPalavra(a, w))).length })).filter((p: any) => p.n > 0)
+      .sort((a: any, b: any) => b.n - a.n)[0]?.t;
+  } else t = await ultimoLembrete(sb);
+  if (!t) return { acao: 'pergunta', texto: 'Adiar qual lembrete?' };
+  const hora = horaOk(x.hora);
+  if (!hora) return { acao: 'pergunta', texto: `Para quando eu adio "${t.titulo}"?` };
+  const dia = data || (hora.slice(0, 5) > agoraHHMM() ? hoje() : addDays(hoje(), 1));
+  const quando = momento(dia, hora);
+  if (Date.parse(quando) <= Date.now()) return { acao: 'pergunta', texto: 'Esse horário já passou. Para quando?' };
+  const patch: Record<string, unknown> = { lembrete_em: quando, lembrete_enviado_em: null, feito: false, feito_em: null };
+  if (!t.prazo || t.prazo < dia) patch.prazo = dia;
+  await sb.from('tasks').update(patch).eq('id', t.id);
+  const resumo = `⏰ Adiado: ${t.titulo} → ${relDia(dia)} às ${hora.slice(0, 5)}`;
+  await registrar(sb, 'adiar', 'tasks', t.id, pick(t, Object.keys(patch)), patch, resumo);
+  return { acao: 'adiar', texto: resumo, task_id: t.id };
+}
+
+async function ultimoLembrete(sb: SB) {
+  const { data } = await sb.from('tasks').select('*').gte('lembrete_enviado_em', new Date(Date.now() - 864e5).toISOString())
+    .order('lembrete_enviado_em', { ascending: false }).limit(1);
+  return data?.[0] || null;
+}
+
+// Lembretes vencidos (wa-dono, cron a cada minuto). Os de mais de 6 h atrás não saem: chegariam fora de hora.
+export async function enviarLembretes(sb: SB, enviar: Enviar) {
+  const para = await donoWa(sb);
+  if (!para) return { enviados: 0, motivo: 'número do dono não cadastrado' };
+  const agora = new Date().toISOString();
+  const { data: ts } = await sb.from('tasks').select('*').eq('feito', false).is('lembrete_enviado_em', null)
+    .lte('lembrete_em', agora).gte('lembrete_em', new Date(Date.now() - 6 * 3600e3).toISOString()).order('lembrete_em');
+  let enviados = 0;
+  for (const t of ts || []) {
+    // Marca antes de enviar: duas rodadas do cron ao mesmo tempo não mandam duas vezes
+    await sb.from('tasks').update({ lembrete_enviado_em: agora }).eq('id', t.id);
+    const texto = `⏰ *Lembrete:* ${t.titulo}${t.notas ? `\n${t.notas}` : ''}\n_"feito" ou "adia 1h"_`;
+    const r = await enviar(para, texto);
+    if (!r) { await sb.from('tasks').update({ lembrete_enviado_em: null }).eq('id', t.id); continue; }
+    await sb.from('dono_msgs').insert({ wamid: r.wamid, direcao: 'out', texto });
+    enviados++;
+  }
+  return { enviados };
+}
+
+// ---------- foto/PDF: comprovante, boleto ou nota ----------
+type Pendente = { comando: Comando; resumo: string; em: string };
+async function pendente(sb: SB): Promise<Pendente | null> {
+  const { data } = await sb.from('wa_settings').select('dono_pendente').eq('id', 1).maybeSingle();
+  const p = data?.dono_pendente;
+  return p?.comando && Date.now() - Date.parse(p.em) < 864e5 ? p : null;
+}
+const limparPendente = (sb: SB) => sb.from('wa_settings').update({ dono_pendente: null }).eq('id', 1);
+// A proposta com o que ele corrigiu junto do "sim"
+const mesclar = (base: Comando, x: Comando): Comando => ({ ...base, ...Object.fromEntries(Object.entries(x).filter(([k, v]) => v != null && !['acao', 'resposta', 'consulta'].includes(k))) });
+
+const DocSchema = z.object({
+  tipo: z.enum(['comprovante', 'boleto', 'nota_fiscal', 'outro']),
+  valor: z.number(),
+  data: z.string(),
+  vencimento: z.string(),
+  recebedor: z.string(),
+  pagador: z.string(),
+  descricao: z.string(),
+  categoria: z.string(),
+  casa: z.enum(['nenhum', 'QS39', 'QS40', 'QS50']),
+  negocio: z.enum(['nenhum', 'dj', 'aluguel', 'consultoria', 'argila']),
+});
+
+async function lerDocumento(sb: SB, m: MsgDono) {
+  const legenda = String(m.texto || '').replace(/^\[\w+\]\s*/, '').replace(/\.(pdf|jpe?g|png)$/i, '').trim();
+  let l: z.infer<typeof DocSchema>;
+  try {
+    const arq = await baixar(m.midia!);
+    const b64 = base64(arq.bytes);
+    const bloco = arq.mime === 'application/pdf'
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
+      : { type: 'image', source: { type: 'base64', media_type: /^image\/(jpeg|png|gif|webp)$/.test(arq.mime) ? arq.mime : 'image/jpeg', data: b64 } };
+    const r = await new Anthropic().messages.parse({
+      model: 'claude-haiku-5-5',
+      max_tokens: 2000,
+      output_config: { effort: 'low', format: zodOutputFormat(DocSchema) },
+      system: `Você lê documentos financeiros brasileiros que o Claudio Roberto Sousa Braga (DJ, engenheiro, dono de 3 casas de aluguel em Pipa: QS39 Casa Frida, QS40 Casa Azul, QS50 Casa Terracota) manda para registrar. Hoje é ${hoje()}. Transcreva só o que está legível; o que não estiver: "" ou 0 ou "nenhum".
+tipo: comprovante (de Pix, transferência ou pagamento já feito), boleto (a pagar, com código de barras/linha digitável), nota_fiscal (nota ou cupom de compra), outro.
+valor: em reais (número). data: data do pagamento/emissão (AAAA-MM-DD). vencimento: do boleto (AAAA-MM-DD). recebedor: quem recebeu/beneficiário. pagador: quem pagou.
+descricao: o que é, curto ("Conta de luz Cosern", "Faxina", "Pix para Maria Silva"). categoria (para despesa): uma de ${CATS_SAI.join(', ')}.
+casa e negocio: só se o documento ou a legenda deixarem claro (negocio aluguel = casas, dj = equipamento/eventos).`,
+      messages: [{ role: 'user', content: [bloco as any, { type: 'text', text: legenda ? `Legenda que ele escreveu: "${legenda}"` : 'Sem legenda.' }] }],
+    });
+    if (r.stop_reason === 'refusal' || !r.parsed_output) throw new Error(`sem leitura (${r.stop_reason})`);
+    l = r.parsed_output;
+  } catch (err) {
+    console.error('dono documento', err);
+    return { acao: 'erro', texto: `Não consegui ler o arquivo (${String((err as Error).message).slice(0, 120)}). Me manda por texto 🙏` };
+  }
+  const valor = l.valor > 0 ? centavos(l.valor) : null;
+  if (l.tipo === 'outro' || !valor) return { acao: 'documento', texto: 'Não reconheci comprovante, boleto ou nota com valor nesse arquivo. Me diz por texto o que registrar.' };
+  const casa = l.casa === 'nenhum' ? null : l.casa;
+  const negocio = l.negocio === 'nenhum' ? (casa ? 'aluguel' : null) : l.negocio;
+  const data = isoOk(l.data) && l.data <= hoje() ? l.data : null;
+  const base: Comando = normalizar({ acao: 'conversa', negocio: 'nenhum', cliente: '', valor: 0, recebido: 0, data: '', hora: '', local: '', titulo: '', etapa: 'nenhum', forma: 'nenhum',
+    categoria: '', casa: 'nenhum', area: 'nenhum', prioridade: 0, consulta: 'nenhum', checkin: '', checkout: '', pessoas: 0, resposta: '' });
+  let comando: Comando, resumo: string;
+  if (l.tipo === 'boleto') {
+    const venc = isoOk(l.vencimento) ? l.vencimento : null;
+    const descr = l.descricao || l.recebedor || 'boleto';
+    comando = { ...base, acao: 'criar_tarefa', titulo: `Pagar ${descr} (${moeda(valor)})`, data: venc, hora: venc && venc >= hoje() ? '09:00' : null, prioridade: 1,
+      area: negocio === 'aluguel' ? 'alugueis' : negocio === 'dj' ? 'dj' : negocio || 'pessoal' };
+    resumo = `📄 Boleto: ${descr} · ${moeda(valor)}${venc ? ` · vence ${relDia(venc)}` : ''}\nCrio a tarefa "Pagar ${descr}"${comando.hora ? ` com aviso no dia do vencimento às 9h` : ''}?`;
+  } else if (paraClaudio(l.recebedor, await pixNome(sb))) {
+    // Dinheiro que ele recebeu: pagamento de um cliente
+    const cands = await dealsDoPagador(sb, l.pagador);
+    const quem = cands.length === 1 ? cands[0] : null;
+    const nome = quem ? String(quem.titulo).split(' — ').slice(1).join(' — ') : l.pagador;
+    comando = { ...base, acao: 'registrar_pagamento', cliente: nome || null, valor, data, forma: 'Pix' };
+    resumo = `📄 Comprovante: ${moeda(valor)} de ${l.pagador || 'pagador ilegível'}${data ? ` em ${dm(data)}` : ''}\n` + (quem
+      ? `Registro como pagamento de *${quem.titulo}*${quem.valor ? ` (falta ${moeda(saldoDe(quem))})` : ''}?`
+      : cands.length > 1 ? `Tem ${cands.length} oportunidades dessa pessoa. Diz de qual é (ex.: "sim, é a do dia 15/11") ou "não".`
+      : `Não achei oportunidade aberta dessa pessoa. Diz de quem é (ex.: "sim, é da Anabela") ou "não".`);
+  } else {
+    const categoria = CATS_SAI.includes(l.categoria) ? l.categoria : 'Outros';
+    const descr = l.descricao || l.recebedor || categoria;
+    comando = { ...base, acao: 'lancar_gasto', valor, titulo: descr, categoria, casa, negocio: negocio as any, data };
+    const casaNome = casa ? await nomeCasa(sb, casa) : null;
+    resumo = `📄 ${l.tipo === 'nota_fiscal' ? 'Nota' : 'Comprovante'}: ${moeda(valor)}${l.recebedor ? ` para ${l.recebedor}` : ''}${data ? ` em ${dm(data)}` : ''}\nLanço como gasto: ${descr} · ${categoria}${casaNome ? ` · ${casaNome}` : negocio ? ` · ${NEGOCIO_NOME[negocio] || negocio}` : ''}?`;
+  }
+  await sb.from('wa_settings').update({ dono_pendente: { comando, resumo, em: new Date().toISOString() } }).eq('id', 1);
+  return { acao: 'proposta', texto: `${resumo}\n_Responda "sim", corrija ("é da Casa Azul") ou "não"._`, proposta: comando };
+}
+
+// O recebedor é o Claudio: primeiro e último nome do titular do Pix (base das casas) ou "Claudio … Braga"
+const paraClaudio = (recebedor: string, titular: string) => {
+  const r = palavras(recebedor);
+  const t = palavras(titular || 'Claudio Braga');
+  const tem = (w: string) => r.some(x => x === w);
+  return (tem(t[0]) && tem(t.at(-1)!)) || (tem('claudio') && tem('braga'));
+};
+async function pixNome(sb: SB) {
+  const { data } = await sb.from('app_config').select('value').eq('key', 'wa_base').maybeSingle();
+  try { return JSON.parse(data?.value || '{}')?.geral?.pix_nome || ''; } catch { return ''; }
+}
+// Oportunidades abertas cujo contato tem todas as palavras no nome de quem pagou ("Anabela Souza" ⊂ "ANABELA DE SOUZA LIMA")
+async function dealsDoPagador(sb: SB, pagador: string) {
+  const ws = palavras(pagador);
+  if (!ws.length) return [];
+  const { data: ds } = await sb.from('deals').select('*').in('etapa', ABERTAS);
+  const { data: cs } = await sb.from('contacts').select('id,nome');
+  return (ds || []).filter((d: any) => {
+    const nome = palavras((cs || []).find((c: any) => c.id === d.contato_id)?.nome || String(d.titulo || '').split(' — ').slice(1).join(' '));
+    return nome.length > 0 && nome.every(n => ws.some(w => w === n));
+  });
+}
+
+// ---------- áudio ----------
+async function transcrever(midia: Midia) {
+  const groq = Deno.env.get('GROQ_API_KEY'), openai = Deno.env.get('OPENAI_API_KEY');
+  if (!groq && !openai) throw new Error('sem chave');
+  const arq = await baixar(midia, 20);
+  const fd = new FormData();
+  const ext = /mpeg|mp3/.test(arq.mime) ? 'mp3' : /mp4|m4a|aac/.test(arq.mime) ? 'm4a' : /wav/.test(arq.mime) ? 'wav' : 'ogg';
+  fd.append('file', new Blob([arq.bytes], { type: arq.mime }), `audio.${ext}`);
+  fd.append('model', groq ? 'whisper-large-v3-turbo' : 'whisper-1');
+  fd.append('language', 'pt');
+  const r = await fetch(groq ? 'https://api.groq.com/openai/v1/audio/transcriptions' : 'https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST', headers: { Authorization: `Bearer ${groq || openai}` }, body: fd, signal: AbortSignal.timeout(60000),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`transcrição ${r.status}: ${j?.error?.message || ''}`.trim());
+  return String(j.text || '').trim();
+}
+
+async function baixar(m: Midia, maxMb = 8): Promise<{ mime: string; bytes: Uint8Array }> {
+  if (m.base64) return { mime: m.mime, bytes: Uint8Array.from(atob(m.base64), c => c.charCodeAt(0)) };
+  const r = await fetch(m.url!, { signal: AbortSignal.timeout(30000) });
+  if (!r.ok) throw new Error(`download ${r.status}`);
+  const bytes = new Uint8Array(await r.arrayBuffer());
+  if (bytes.length > maxMb * 1024 * 1024) throw new Error('arquivo grande demais');
+  return { mime: (r.headers.get('content-type') || m.mime).split(';')[0].trim() || m.mime, bytes };
+}
+function base64(b: Uint8Array) {
+  let bin = '';
+  for (let i = 0; i < b.length; i += 0x8000) bin += String.fromCharCode(...b.subarray(i, i + 0x8000));
+  return btoa(bin);
 }
 
 // ---------- desfazer e corrigir (última ação, até 24 h) ----------
@@ -364,6 +600,17 @@ async function corrigir(sb: SB, x: Comando, data: string | null) {
     muda('prazo', data, 'prazo', v => v ? dm(v) : 'sem prazo');
     muda('area', x.area, 'área', v => AREA_NOME[v] || v);
     if (x.prioridade === 1 || x.prioridade === 2) muda('prioridade', x.prioridade, 'prioridade', v => (v === 1 ? 'alta' : 'normal'));
+    // Hora nova (ou data nova de tarefa com aviso): refaz o aviso
+    const hora = horaOk(x.hora) || (data && atual.lembrete_em ? `${horaLocal(atual.lembrete_em)}:00` : null);
+    if (hora) {
+      const dia = data || atual.prazo || hoje();
+      const novo = momento(dia, hora);
+      if (Date.parse(novo) > Date.now() && novo !== atual.lembrete_em) {
+        patch.lembrete_em = novo; patch.lembrete_enviado_em = null;
+        if (!patch.prazo && atual.prazo !== dia) patch.prazo = dia;
+        mudou.push(`aviso: ${atual.lembrete_em ? `${relDia(dataLocal(atual.lembrete_em))} ${horaLocal(atual.lembrete_em)}` : 'sem aviso'} → ${relDia(dia)} ${hora.slice(0, 5)}`);
+      }
+    }
   } else return { acao: 'corrigir', texto: 'Esse registro não dá para corrigir por aqui: use "desfaz" e mande de novo.' };
   if (!mudou.length) return { acao: 'corrigir', texto: 'Não entendi o que mudar. Ex.: "o valor é 3800", "era dia 16".' };
   await sb.from(a.tabela).update(patch).eq('id', a.registro_id);
@@ -436,8 +683,13 @@ async function agendaDoDia(sb: SB, dia: string) {
     const onde = e.local && !semAcento(e.titulo).includes(semAcento(e.local)) ? ` (${e.local})` : '';
     itens.push([h || '00:00', `• ${h ? h + ' ' : ''}${e.titulo}${onde}`]);
   }
-  const { data: ts } = await sb.from('tasks').select('titulo,prioridade').eq('feito', false).eq('prazo', dia);
-  if (dia !== hoje()) for (const t of ts || []) itens.push(['zz', `• Tarefa: ${t.titulo}${t.prioridade === 1 ? ' ❗' : ''}`]);
+  const { data: ts } = await sb.from('tasks').select('titulo,prioridade,lembrete_em').eq('feito', false).eq('prazo', dia);
+  for (const t of ts || []) {
+    const h = t.lembrete_em && dataLocal(t.lembrete_em) === dia ? horaLocal(t.lembrete_em) : '';
+    // Hoje, a tarefa sem hora já aparece nas pendências
+    if (h) itens.push([h, `• ${h} ⏰ ${t.titulo}${t.prioridade === 1 ? ' ❗' : ''}`]);
+    else if (dia !== hoje()) itens.push(['zz', `• Tarefa: ${t.titulo}${t.prioridade === 1 ? ' ❗' : ''}`]);
+  }
   return itens.sort((a, b) => a[0].localeCompare(b[0])).map(i => i[1]);
 }
 
@@ -547,6 +799,9 @@ const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
 const dias = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 864e5);
 const relDia = (iso: string) => { const n = dias(hoje(), iso); return n === 0 ? 'hoje' : n === 1 ? 'amanhã' : n === -1 ? 'ontem' : diaDm(iso); };
 const atraso = (iso: string) => { const n = dias(iso, hoje()); return n > 0 ? ` (atraso de ${n} ${n === 1 ? 'dia' : 'dias'})` : ''; };
+const agoraHHMM = () => horaLocal(new Date().toISOString());
+// Pipa não tem horário de verão: sempre -03:00
+const momento = (dia: string, hora: string) => new Date(`${dia}T${hora.slice(0, 5)}:00-03:00`).toISOString();
 const dataLocal = (ts: string) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date(ts));
 const horaLocal = (ts: string) => new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'America/Sao_Paulo' }).format(new Date(ts));
 const saudacao = () => { const h = +new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: 'America/Sao_Paulo' }).format(new Date()); return h >= 5 && h < 12 ? 'Bom dia' : h < 18 && h >= 12 ? 'Boa tarde' : 'Boa noite'; };

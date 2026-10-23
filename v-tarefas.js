@@ -1,5 +1,5 @@
 import { S, save } from './store.js';
-import { h, today, addDays, relDate, areaTag, AREAS } from './util.js';
+import { h, today, addDays, relDate, areaTag, AREAS, hhmm } from './util.js';
 import { taskForm, toggleTask } from './ui.js';
 
 let area = 'todas';
@@ -20,7 +20,7 @@ export function render(el) {
   const li = t => `<li class="row ${t.feito ? 'is-done' : ''}" style="--c:${(AREAS[t.area] || AREAS.inbox).cor}">
     <button class="tick ${t.feito ? 'on' : ''}" data-t="${t.id}" aria-label="${t.feito ? 'Reabrir' : 'Concluir'}"></button>
     <button class="row-main" data-e="${t.id}"><span class="row-title">${h(t.titulo)}${t.prioridade === 1 ? ' <span class="prio">alta</span>' : ''}</span></button>
-    <span class="row-meta">${area === 'todas' ? areaTag(t.area) : ''} ${t.prazo ? relDate(t.prazo) : ''}</span></li>`;
+    <span class="row-meta">${area === 'todas' ? areaTag(t.area) : ''} ${t.prazo ? relDate(t.prazo) : ''}${t.lembrete_em && !t.feito ? ` <span class="aviso" title="Aviso no WhatsApp">⏰ ${hhmm(t.lembrete_em)}</span>` : ''}</span></li>`;
 
   el.innerHTML = `
   <div class="view-head">

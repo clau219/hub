@@ -50,6 +50,24 @@ describe('Tarefas', () => {
     assert.equal(texto('#modalTitle'), 'Tarefa');
     assert.equal($('#modal [name=titulo]').value, 'Semana');
   });
+  test('aviso no WhatsApp: precisa de prazo, grava a hora de Pipa e aparece na lista com ⏰', async () => {
+    await clicar('[data-e=c]');
+    preencher($('#modal'), { prazo: '', aviso: '15:30' });
+    await enviarModal();
+    assert.match(texto('#modal'), /Escolha o prazo/);
+    preencher($('#modal'), { prazo: '2026-10-22' });
+    await enviarModal();
+    const t = S.tasks.find(t => t.id === 'c');
+    assert.deepEqual([t.lembrete_em, t.lembrete_enviado_em], ['2026-10-22T18:30:00.000Z', null]);
+    T.render(el);
+    assert.match(texto($$('#view .row').find(r => /Semana/.test(r.textContent))), /⏰ 15:30/);
+    // Reabrir e salvar sem mudar a hora não reenvia um aviso já enviado
+    await (await hub('store.js')).save('tasks', { lembrete_enviado_em: '2026-10-22T18:30:00Z' }, 'c');
+    await clicar('[data-e=c]');
+    assert.equal($('#modal [name=aviso]').value, '15:30');
+    await enviarModal();
+    assert.equal(S.tasks.find(t => t.id === 'c').lembrete_enviado_em, '2026-10-22T18:30:00Z');
+  });
   test('sem tarefas abertas', async () => {
     await trocarDados({});
     T.render(el);

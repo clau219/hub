@@ -338,6 +338,172 @@ describe('canal do dono: consultas', () => {
   });
 });
 
+// IA falsa que distingue a leitura de arquivo (mensagem com imagem/PDF) do comando de texto
+const iaDupla = (doc, cmd) => { globalThis.__anthropic = { chamadas: [], responder: p => Array.isArray(p.messages[0].content) ? DOC(doc) : CMD(typeof cmd === 'function' ? cmd(p) : cmd) }; };
+const DOC = x => ({ tipo: 'comprovante', valor: 0, data: '', vencimento: '', recebedor: '', pagador: '', descricao: '', categoria: '', casa: 'nenhum', negocio: 'nenhum', ...x });
+async function foto(legenda = '', { pdf = false } = {}) {
+  const url = `https://midia.z-api.io/dono/${++seq}.${pdf ? 'pdf' : 'jpg'}`;
+  simular(url, () => new Response(new Uint8Array([1, 2, 3]), { headers: { 'content-type': pdf ? 'application/pdf' : 'image/jpeg' } }));
+  const r = await zapi(undefined, pdf ? { text: undefined, document: { documentUrl: url, mimeType: 'application/pdf', fileName: 'boleto.pdf' } }
+    : { text: undefined, image: { imageUrl: url, mimeType: 'image/jpeg', caption: legenda } });
+  assert.equal(r.length, 1);
+  return r[0].message;
+}
+
+describe('canal do dono: foto e PDF', () => {
+  test('comprovante de Pix que ele pagou: propõe o gasto, só grava no "sim" (com a correção junto)', async () => {
+    novoBanco(DADOS());
+    iaDupla({ valor: 120, data: '2026-10-18', recebedor: 'MARIA SILVA', pagador: 'CLAUDIO ROBERTO SOUSA BRAGA', descricao: 'Faxina', categoria: 'Faxina e limpeza', casa: 'QS39' });
+    const r = await foto('faxina frida');
+    assert.match(r, /Comprovante: R\$ 120 para MARIA SILVA em 18\/10/);
+    assert.match(r, /Lanço como gasto: Faxina · Faxina e limpeza · Casa Frida\?/);
+    assert.match(r, /"sim"/);
+    assert.equal(banco().t('fin_tx').length, 0, 'nada gravado antes do sim');
+    assert.match(JSON.stringify(globalThis.__anthropic.chamadas[0].messages[0].content), /faxina frida/);
+    iaDupla({}, { acao: 'confirmar', casa: 'QS40' });
+    const ok = await diz('sim, mas é da casa azul');
+    const t = banco().t('fin_tx')[0];
+    assert.deepEqual([t.valor, t.data, t.casa, t.negocio, t.categoria], [-120, '2026-10-18', 'QS40', 'alugueis', 'Faxina e limpeza']);
+    assert.match(ok, /Gasto: R\$ 120/);
+    assert.equal(banco().t('wa_settings')[0].dono_pendente, null);
+    assert.match(globalThis.__anthropic.chamadas[0].system, /PROPOSTA ESPERANDO.*Lanço como gasto/s);
+  });
+  test('comprovante recebido por ele: propõe o pagamento da oportunidade de quem pagou', async () => {
+    novoBanco(DADOS({ contacts: [{ id: 'c1', nome: 'Anabela Souza' }], deals: [{ id: 'd1', titulo: 'DJ — Anabela Souza', negocio: 'dj', etapa: 'fechado', contato_id: 'c1', valor: 3500, pagamentos: [] }] }));
+    iaDupla({ valor: 1750, data: '2026-10-19', recebedor: 'Claudio Roberto S Braga', pagador: 'ANABELA DE SOUZA LIMA' });
+    const r = await foto();
+    assert.match(r, /R\$ 1\.750 de ANABELA DE SOUZA LIMA/);
+    assert.match(r, /pagamento de \*DJ — Anabela Souza\* \(falta R\$ 3\.500\)/);
+    iaDupla({}, { acao: 'confirmar' });
+    assert.match(await diz('sim'), /falta R\$ 1\.750/);
+    assert.deepEqual(banco().t('deals')[0].pagamentos.map(p => [p.valor, p.data]), [[1750, HOJE]]);
+  });
+  test('comprovante recebido de quem não tem oportunidade: pede de quem é; "sim, é da Anabela" registra', async () => {
+    novoBanco(DADOS({ contacts: [{ id: 'c1', nome: 'Anabela Souza' }], deals: [{ id: 'd1', titulo: 'DJ — Anabela Souza', negocio: 'dj', etapa: 'fechado', contato_id: 'c1', valor: 3500, pagamentos: [] }] }));
+    iaDupla({ valor: 500, recebedor: 'CLAUDIO BRAGA', pagador: 'JOAO PEREIRA' });
+    assert.match(await foto(), /Não achei oportunidade aberta dessa pessoa/);
+    iaDupla({}, { acao: 'confirmar', cliente: 'Anabela' });
+    await diz('sim, é da anabela');
+    assert.equal(banco().t('deals')[0].pagamentos[0].valor, 500);
+  });
+  test('boleto: propõe tarefa com aviso no vencimento às 9h', async () => {
+    novoBanco(DADOS());
+    iaDupla({ tipo: 'boleto', valor: 312.4, vencimento: '2026-10-25', recebedor: 'COSERN', descricao: 'Conta de luz Cosern', casa: 'QS50' });
+    const r = await foto('', { pdf: true });
+    assert.match(r, /Boleto: Conta de luz Cosern · R\$ 312,40 · vence domingo, 25\/10/);
+    assert.match(r, /aviso no dia do vencimento às 9h/);
+    iaDupla({}, { acao: 'confirmar' });
+    await diz('pode');
+    const t = banco().t('tasks')[0];
+    assert.deepEqual([t.titulo, t.prazo, t.lembrete_em, t.prioridade, t.area], ['Pagar Conta de luz Cosern (R$ 312,40)', '2026-10-25', '2026-10-25T12:00:00.000Z', 1, 'alugueis']);
+  });
+  test('"não" descarta; pedir outra coisa também descarta (um "sim" depois não grava o antigo)', async () => {
+    novoBanco(DADOS());
+    iaDupla({ valor: 80, recebedor: 'POSTO', descricao: 'Gasolina', categoria: 'Combustível' });
+    await foto();
+    iaDupla({}, { acao: 'cancelar' });
+    assert.equal(await diz('não'), 'Ok, descartei.');
+    iaDupla({ valor: 80, recebedor: 'POSTO', descricao: 'Gasolina', categoria: 'Combustível' });
+    await foto();
+    iaDupla({}, { acao: 'consultar', consulta: 'pendencias' });
+    await diz('pendências?');
+    iaDupla({}, { acao: 'confirmar' });
+    assert.match(await diz('sim'), /Não tem nada esperando/);
+    assert.equal(banco().t('fin_tx').length, 0);
+  });
+  test('arquivo que não é comprovante nem boleto: avisa, sem proposta', async () => {
+    novoBanco(DADOS());
+    iaDupla({ tipo: 'outro' });
+    assert.match(await foto(), /Não reconheci/);
+    assert.equal(banco().t('wa_settings')[0].dono_pendente ?? null, null);
+  });
+  test('download falhou: avisa', async () => {
+    novoBanco(DADOS());
+    iaDupla({ valor: 10 });
+    const r = await zapi(undefined, { text: undefined, image: { imageUrl: 'https://midia.z-api.io/sumiu.jpg', mimeType: 'image/jpeg' } });
+    assert.match(r[0].message, /Não consegui ler o arquivo/);
+  });
+});
+
+describe('canal do dono: áudio', () => {
+  const audio = async () => {
+    const url = `https://midia.z-api.io/dono/${++seq}.ogg`;
+    simular(url, () => new Response(new Uint8Array([9, 9]), { headers: { 'content-type': 'audio/ogg; codecs=opus' } }));
+    const r = await zapi(undefined, { text: undefined, audio: { audioUrl: url, mimeType: 'audio/ogg; codecs=opus' } });
+    assert.equal(r.length, 1);
+    return r[0].message;
+  };
+  test('com GROQ_API_KEY: transcreve, mostra o que entendeu e executa', async () => {
+    novoBanco(DADOS());
+    definirEnv('GROQ_API_KEY', 'gsk-teste');
+    simular('https://api.groq.com/openai/v1/audio/transcriptions', { text: 'me lembra de ligar pro contador amanhã' });
+    ia({ acao: 'criar_tarefa', titulo: 'Ligar para o contador', data: '2026-10-20' });
+    const r = await audio();
+    assert.match(r, /^🎙️ _"me lembra de ligar pro contador amanhã"_/);
+    assert.match(r, /Tarefa: Ligar para o contador/);
+    const g = chamadasPara('https://api.groq.com/openai/v1/audio/transcriptions')[0];
+    assert.equal(g.headers.authorization, 'Bearer gsk-teste');
+    assert.match(globalThis.__anthropic.chamadas[0].messages[0].content, /ligar pro contador amanhã/);
+    definirEnv('GROQ_API_KEY', undefined);
+  });
+  test('sem chave de transcrição: explica e não chama a IA', async () => {
+    novoBanco(DADOS());
+    ia(() => { throw new Error('não deveria chamar a IA'); });
+    assert.match(await audio(), /falta a chave de transcrição/);
+  });
+  test('transcrição recusada: mostra o motivo', async () => {
+    novoBanco(DADOS());
+    definirEnv('GROQ_API_KEY', 'gsk-teste');
+    simular('https://api.groq.com/openai/v1/audio/transcriptions', { status: 401, json: { error: { message: 'Invalid API Key' } } });
+    assert.match(await audio(), /transcrição 401: Invalid API Key/);
+    definirEnv('GROQ_API_KEY', undefined);
+  });
+});
+
+describe('canal do dono: lembretes com hora', () => {
+  test('"me lembra às 15h de ligar pro contador": tarefa hoje com aviso às 15h (horário de Pipa)', async () => {
+    novoBanco(DADOS());
+    const r = await diz('me lembra às 15h de ligar pro contador', { acao: 'criar_tarefa', titulo: 'Ligar para o contador', hora: '15:00' });
+    const t = banco().t('tasks')[0];
+    assert.deepEqual([t.titulo, t.prazo, t.lembrete_em, t.lembrete_enviado_em], ['Ligar para o contador', HOJE, '2026-10-19T18:00:00.000Z', null]);
+    assert.match(r, /hoje · ⏰ aviso às 15:00 aqui/);
+    assert.match(globalThis.__anthropic.chamadas[0].system, /agora são 12:00/);
+  });
+  test('hora que já passou hoje, sem data: vai para amanhã', async () => {
+    novoBanco(DADOS());
+    await diz('me lembra às 9h de regar', { acao: 'criar_tarefa', titulo: 'Regar as plantas', hora: '09:00' });
+    assert.deepEqual([banco().t('tasks')[0].prazo, banco().t('tasks')[0].lembrete_em], ['2026-10-20', '2026-10-20T12:00:00.000Z']);
+  });
+  test('data de hoje com hora que já passou: cria sem aviso e avisa', async () => {
+    novoBanco(DADOS());
+    const r = await diz('hoje às 8h', { acao: 'criar_tarefa', titulo: 'X', data: HOJE, hora: '08:00' });
+    assert.equal(banco().t('tasks')[0].lembrete_em, null);
+    assert.match(r, /esse horário já passou/);
+  });
+  test('"era às 16h" corrige o aviso', async () => {
+    novoBanco(DADOS());
+    await diz('me lembra às 15h', { acao: 'criar_tarefa', titulo: 'Ligar', hora: '15:00' });
+    const r = await diz('era às 16h', { acao: 'corrigir', hora: '16:00' });
+    assert.equal(banco().t('tasks')[0].lembrete_em, '2026-10-19T19:00:00.000Z');
+    assert.match(r, /aviso: hoje 15:00 → hoje 16:00/);
+  });
+  test('"adia 1h" depois do lembrete: novo aviso; "desfaz" volta', async () => {
+    novoBanco(DADOS({ tasks: [{ id: 't1', titulo: 'Ligar para o contador', feito: false, prazo: HOJE, lembrete_em: '2026-10-19T14:55:00Z', lembrete_enviado_em: '2026-10-19T14:55:00Z' }] }));
+    const r = await diz('adia 1h', { acao: 'adiar', data: HOJE, hora: '13:00' });
+    const t = banco().t('tasks')[0];
+    assert.deepEqual([t.lembrete_em, t.lembrete_enviado_em], ['2026-10-19T16:00:00.000Z', null]);
+    assert.match(r, /Adiado: Ligar para o contador → hoje às 13:00/);
+    assert.match(globalThis.__anthropic.chamadas[0].system, /Último lembrete enviado a ele.*Ligar para o contador/s);
+    await diz('desfaz', { acao: 'desfazer' });
+    assert.equal(banco().t('tasks')[0].lembrete_enviado_em, '2026-10-19T14:55:00Z');
+  });
+  test('"feito" sem dizer qual conclui a tarefa do último lembrete', async () => {
+    novoBanco(DADOS({ tasks: [{ id: 't1', titulo: 'Ligar para o contador', feito: false, lembrete_enviado_em: '2026-10-19T14:55:00Z' }, { id: 't2', titulo: 'Outra', feito: false }] }));
+    assert.match(await diz('feito', { acao: 'concluir_tarefa' }), /Concluída: Ligar para o contador/);
+    assert.equal(banco().t('tasks').find(t => t.id === 't1').feito, true);
+  });
+});
+
 describe('canal do dono: modo teste', () => {
   test('x-hub-cron com o número do dono roda o comando sem enviar', async () => {
     novoBanco(DADOS());

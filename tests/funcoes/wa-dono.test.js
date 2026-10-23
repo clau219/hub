@@ -86,3 +86,44 @@ describe('wa-dono: resumo do dia', () => {
     assert.equal(banco().t('dono_msgs').length, 0);
   });
 });
+
+describe('wa-dono: lembretes com hora', () => {
+  const T = (id, x) => ({ id, titulo: `Tarefa ${id}`, feito: false, lembrete_enviado_em: null, ...x });
+  const lembretes = () => fn(pedido('/wa-dono', { corpo: { lembretes: true }, auth: 'cron' })).then(lerJson);
+  test('manda só os vencidos nas últimas 6 h, ainda não enviados e abertos; marca como enviados', async () => {
+    novoBanco(DADOS({ tasks: [
+      T('venceu', { lembrete_em: '2026-10-19T14:59:00Z', notas: 'ramal 21' }),
+      T('futuro', { lembrete_em: '2026-10-19T15:30:00Z' }),
+      T('velho', { lembrete_em: '2026-10-19T08:00:00Z' }),
+      T('feito', { lembrete_em: '2026-10-19T14:00:00Z', feito: true }),
+      T('enviado', { lembrete_em: '2026-10-19T14:00:00Z', lembrete_enviado_em: '2026-10-19T14:00:00Z' }),
+    ] }));
+    const { corpo } = await lembretes();
+    assert.equal(corpo.enviados, 1);
+    const z = chamadasPara(ZURL).map(c => c.json());
+    assert.equal(z.length, 1);
+    assert.equal(z[0].phone, DONO);
+    assert.match(z[0].message, /⏰ \*Lembrete:\* Tarefa venceu\nramal 21/);
+    assert.match(z[0].message, /"adia 1h"/);
+    const t = Object.fromEntries(banco().t('tasks').map(x => [x.id, x]));
+    assert.ok(t.venceu.lembrete_enviado_em);
+    assert.equal(t.futuro.lembrete_enviado_em, null);
+    assert.equal(t.velho.lembrete_enviado_em, null);
+    assert.equal((await lembretes()).corpo.enviados, 0, 'não manda de novo');
+  });
+  test('Z-API falhou: o lembrete volta para a fila', async () => {
+    novoBanco(DADOS({ tasks: [T('a', { lembrete_em: '2026-10-19T14:59:00Z' })] }));
+    simular(ZURL, { status: 500, json: { error: 'desconectado' } });
+    assert.equal((await lembretes()).corpo.enviados, 0);
+    assert.equal(banco().t('tasks')[0].lembrete_enviado_em, null);
+  });
+  test('sem número do dono: nada sai', async () => {
+    novoBanco(DADOS({ tasks: [T('a', { lembrete_em: '2026-10-19T14:59:00Z' })] }, { dono_wa: null }));
+    assert.equal((await lembretes()).corpo.enviados, 0);
+    assert.equal(chamadasPara(ZURL).length, 0);
+  });
+  test('resumo mostra a tarefa com aviso na hora certa da agenda', async () => {
+    novoBanco(DADOS({ tasks: [T('a', { titulo: 'Ligar contador', prazo: '2026-10-20', lembrete_em: '2026-10-20T13:00:00Z' })] }));
+    assert.match((await resumo({ resumo: 'noite', previa: true })).corpo.texto, /10:00 ⏰ Ligar contador[\s\S]*22:00 DJ — Júlia/);
+  });
+});

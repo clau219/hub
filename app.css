@@ -198,6 +198,7 @@ svg.ico { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColo
 .late-lbl { color: var(--late); font-weight: 600; font-size: 12px; }
 .time { font-weight: 700; margin-right: 6px; }
 .prio { font-size: 11px; color: var(--late); font-weight: 700; background: var(--late-bg); border-radius: 999px; padding: 1px 7px; vertical-align: 1px; }
+.aviso { font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .kind { text-align: center; color: var(--c); font-size: 15px; }
 .tick { position: relative; width: 20px; height: 20px; margin: 0 auto; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--c) 70%, var(--line)); background: var(--surface); cursor: pointer; padding: 0; transition: background .15s, transform .15s; }
 .tick::before { content: ''; position: absolute; inset: -12px; } /* área de toque de 44px */

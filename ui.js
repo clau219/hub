@@ -1,4 +1,4 @@
-import { h, today, addDays, fluxo, AREAS, ABERTAS, etapa, hhmm, localDate, waLink, msgDeal, brl, fmtDate, FORMAS_PGTO, recebido, saldoDeal } from './util.js';
+import { h, today, addDays, fluxo, AREAS, ABERTAS, etapa, hhmm, localDate, relDate, waLink, msgDeal, brl, fmtDate, FORMAS_PGTO, recebido, saldoDeal } from './util.js';
 import { S, save, del, ensureContact, byId, contactName, contatoPorNome, prop } from './store.js';
 import { checklistHtml, bindChecklist, lerChecklist, alternar, ETAPAS_HOSP } from './hospedagem.js';
 import * as db from './db.js';
@@ -291,10 +291,19 @@ export function taskForm(t = {}) {
       <label>Área<select name="area">${Object.entries(AREAS).filter(([k]) => k !== 'aluguel').map(([k, a]) => opt(k, a.nome, t.area || 'inbox')).join('')}</select></label>
       <label>Prazo<input name="prazo" type="date" value="${h(t.prazo)}"></label>
       <label>Prioridade<select name="prioridade">${[[1, 'Alta'], [2, 'Normal'], [3, 'Baixa']].map(([v, l]) => opt(String(v), l, String(t.prioridade || 2))).join('')}</select></label>
+      <label>Aviso no WhatsApp<input name="aviso" type="time" value="${t.lembrete_em ? hhmm(t.lembrete_em) : ''}"></label>
     </div>
     <label>Notas<textarea name="notas" rows="2">${h(t.notas)}</textarea></label>`, {
     extra: t.id ? `<button type="button" class="btn" id="toDeal">Virar oportunidade</button><button type="button" class="btn danger" id="delTask">Excluir</button>` : '',
-    onSubmit: async f => { await save('tasks', { ...f, prioridade: +f.prioridade }, t.id); toast('Tarefa salva'); },
+    onSubmit: async f => {
+      // Aviso no WhatsApp (canal do dono): no dia do prazo, na hora escolhida, horário de Pipa
+      const { aviso, ...row } = f;
+      if (aviso && !row.prazo) throw new Error('Escolha o prazo: o aviso sai nesse dia, na hora marcada.');
+      const lembrete_em = aviso ? new Date(`${row.prazo}T${aviso}:00-03:00`).toISOString() : null;
+      const mudou = lembrete_em !== (t.lembrete_em ? new Date(t.lembrete_em).toISOString() : null);
+      await save('tasks', { ...row, prioridade: +row.prioridade, ...(mudou ? { lembrete_em, lembrete_enviado_em: null } : {}) }, t.id);
+      toast(mudou && lembrete_em ? `Tarefa salva · aviso ${relDate(row.prazo)} às ${aviso}` : 'Tarefa salva');
+    },
   });
   const m = dlg();
   m.querySelector('#delTask')?.addEventListener('click', async () => {

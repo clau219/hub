@@ -1,10 +1,11 @@
 // Resumo do dia no WhatsApp do dono (wa_settings.dono_wa), mandado pelo número das casas (Z-API).
 // Cron 'dono-resumo-manha' (7h30) e 'dono-resumo-noite' (18h): POST x-hub-cron { "resumo": "manha" | "noite" }.
 // Botão "Mandar resumo agora" em Ajustes: mesmo corpo com o JWT do usuário. { "previa": true } só devolve o texto.
+// Cron 'dono-lembretes' (a cada minuto): { "lembretes": true } manda os avisos de tarefa com hora que venceram.
 // As mensagens do dono para o número das casas são tratadas no wa-webhook (_shared/dono.ts).
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
 import { enviarZapi } from '../_shared/wa.ts';
-import { donoWa, resumoDoDia } from '../_shared/dono.ts';
+import { donoWa, resumoDoDia, enviarLembretes } from '../_shared/dono.ts';
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-hub-cron' };
 
@@ -15,6 +16,10 @@ Deno.serve(async req => {
   const cron = !!req.headers.get('x-hub-cron');
   if (!(await autorizado(req, sb))) return json({ error: 'não autorizado' }, 401);
   const b = await req.json().catch(() => ({}));
+  if (b.lembretes) {
+    if (!Deno.env.get('ZAPI_INSTANCE')) return json({ enviados: 0, motivo: 'Z-API não configurada' });
+    return json(await enviarLembretes(sb, (to, t) => enviarZapi(to, t, { digitando: 0 })));
+  }
   const quando = b.resumo === 'noite' ? 'noite' : 'manha';
 
   const { data: cfg } = await sb.from('wa_settings').select('dono_wa,dono_resumo').eq('id', 1).maybeSingle();
