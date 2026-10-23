@@ -173,15 +173,16 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
   } else if (!datas) {
     // Falta a data: pede só o que falta (não chuta)
     texto = 'Para eu verificar a disponibilidade e os valores, me diga a data de entrada, a data de saída e quantas pessoas vão se hospedar.';
-  } else if (!x.datas_exatas) {
-    // Data vaga ("fim de semana", "Réveillon", "umas 5 noites"): confirma a data exata antes de cotar
-    const pessoas = x.hospedes ? '' : ' e quantas pessoas vão se hospedar';
-    texto = `Para eu conferir certinho: qual a data exata de entrada e de saída${pessoas}? Entendi de ${dm(datas.checkin)} a ${dm(datas.checkout)}, está certo?`;
   } else {
-    cot = await cotar(datas.checkin, datas.checkout, x.hospedes || 2);
+    // Consulta o Airbnb já com a melhor interpretação (fim de semana, Réveillon, só a entrada = 2 noites,
+    // pessoas não ditas = 2) e diz no fim o que considerou, para o cliente corrigir se for outra coisa
+    const pessoas = x.hospedes || 2;
+    cot = await cotar(datas.checkin, datas.checkout, pessoas);
     const casasOk = (cot?.casas || []).filter((c: any) => c.status !== 'erro');
     if (!cot?.mensagem || !casasOk.length) return { deal_id, respondeu: false, motivo: 'consulta ao Airbnb falhou: fica para você', extracao: x, cotacao: cot };
     texto = cot.mensagem;
+    const supos = [!x.datas_exatas || datas.suposto ? `de ${dm(datas.checkin)} a ${dm(datas.checkout)}` : '', !x.hospedes ? `${pessoas} pessoas` : ''].filter(Boolean);
+    if (supos.length) texto += `\n\nConsiderei ${supos.join(', para ')}. Se for outra data ou mais gente, me avise que eu refaço.`;
   }
   texto = saudar(texto, historico);
 
@@ -303,13 +304,13 @@ Casas: ${casas.map(c => `${c.id} = ${c.nome}`).join('; ')}.
 
 Classifique a ÚLTIMA mensagem do cliente, usando as anteriores como contexto:
 - "disponibilidade_preco": pergunta se há vaga, quanto custa, valores ou diária para um período (mesmo que ainda sem datas).
-- "confirmar_reserva": quer fechar, reservar, pagar, mandar comprovante ou negociar desconto.
+- "confirmar_reserva": quer fechar, reservar, pagar, mandar comprovante ou negociar desconto. Escolher uma casa ou dizer novas datas depois de receber valores ("a azul, dia 05/11", "e para o feriado?") NÃO é confirmar: é "disponibilidade_preco".
 - "saudacao": só cumprimenta ou chama ("oi", "olá", "bom dia", "tudo bem?", "?", "alguém aí?") ou pede informações de forma genérica ("queria informações sobre as casas"), sem pergunta concreta.
 - "duvida": pergunta sobre as casas, regras, localização, horários, pets ou comodidades que as INFORMAÇÕES DAS CASAS abaixo respondem por completo.
 - "outro": qualquer outra coisa (dúvida que as informações não respondem, reclamação, pedido especial, conversa).
 
 Datas: converta para AAAA-MM-DD. Datas sem ano são a próxima ocorrência a partir de hoje. "Fim de semana" = sexta a domingo (saída no domingo). Feriados citados pelo nome (Réveillon, Carnaval etc.): use as datas do próximo feriado. Se o cliente der só a entrada e o número de noites, preencha noites e deixe checkout nulo. Se não houver data clara, deixe nulo: nunca invente.
-datas_exatas: true SOMENTE se o cliente disse o dia e o mês da entrada e também o dia da saída ou o número exato de noites (ex.: "de 17 a 20 de novembro", "dia 5/12, 3 noites"), ou se respondeu confirmando ("sim", "isso", "certo") as datas que o Robô perguntou. false quando usou expressões vagas: "fim de semana", "semana que vem", feriado pelo nome (Réveillon, Carnaval, Natal, Páscoa), só o mês, "umas X noites", "entre X e Y", "por volta de". Mesmo com datas_exatas false, preencha checkin/checkout com a sua melhor interpretação (o sistema vai perguntar ao cliente se está certo).
+datas_exatas: true SOMENTE se o cliente disse o dia e o mês da entrada e também o dia da saída ou o número exato de noites (ex.: "de 17 a 20 de novembro", "dia 5/12, 3 noites"), ou se respondeu confirmando ("sim", "isso", "certo") as datas que o Robô perguntou. false quando usou expressões vagas: "fim de semana", "semana que vem", feriado pelo nome (Réveillon, Carnaval, Natal, Páscoa), só o mês, "umas X noites", "entre X e Y", "por volta de". Mesmo com datas_exatas false, preencha checkin/checkout com a sua melhor interpretação (o sistema consulta com essa interpretação e avisa o cliente do que considerou).
 casa: a casa citada pelo nome, ou "qualquer". hospedes: total de pessoas (adultos + crianças), nulo se não disser.
 resumo: até 8 palavras para o card, ex.: "Vaga 20-23/11, 6 pessoas, Casa Azul".
 resposta: só quando assunto = "duvida": a resposta para o cliente, em português do Brasil, curta e cordial, no tom de quem já está conversando (sem "Olá"), usando SOMENTE fatos das informações das casas, sem inventar nem prometer nada além delas. Nos outros assuntos, nulo.
@@ -333,10 +334,12 @@ ${base || '(nenhuma informação cadastrada: nunca use "duvida")'}
 function normalizarDatas(x: Extracao) {
   const ok = (s: string | null) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s));
   if (!ok(x.checkin)) return null;
-  let checkout = ok(x.checkout) ? x.checkout! : x.noites && x.noites > 0 ? addDays(x.checkin!, x.noites) : null;
-  if (!checkout || checkout <= x.checkin! || x.checkin! < hoje()) return null;
+  // Só a entrada, sem saída nem noites: considera 2 noites (o robô avisa que supôs)
+  const suposto = !ok(x.checkout) && !(x.noites && x.noites > 0);
+  const checkout = ok(x.checkout) ? x.checkout! : x.noites && x.noites > 0 ? addDays(x.checkin!, x.noites) : addDays(x.checkin!, 2);
+  if (checkout <= x.checkin! || x.checkin! < hoje()) return null;
   if (dias(x.checkin!, checkout) > 60) return null;
-  return { checkin: x.checkin!, checkout };
+  return { checkin: x.checkin!, checkout, suposto };
 }
 
 async function cotar(checkin: string, checkout: string, adultos: number) {
