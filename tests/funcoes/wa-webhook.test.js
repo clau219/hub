@@ -676,6 +676,74 @@ describe('wa-webhook: reserva direta com sinal por Pix e comprovante lido pela I
   });
 });
 
+describe('wa-webhook: pets na consulta, no sinal e na reserva', () => {
+  const AIRBNB = 'https://projeto.supabase.co/functions/v1/airbnb-quote';
+  const troca = async (texto, extracao) => { responderIA(IA(extracao)); return (await teste({ texto })).corpo; };
+  const BASE = { geral: { pix_chave: '12.345.678/0001-90', pix_nome: 'Claudio Roberto Sousa Braga LTDA', sinal_pct: '50' } };
+  const PEDIDO = { casa: 'QS50', checkin: '2026-11-17', checkout: '2026-11-20', noites: null, hospedes: 4, pets: 1, datas_exatas: true, em: '2026-10-19T10:00:00Z' };
+  const COT_PET = { checkin: '2026-11-17', checkout: '2026-11-20', noites: 3, adultos: 4, pets: 1, mensagem: 'Olá! Para 17/11 a 20/11 (3 noites, 4 hóspedes e 1 pet):\n• Casa Terracota: disponível, R$ 1.850 no total\n• Casa Azul: não aceita pets',
+    casas: [{ id: 'QS50', nome: 'Casa Terracota', status: 'livre', total: 1850 }, { id: 'QS40', nome: 'Casa Azul', status: 'nao_aceita_pet' }] };
+  const dados = (pedido = PEDIDO) => DADOS({ contacts: [{ id: 'c1', nome: 'Ana Lima' }], deals: [{ id: 'd1', etapa: 'orcamento', contato_id: 'c1', pagamentos: [] }],
+    wa_contacts: [{ wa_id: WA, contato_id: 'c1', deal_id: 'd1', pedido }], app_config: [{ key: 'wa_base', value: JSON.stringify(BASE) }] });
+
+  test('"levo um cachorrinho": guarda o pet no pedido, consulta com pets e o pet continua valendo nas trocas seguintes', async () => {
+    novoBanco(DADOS());
+    simular(AIRBNB, COT_PET);
+    await troca('somos 4 e levo um cachorrinho', { hospedes: 4, pets: 1 });
+    assert.equal(banco().t('wa_contacts')[0].pedido.pets, 1);
+    const b = await troca('de 17 a 20 de novembro', { checkin: '2026-11-17', checkout: '2026-11-20', datas_exatas: true });
+    assert.deepEqual(chamadasPara(/airbnb-quote/)[0].json(), { checkin: '2026-11-17', checkout: '2026-11-20', adultos: 4, pets: 1 });
+    assert.match(b.texto, /4 hóspedes e 1 pet/);
+    assert.match(b.texto, /Casa Azul: não aceita pets/);
+  });
+  test('"não vamos levar pet" zera o pet: consulta sem pets', async () => {
+    novoBanco(DADOS({ wa_contacts: [{ wa_id: WA, pedido: { ...PEDIDO, em: new Date().toISOString() } }] }));
+    simular(AIRBNB, COTACAO);
+    await troca('desistimos do cachorro, vamos sem pet', { pets: 0 });
+    assert.deepEqual(chamadasPara(/airbnb-quote/)[0].json(), { checkin: '2026-11-17', checkout: '2026-11-20', adultos: 4 });
+    assert.equal(banco().t('wa_contacts')[0].pedido.pets, 0);
+  });
+  test('a IA recebe os valores já com a taxa de pet e a casa que não aceita pets', async () => {
+    novoBanco(DADOS({ wa_contacts: [{ wa_id: WA, pedido: { ...PEDIDO, em: new Date().toISOString() } }] }));
+    simular(AIRBNB, COT_PET);
+    responderIA(IA({ hospedes: 4 }));
+    await teste({ texto: 'e aí, tem vaga?' });
+    const redacao = globalThis.__anthropic.chamadas.map(q => JSON.stringify(q)).find(s => s.includes('Período consultado'));
+    assert.match(redacao, /4 hóspedes e 1 pet \(valores já com a taxa de pet\)/);
+    assert.match(redacao, /Casa Azul: NÃO ACEITA PETS/);
+  });
+  test('reservar com pet: total e sinal com a taxa de pet, e o pet aparece na mensagem e no sinal', async () => {
+    novoBanco(dados());
+    simular(AIRBNB, COT_PET);
+    responderIA(IA({ assunto: 'reservar', casa: 'QS50' }));
+    const { corpo } = await teste({ texto: 'quero reservar a terracota' });
+    assert.deepEqual(chamadasPara(/airbnb-quote/)[0].json(), { checkin: '2026-11-17', checkout: '2026-11-20', adultos: 4, pets: 1 });
+    assert.match(corpo.texto, /^Olá! Ótimo! Para reservar a Casa Terracota de terça, 17\/11, a sexta, 20\/11, para 4 pessoas e 1 pet, o total é R\$ 1\.850\.\nO sinal é de R\$ 925 \(50%\)/);
+    const s = banco().t('wa_contacts')[0].pedido.sinal;
+    assert.deepEqual([s.pets, s.total, s.valor], [1, 1850, 925]);
+  });
+  test('reservar com pet uma casa que não aceita pets: diz e mostra as que aceitam; nada de Pix', async () => {
+    novoBanco(dados({ ...PEDIDO, casa: 'QS40' }));
+    simular(AIRBNB, COT_PET);
+    responderIA(IA({ assunto: 'reservar', casa: 'QS40' }));
+    const { corpo } = await teste({ texto: 'quero reservar a azul' });
+    assert.equal(corpo.texto, 'Olá! A Casa Azul não aceita pets.\nAceitam pets e estão livres de 17/11 a 20/11:\n• Casa Terracota: R$ 1.850 no total');
+    assert.equal(banco().t('wa_contacts')[0].pedido.sinal ?? null, null);
+  });
+  test('comprovante de reserva com pet: confere no Airbnb com o pet e anota o pet na reserva', async () => {
+    const SINAL = { casa: 'QS50', nome: 'Casa Terracota', checkin: '2026-11-17', checkout: '2026-11-20', hospedes: 4, pets: 1, total: 1850, valor: 925, pct: 50, desde: '2026-10-19T14:00:00Z' };
+    novoBanco(dados({ ...PEDIDO, sinal: SINAL }));
+    simular(AIRBNB, COT_PET);
+    responderIA(q => (q.system.includes('comprovantes de Pix')
+      ? { e_comprovante_pix: true, valor: 925, recebedor_nome: 'CLAUDIO ROBERTO SOUSA BRAGA LTDA', recebedor_chave: '12.345.678/0001-90', pagador_nome: 'ANA LIMA', data_hora: '2026-10-19T11:55:00-03:00', e2e: 'E18236120202610191455s0123456789' }
+      : IA()));
+    const { corpo } = await teste({ texto: '', midia: { mime: 'image/jpeg', base64: '/9j/AQID' } });
+    assert.deepEqual(chamadasPara(/airbnb-quote/)[0].json(), { checkin: '2026-11-17', checkout: '2026-11-20', adultos: 4, pets: 1 });
+    assert.match(banco().t('bookings')[0].notas, /4 pessoas e 1 pet\./);
+    assert.match(corpo.texto, /Casa Terracota, de terça, 17\/11, a sexta, 20\/11, para 4 pessoas e 1 pet\./);
+  });
+});
+
 describe('wa-webhook: nenhum campo a preencher sai para o cliente', () => {
   test('resposta de dúvida com [nome]: não envia e deixa para você', async () => {
     novoBanco(DADOS({ app_config: [{ key: 'wa_base', value: JSON.stringify({ geral: { pets: 'Aceitamos pet pequeno.' } }) }] }));

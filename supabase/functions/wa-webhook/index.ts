@@ -206,7 +206,7 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
     // Falta algo para consultar: pergunta só isso, de forma específica (não chuta data nem número de pessoas)
     texto = falta ? pergunta(falta, pedido!) : PEDE_TUDO;
   } else {
-    cot = await cotar(datas!.checkin, datas!.checkout, pedido!.hospedes!);
+    cot = await cotar(datas!.checkin, datas!.checkout, pedido!.hospedes!, pedido!.pets);
     const casasOk = (cot?.casas || []).filter((c: any) => c.status !== 'erro');
     if (!cot?.mensagem || !casasOk.length) return { deal_id, respondeu: false, motivo: 'consulta ao Airbnb falhou: fica para você', extracao: x, cotacao: cot };
     // A IA escreve a resposta com os números da consulta (foco na casa pedida, nome do cliente, próximo passo);
@@ -348,7 +348,7 @@ async function historicoConversa(sb: SB, wa_id: string) {
 }
 
 // ---------- reserva direta: sinal por Pix e comprovante lido pela IA ----------
-type Sinal = { casa: string; nome: string; checkin: string; checkout: string; hospedes: number; total: number; valor: number; pct: number; desde: string };
+type Sinal = { casa: string; nome: string; checkin: string; checkout: string; hospedes: number; pets?: number | null; total: number; valor: number; pct: number; desde: string };
 const centavos = (v: number) => Math.round(v * 100) / 100;
 const comprovanteEsperado = (c: any, e: Entrada) => !!e.midia && ['image', 'document'].includes(e.tipo) && !!c?.pedido?.sinal;
 
@@ -381,7 +381,7 @@ async function reservar(sb: SB, e: Entrada, conversa: any, deal_id: string, x: E
     return encaminhar(sb, e, deal_id, x, `Quer reservar${nomeCasa ? ` a ${nomeCasa}` : ''} de ${dm(pedido.checkin!)} a ${dm(fimDe(pedido)!)} (chave Pix não cadastrada)`, historico, teste);
   }
   const datas = normalizarDatas(pedido)!;
-  const cot = await cotar(datas.checkin, datas.checkout, pedido.hospedes!);
+  const cot = await cotar(datas.checkin, datas.checkout, pedido.hospedes!, pedido.pets);
   const lista = (cot?.casas || []) as any[];
   if (!lista.some(c => c.status !== 'erro')) return { deal_id, respondeu: false, motivo: 'consulta ao Airbnb falhou: fica para você', extracao: x };
   const livres = lista.filter(c => c.status === 'livre');
@@ -395,16 +395,19 @@ async function reservar(sb: SB, e: Entrada, conversa: any, deal_id: string, x: E
   }
   const c = lista.find(k => k.id === pedido.casa);
   const nomeCasa = c?.nome || casas.find(k => k.id === pedido.casa)?.nome || pedido.casa;
+  if (c?.status === 'nao_aceita_pet') {
+    const outras = livres.length ? `\nAceitam pets e estão livres ${periodo}:\n${livres.map(k => `• ${k.nome}: ${moeda(k.total)} no total`).join('\n')}` : '';
+    return responderRobo(sb, e, deal_id, saudar(`A ${nomeCasa} não aceita pets.${outras}`, historico), teste, { extracao: x });
+  }
   if (!c || c.status !== 'livre') {
     const outras = livres.length ? `\nLivres ${periodo}:\n${livres.map(k => `• ${k.nome}: ${moeda(k.total)} no total`).join('\n')}` : '';
     const alt = c?.alternativa ? `\nA ${nomeCasa} fica livre de ${dm(c.alternativa.checkin)} a ${dm(c.alternativa.checkout)}, por ${moeda(c.alternativa.total)}.` : '';
     return responderRobo(sb, e, deal_id, saudar(`A ${nomeCasa} não está mais livre ${periodo}.${alt}${outras}${alt || outras ? '' : '\nSe tiver outras datas, me diga que eu verifico.'}`, historico), teste, { extracao: x });
   }
   const pct = Math.min(100, Math.max(1, +g.sinal_pct || 50));
-  const sinal: Sinal = { casa: pedido.casa, nome: nomeCasa, checkin: datas.checkin, checkout: datas.checkout, hospedes: pedido.hospedes!, total: c.total, valor: centavos(c.total * pct / 100), pct, desde: new Date().toISOString() };
+  const sinal: Sinal = { casa: pedido.casa, nome: nomeCasa, checkin: datas.checkin, checkout: datas.checkout, hospedes: pedido.hospedes!, ...(pedido.pets ? { pets: pedido.pets } : {}), total: c.total, valor: centavos(c.total * pct / 100), pct, desde: new Date().toISOString() };
   await sb.from('wa_contacts').update({ pedido: { ...pedido, sinal } }).eq('wa_id', e.wa_id);
-  const p = (n: number) => `${n} ${n === 1 ? 'pessoa' : 'pessoas'}`;
-  const texto = saudar(`Ótimo! Para reservar a ${nomeCasa} de ${diaDm(datas.checkin)}, a ${diaDm(datas.checkout)}, para ${p(sinal.hospedes)}, o total é ${moeda(sinal.total)}.\n` +
+  const texto = saudar(`Ótimo! Para reservar a ${nomeCasa} de ${diaDm(datas.checkin)}, a ${diaDm(datas.checkout)}, para ${quem(sinal.hospedes, sinal.pets)}, o total é ${moeda(sinal.total)}.\n` +
     `O sinal é de ${moeda(sinal.valor)} (${pct}%), por Pix:\nChave: ${g.pix_chave.trim()}\nNome: ${g.pix_nome.trim()}\n` +
     `Depois é só me mandar o comprovante aqui (foto ou PDF) que eu confirmo a reserva.`, historico);
   const r = await responderRobo(sb, e, deal_id, texto, teste, { extracao: x, sinal });
@@ -497,7 +500,7 @@ async function conferirComprovante(sb: SB, e: Entrada, conversa: any, deal_id: s
   }
   if (!problemas.length) {
     // Antes de confirmar: a casa continua livre no Airbnb e no Hub
-    const cot = await cotar(s.checkin, s.checkout, s.hospedes);
+    const cot = await cotar(s.checkin, s.checkout, s.hospedes, s.pets);
     if ((cot?.casas || []).find((c: any) => c.id === s.casa)?.status !== 'livre') problemas.push('a casa não está mais livre no Airbnb');
     const { data: bks } = await sb.from('bookings').select('id,checkin,checkout,status').eq('property_id', s.casa).neq('status', 'cancelada');
     if ((bks || []).some((b: any) => b.checkin < s.checkout && b.checkout > s.checkin)) problemas.push('já existe reserva ou bloqueio nessas datas no Hub');
@@ -518,7 +521,7 @@ async function conferirComprovante(sb: SB, e: Entrada, conversa: any, deal_id: s
   const hospede = ct?.nome || e.nome || telefoneBonito(e.wa_id);
   const { data: bk } = await sb.from('bookings').insert({
     property_id: s.casa, checkin: s.checkin, checkout: s.checkout, origem: 'direto', status: 'confirmada', valor: s.total,
-    hospede, contato_id: conversa.contato_id, notas: `Reserva confirmada pelo robô do WhatsApp. Sinal ${moeda(leitura!.valor!)} por Pix (E2E ${e2e}). ${s.hospedes} pessoas.`,
+    hospede, contato_id: conversa.contato_id, notas: `Reserva confirmada pelo robô do WhatsApp. Sinal ${moeda(leitura!.valor!)} por Pix (E2E ${e2e}). ${quem(s.hospedes, s.pets)}.`,
   }).select('id').single();
   await sb.from('wa_comprovantes').insert({ ...registro, status: 'valido', booking_id: bk?.id });
   const { data: d } = await sb.from('deals').select('pagamentos').eq('id', deal_id).maybeSingle();
@@ -527,7 +530,7 @@ async function conferirComprovante(sb: SB, e: Entrada, conversa: any, deal_id: s
     proxima_acao: 'Conferir o sinal no banco (reserva confirmada pelo robô)', data_proxima_acao: hoje(), updated_at: new Date().toISOString() }).eq('id', deal_id);
   await sb.from('wa_contacts').update({ pedido: { ...conversa.pedido, sinal: null, reservado: { booking_id: bk?.id, em: new Date().toISOString() } } }).eq('wa_id', e.wa_id);
   const falta = centavos(s.total - leitura!.valor!);
-  const texto = saudar(`Reserva confirmada! ✅\n${s.nome}, de ${diaDm(s.checkin)}, a ${diaDm(s.checkout)}, para ${s.hospedes} ${s.hospedes === 1 ? 'pessoa' : 'pessoas'}.\n` +
+  const texto = saudar(`Reserva confirmada! ✅\n${s.nome}, de ${diaDm(s.checkin)}, a ${diaDm(s.checkout)}, para ${quem(s.hospedes, s.pets)}.\n` +
     `Recebi o sinal de ${moeda(leitura!.valor!)}${falta > 0 ? `; faltam ${moeda(falta)} do total de ${moeda(s.total)}` : ''}.\nQualquer dúvida, é só chamar por aqui.`, historico);
   const r = await responderRobo(sb, e, deal_id, texto, teste, { comprovante: 'confirmada', booking_id: bk?.id });
   if (!teste) await avisarComprovante(sb, e, `Reserva confirmada pelo robô: ${s.nome}, ${dm(s.checkin)} a ${dm(s.checkout)}`, `Sinal de ${moeda(leitura!.valor!)} (E2E ${e2e}). Confira o sinal no banco.`);
@@ -546,6 +549,7 @@ const ExtracaoSchema = z.object({
   checkout: z.string().nullable(),
   noites: z.number().int().nullable(),
   hospedes: z.number().int().nullable(),
+  pets: z.number().int().nullable(),
   datas_exatas: z.boolean(),
   resumo: z.string(),
   resposta: z.string().nullable(),
@@ -570,6 +574,7 @@ Classifique a ÚLTIMA mensagem do cliente, usando as anteriores como contexto:
 Datas: converta para AAAA-MM-DD. Datas sem ano são a próxima ocorrência a partir de hoje. "Fim de semana" = sexta a domingo (saída no domingo). Feriados citados pelo nome (Réveillon, Carnaval etc.): use as datas do próximo feriado. Se o cliente der só a entrada e o número de noites, preencha noites e deixe checkout nulo. Se não houver data clara, deixe nulo: nunca invente.
 datas_exatas: true SOMENTE se as datas que o cliente disse são precisas, com dia e mês (ex.: "de 17 a 20 de novembro", "dia 5/12, 3 noites", "chego dia 17/11" — mesmo que ainda falte a saída), ou se respondeu confirmando ("sim", "isso", "certo") as datas que o Robô perguntou. false quando usou expressões vagas: "fim de semana", "semana que vem", feriado pelo nome (Réveillon, Carnaval, Natal, Páscoa), só o mês, dia sem o mês ("dia 20"), "umas X noites", "entre X e Y", "por volta de". Mesmo com datas_exatas false, preencha checkin/checkout com a sua melhor interpretação (o sistema pergunta ao cliente se está certo). Se nesta mensagem o cliente só respondeu o que o Robô perguntou (ex.: "fico até dia 20", "somos 4"), junte com o que ele já tinha dito antes na conversa.
 casa: a casa citada pelo nome na última mensagem ou antes na conversa (se o cliente não mudou de ideia), ou "qualquer". hospedes: total de pessoas (adultos + crianças) considerando a conversa toda: se o cliente disse antes ("somos 6") e não mudou, repita; nulo só se nunca disse.
+pets: quantos animais de estimação vão junto, considerando a conversa toda ("levo um cachorrinho" = 1, "dois cachorros" = 2, "não vamos levar pet" = 0); nulo se o cliente nunca falou de pet. Se perguntou se pode levar sem dizer quantos, 1.
 resumo: até 8 palavras para o card, ex.: "Vaga 20-23/11, 6 pessoas, Casa Azul".
 pergunta_claudio: se a ÚLTIMA mensagem do cliente traz uma pergunta ou pedido que só o dono (Claudio) pode decidir ou informar, escreva-a aqui, curta e em 3ª pessoa (ex.: "Pede desconto para 5 noites", "Quer levar um cachorro grande", "Quer fazer check-in às 8h", "Quer pagar por Pix fora do Airbnb"). Entram: desconto ou negociação de preço; pet, festa, evento ou visita quando as informações das casas não respondem; check-in antecipado ou checkout tardio; forma de pagamento diferente do Pix do sinal (cartão, parcelado); qualquer informação das casas que não está abaixo. Se a mesma mensagem também traz datas ou número de pessoas para a reserva, use assunto "disponibilidade_preco" e preencha pergunta_claudio. NÃO entram: o que o próprio cliente responde (datas, pessoas, casa), o que as informações das casas respondem, cumprimentos, agradecimentos e conversa. Senão, nulo.
 resposta: só quando assunto = "duvida": a resposta para o cliente, em português do Brasil, curta e cordial, no tom de quem já está conversando (sem "Olá"), usando SOMENTE fatos das informações das casas, sem inventar nem prometer nada além delas. Nunca escreva campos para preencher (colchetes, chaves, "XX", "nome do cliente"): o texto vai pronto para o cliente. Nos outros assuntos, nulo.
@@ -591,7 +596,7 @@ ${base || '(nenhuma informação cadastrada: nunca use "duvida")'}
 }
 
 // ---------- o que o cliente já disse (wa_contacts.pedido) e o que falta perguntar ----------
-type Pedido = { casa: string; checkin: string | null; checkout: string | null; noites: number | null; hospedes: number | null; datas_exatas: boolean; em: string };
+type Pedido = { casa: string; checkin: string | null; checkout: string | null; noites: number | null; hospedes: number | null; pets?: number | null; datas_exatas: boolean; em: string };
 const isoOk = (s: string | null | undefined) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s));
 
 // O que veio agora tem prioridade; o que não veio continua o que o cliente disse antes (até 7 dias)
@@ -601,6 +606,7 @@ function combinarPedido(antigo: Partial<Pedido> | null | undefined, x: Extracao)
     casa: x.casa !== 'qualquer' ? x.casa : v.casa || 'qualquer',
     checkin: v.checkin ?? null, checkout: v.checkout ?? null, noites: v.noites ?? null,
     hospedes: x.hospedes && x.hospedes > 0 ? x.hospedes : v.hospedes ?? null,
+    pets: x.pets != null && x.pets >= 0 ? Math.min(5, x.pets) : v.pets ?? null,
     datas_exatas: !!v.datas_exatas, em: new Date().toISOString(),
   };
   if (isoOk(x.checkin)) {
@@ -631,6 +637,9 @@ function normalizarDatas(p: Pedido) {
   if (!isoOk(p.checkin) || !fim || fim <= p.checkin! || p.checkin! < hoje() || dias(p.checkin!, fim) > 60) return null;
   return { checkin: p.checkin!, checkout: fim };
 }
+
+// "4 pessoas" / "4 pessoas e 1 pet"
+const quem = (h: number, pets?: number | null) => `${h} ${h === 1 ? 'pessoa' : 'pessoas'}${pets ? ` e ${pets} ${pets === 1 ? 'pet' : 'pets'}` : ''}`;
 
 const PEDE_TUDO = 'Para eu verificar a disponibilidade e os valores, me diga a data de entrada, a data de saída e quantas pessoas vão se hospedar.';
 const SEMANA = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
@@ -665,12 +674,13 @@ function fatosCotacao(cot: any) {
   const alt = (a: any) => a ? ` Alternativa livre: de ${dm(a.checkin)} a ${dm(a.checkout)}, total ${moeda(a.total)}${a.diaria ? ` (${moeda(a.diaria)} por noite)` : ''}.` : '';
   const linhas = (cot.casas || []).map((c: any) => {
     if (c.status === 'livre') return `- ${c.nome}: LIVRE. Total ${moeda(c.total)}${c.diaria ? ` (${moeda(c.diaria)} por noite)` : ''}.`;
+    if (c.status === 'nao_aceita_pet') return `- ${c.nome}: NÃO ACEITA PETS (sem pet estaria livre).`;
     if (c.status === 'capacidade') return `- ${c.nome}: NÃO COMPORTA ${p(cot.adultos, 'hóspede', 'hóspedes')}.`;
     if (c.status === 'min_noites') return `- ${c.nome}: nessa data pede no mínimo ${c.min_noites} noites.${alt(c.alternativa)}`;
     if (c.status === 'erro') return `- ${c.nome}: não foi possível consultar agora (não fale dela).`;
     return `- ${c.nome}: OCUPADA nessas datas.${alt(c.alternativa)}`;
   });
-  return [`Período consultado: ${dm(cot.checkin)} a ${dm(cot.checkout)} (${p(cot.noites, 'noite', 'noites')}), ${p(cot.adultos, 'hóspede', 'hóspedes')}.`, ...linhas].join('\n');
+  return [`Período consultado: ${dm(cot.checkin)} a ${dm(cot.checkout)} (${p(cot.noites, 'noite', 'noites')}), ${p(cot.adultos, 'hóspede', 'hóspedes')}${cot.pets ? ` e ${p(cot.pets, 'pet', 'pets')} (valores já com a taxa de pet)` : ''}.`, ...linhas].join('\n');
 }
 
 // Todo "R$ ..." do texto precisa ser um valor da consulta; e, havendo casa livre ou alternativa, ao menos um valor precisa aparecer
@@ -718,11 +728,11 @@ ${base || '(nada cadastrado)'}
   return texto;
 }
 
-async function cotar(checkin: string, checkout: string, adultos: number) {
+async function cotar(checkin: string, checkout: string, adultos: number, pets?: number | null) {
   try {
     const r = await fetch(`${SB_URL}/functions/v1/airbnb-quote`, {
       method: 'POST', headers: { Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ checkin, checkout, adultos }), signal: AbortSignal.timeout(40000),
+      body: JSON.stringify({ checkin, checkout, adultos, ...(pets ? { pets } : {}) }), signal: AbortSignal.timeout(40000),
     });
     return await r.json();
   } catch (e) { console.error('airbnb-quote', e); return null; }

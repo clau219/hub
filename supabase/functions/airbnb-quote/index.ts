@@ -1,7 +1,7 @@
 // Consulta disponibilidade e preço direto no Airbnb: o mesmo que um hóspede vê no anúncio.
 // O número do anúncio sai do link iCal de cada casa (calendar_sources).
 // Chamada pelo botão "Consultar Airbnb" em Aluguéis e, depois, pela resposta automática do WhatsApp.
-// POST { checkin: "2026-11-17", checkout: "2026-11-20", adultos: 2, casas?: ["QS50"] }
+// POST { checkin: "2026-11-17", checkout: "2026-11-20", adultos: 2, pets?: 1, casas?: ["QS50"] }
 // Não é API oficial: se o Airbnb mudar o site, devolve status "erro" e quem chamou não informa preço.
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
 
@@ -22,6 +22,7 @@ Deno.serve(async req => {
   try { p = await req.json(); } catch { return json({ error: 'corpo inválido' }, 400); }
   const { checkin, checkout } = p;
   const adultos = Math.max(1, Math.round(+p.adultos || 2));
+  const pets = Math.min(5, Math.max(0, Math.round(+p.pets || 0)));
   if (!/^\d{4}-\d{2}-\d{2}$/.test(checkin || '') || !/^\d{4}-\d{2}-\d{2}$/.test(checkout || '')) return json({ error: 'datas no formato AAAA-MM-DD' }, 400);
   const noites = dias(checkin, checkout);
   if (noites < 1) return json({ error: 'a saída precisa ser depois da entrada' }, 400);
@@ -39,16 +40,21 @@ Deno.serve(async req => {
   const alvo = (props || []).filter(c => anuncio[c.id] && (!p.casas?.length || p.casas.includes(c.id)));
   if (!alvo.length) return json({ error: 'nenhuma casa com link iCal do Airbnb cadastrado' }, 400);
 
-  const casas = await Promise.all(alvo.map(c => consultarCasa(c, anuncio[c.id], checkin, checkout, adultos)));
-  const r = { checkin, checkout, noites, adultos, casas };
+  const casas = await Promise.all(alvo.map(c => consultarCasa(c, anuncio[c.id], checkin, checkout, adultos, pets)));
+  const r = { checkin, checkout, noites, adultos, pets, casas };
   return json({ ...r, mensagem: mensagem(r) });
 });
 
-async function consultarCasa(c: { id: string; nome: string }, listing: string, ci: string, co: string, adultos: number) {
-  const base = { id: c.id, nome: c.nome, airbnb_id: listing, link: `https://www.airbnb.com.br/rooms/${listing}?check_in=${ci}&check_out=${co}&adults=${adultos}` };
+async function consultarCasa(c: { id: string; nome: string }, listing: string, ci: string, co: string, adultos: number, pets = 0) {
+  const base = { id: c.id, nome: c.nome, airbnb_id: listing, link: `https://www.airbnb.com.br/rooms/${listing}?check_in=${ci}&check_out=${co}&adults=${adultos}${pets ? `&pets=${pets}` : ''}` };
   try {
-    const q = await cotar(listing, ci, co, adultos);
+    const q = await cotar(listing, ci, co, adultos, pets);
     if (q.livre) return { ...base, status: 'livre', ...q };
+    // Com pet o Airbnb só diz "indisponível" (motivo OTHER/PETS); se sem pet fica livre, a casa não aceita pets
+    if (pets && q.motivo !== 'GUEST') {
+      const sem = await cotar(listing, ci, co, adultos).catch(() => null);
+      if (sem?.livre) return { ...base, status: 'nao_aceita_pet', motivo: q.motivo };
+    }
     // Indisponível: o calendário diz se é ocupação ou mínimo de noites, e acha a data livre mais próxima
     const cal = await calendario(listing, addDays(ci, -BUSCA_ALT), addDays(co, BUSCA_ALT));
     const minNoites = cal[ci]?.minNights || null;
@@ -60,7 +66,7 @@ async function consultarCasa(c: { id: string; nome: string }, listing: string, c
     const alt = status === 'min_noites' ? { checkin: ci, checkout: addDays(ci, minNoites!) } : alternativa(cal, ci, co);
     let alternativaQ = null;
     if (alt) {
-      const qa = await cotar(listing, alt.checkin, alt.checkout, adultos).catch(() => null);
+      const qa = await cotar(listing, alt.checkin, alt.checkout, adultos, pets).catch(() => null);
       if (qa?.livre) alternativaQ = { ...alt, total: qa.total, diaria: qa.diaria };
     }
     return { ...base, status, motivo: q.motivo, min_noites: minNoites, alternativa: alternativaQ };
@@ -70,9 +76,9 @@ async function consultarCasa(c: { id: string; nome: string }, listing: string, c
 }
 
 // Preço total para as datas (StaysPdpBookItQuery, o quadro "Reservar" do anúncio)
-async function cotar(listing: string, ci: string, co: string, adultos: number) {
+async function cotar(listing: string, ci: string, co: string, adultos: number, pets = 0) {
   const v = {
-    id: btoa(`DemandStayListing:${listing}`), dateRange: { startDate: ci, endDate: co }, guestCounts: { numberOfAdults: adultos },
+    id: btoa(`DemandStayListing:${listing}`), dateRange: { startDate: ci, endDate: co }, guestCounts: pets ? { numberOfAdults: adultos, numberOfPets: pets } : { numberOfAdults: adultos },
     includePdpMigrationBookItCalendarSheetFragment: false, includePdpMigrationBookItFloatingFooterFragment: false,
     includePdpMigrationBookItNavFragment: false, includePdpMigrationBookItSidebarFragment: false, includeGalleryBookItCtaFragment: true,
     includeOverviewMerchandisingTipsFragment: true, includeStaysPdpPriceHeatmapFragment: false,
@@ -130,9 +136,10 @@ async function gql(op: string, hash: string, variables: unknown) {
 // ---------- texto pronto para o WhatsApp ----------
 function mensagem(r: any) {
   const p = (n: number, s: string, pl: string) => `${n} ${n === 1 ? s : pl}`;
-  const cab = `Para ${dm(r.checkin)} a ${dm(r.checkout)} (${p(r.noites, 'noite', 'noites')}, ${p(r.adultos, 'hóspede', 'hóspedes')}):`;
+  const cab = `Para ${dm(r.checkin)} a ${dm(r.checkout)} (${p(r.noites, 'noite', 'noites')}, ${p(r.adultos, 'hóspede', 'hóspedes')}${r.pets ? ` e ${p(r.pets, 'pet', 'pets')}` : ''}):`;
   const linhas = r.casas.filter((c: any) => c.status !== 'erro').map((c: any) => {
     if (c.status === 'livre') return `• ${c.nome}: disponível, ${moeda(c.total)} no total${c.diaria ? ` (${moeda(c.diaria)} por noite)` : ''}`;
+    if (c.status === 'nao_aceita_pet') return `• ${c.nome}: não aceita pets`;
     if (c.status === 'capacidade') return `• ${c.nome}: não comporta ${p(r.adultos, 'hóspede', 'hóspedes')}`;
     if (c.status === 'min_noites') return `• ${c.nome}: mínimo de ${c.min_noites} noites nessa data` +
       (c.alternativa ? `; de ${dm(c.alternativa.checkin)} a ${dm(c.alternativa.checkout)} fica ${moeda(c.alternativa.total)}` : '');

@@ -21,15 +21,18 @@ const range = (a, b) => { const o = []; for (let d = a; d < b; d = addDays(d, 1)
 const brl = v => v.toLocaleString('pt-BR');
 
 // Airbnb falso: preço por noite + R$ 100 de limpeza; datas ocupadas, mínimo de noites e lotação por anúncio
-function airbnb({ ocupados = {}, minNoites = {}, diaria = {}, lotacao = {}, falha = [] } = {}) {
+// Pets: taxaPet por anúncio (a diária sobe, como no Airbnb); semPets: anúncio que recusa pet (indisponível, motivo OTHER)
+function airbnb({ ocupados = {}, minNoites = {}, diaria = {}, lotacao = {}, falha = [], taxaPet = {}, semPets = [] } = {}) {
   simular(/airbnb\.com\.br\/api\/v3\/StaysPdpBookItQuery\//, req => {
     const v = JSON.parse(new URL(req.url).searchParams.get('variables'));
     const id = atob(v.id).split(':')[1], { startDate: ci, endDate: co } = v.dateRange, n = range(ci, co).length;
+    const pets = v.guestCounts.numberOfPets || 0;
     if (falha.includes(id)) return { status: 500 };
     const nao = motivo => ({ data: { node: { pdpPresentation: { bookIt: { availability: { isAvailable: false, unavailabilityReason: motivo } } } } } });
     if (lotacao[id] && v.guestCounts.numberOfAdults > lotacao[id]) return nao('GUEST');
     if (range(ci, co).some(d => (ocupados[id] || []).includes(d)) || n < (minNoites[id] || 1)) return nao('DATE');
-    const p = diaria[id] || 400, total = n * p + 100;
+    if (pets && semPets.includes(id)) return nao('OTHER');
+    const p = (diaria[id] || 400) + (pets ? taxaPet[id] || 0 : 0), total = n * p + 100;
     return { data: { node: { pdpPresentation: { bookIt: { availability: { isAvailable: true }, productItemDetail: { explanationData: { priceDetails: [{ items: [
       { description: `${n} noites x R$ ${brl(p)}`, priceString: `R$ ${brl(n * p)}` },
       { description: 'Taxa de limpeza', priceString: 'R$ 100' },
@@ -143,6 +146,39 @@ describe('airbnb-quote: consulta', () => {
     simular(/airbnb\.com\.br\/api\/v3\//, { data: { node: {} } });
     const { corpo } = await cotar({ checkin: '2026-11-10', checkout: '2026-11-13', casas: ['QS39'] });
     assert.equal(corpo.casas[0].erro, 'resposta do Airbnb mudou (preço)');
+  });
+  test('com pet: manda numberOfPets ao Airbnb e o total já vem com a taxa de pet', async () => {
+    airbnb({ taxaPet: { [TERRA]: 70 } });
+    const { corpo } = await cotar({ checkin: '2026-11-10', checkout: '2026-11-13', adultos: 4, pets: 1, casas: ['QS50'] });
+    assert.deepEqual(JSON.parse(new URL(chamadasPara(/StaysPdpBookItQuery/)[0].url).searchParams.get('variables')).guestCounts, { numberOfAdults: 4, numberOfPets: 1 });
+    const t = corpo.casas[0];
+    assert.deepEqual([corpo.pets, t.status, t.total, t.diaria], [1, 'livre', 1510, 470]);
+    assert.equal(t.link, `https://www.airbnb.com.br/rooms/${TERRA}?check_in=2026-11-10&check_out=2026-11-13&adults=4&pets=1`);
+    assert.match(corpo.mensagem, /^Olá! Para 10\/11 a 13\/11 \(3 noites, 4 hóspedes e 1 pet\):\n• Casa Terracota: disponível, R\$ 1\.510 no total/);
+  });
+  test('sem pet: não manda numberOfPets (consulta como antes)', async () => {
+    airbnb();
+    const { corpo } = await cotar({ checkin: '2026-11-10', checkout: '2026-11-13', casas: ['QS50'] });
+    assert.deepEqual(JSON.parse(new URL(chamadasPara(/StaysPdpBookItQuery/)[0].url).searchParams.get('variables')).guestCounts, { numberOfAdults: 2 });
+    assert.equal(corpo.pets, 0);
+    assert.match(corpo.mensagem, /\(3 noites, 2 hóspedes\):/);
+  });
+  test('casa que não aceita pet: status nao_aceita_pet, sem procurar outras datas', async () => {
+    airbnb({ semPets: [AZUL] });
+    const { corpo } = await cotar({ checkin: '2026-11-10', checkout: '2026-11-13', adultos: 2, pets: 2 });
+    const azul = corpo.casas.find(c => c.id === 'QS40');
+    assert.equal(azul.status, 'nao_aceita_pet');
+    assert.equal(azul.alternativa, undefined);
+    assert.equal(chamadasPara(/PdpAvailabilityCalendar/).length, 0, 'não procura datas alternativas');
+    assert.match(corpo.mensagem, /\(3 noites, 2 hóspedes e 2 pets\):/);
+    assert.match(corpo.mensagem, /• Casa Azul: não aceita pets\n/);
+    assert.match(corpo.mensagem, /• Casa Frida: disponível/);
+  });
+  test('com pet e a casa ocupada: continua "ocupada" (não confunde com recusa de pet)', async () => {
+    airbnb({ ocupados: { [AZUL]: ['2026-11-11'] }, semPets: [] });
+    const { corpo } = await cotar({ checkin: '2026-11-10', checkout: '2026-11-13', pets: 1, casas: ['QS40'] });
+    assert.equal(corpo.casas[0].status, 'ocupada');
+    assert.equal(corpo.casas[0].alternativa.checkin, '2026-11-12');
   });
   test('hóspedes: padrão 2 e arredondado, mínimo 1', async () => {
     airbnb();

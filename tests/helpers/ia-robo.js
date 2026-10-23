@@ -73,7 +73,7 @@ const NEGOCIA = /\b(desconto|parcel\w*|cartao|abatimento|condicao especial|mais 
 const SAUDA = /^(?:(?:oi+|ola|opa|bom dia|boa tarde|boa noite|tudo bem|tudo bom|e ai|\?+|alguem ai|queria (?:mais )?informacoes(?: sobre as casas)?)[!.?,\s]*)+$/;
 const PRECO = /\b(vaga|dispon\w*|valor\w*|preco\w*|quanto|diaria\w*|livre|tem para|orcamento|cotar|cotacao)\b/; // palavras inteiras ("Terracota" não é "cota")
 const DUVIDAS = [
-  [/(pet|cachorro|cao|gato|animal)/, ['Pets']],
+  [/(pet|cachorr|cao|caes|gat[oa]|animal)/, ['Pets']],
   [/(check-?in|que horas|horario de entrada|horario)/, ['Horário de check-in', 'Horário de check-out']],
   [/(check-?out|horario de saida)/, ['Horário de check-out']],
   [/(onde fica|endereco|localiza)/, ['Endereço']],
@@ -137,7 +137,7 @@ function redigir(system, conteudo, { mentir = false } = {}) {
   const nome = (system.match(/usando o nome (\p{L}+)/u) || [])[1];
   if (/comece com um cumprimento curto/.test(system)) out.push(nome ? `Oi, ${nome}!` : 'Oi!');
   out.push(...usar.map(l => l.replace(': LIVRE. Total ', ': disponível, total ').replace(': OCUPADA nessas datas.', ': ocupada nessas datas.')));
-  if (/(pet|cachorro|cao|gato)/.test(ult)) { const p = base.split('\n').find(l => l.startsWith('Pets:')); out.push(p ? `Sobre pets: ${p.slice(6).trim()}` : 'Sobre pets, o Claudio confirma em seguida.'); }
+  if (/(pet|cachorr|cao|caes|gat[oa])/.test(ult)) { const p = base.split('\n').find(l => l.startsWith('Pets:')); out.push(p ? `Sobre pets: ${p.slice(6).trim()}` : 'Sobre pets, o Claudio confirma em seguida.'); }
   const aviso = (system.match(/Diga também, com suas palavras: "([^"]+)"/) || [])[1];
   if (aviso) out.push(aviso);
   const casaLivre = usar.find(livre)?.split(':')[0];
