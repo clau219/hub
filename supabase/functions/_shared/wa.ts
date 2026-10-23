@@ -17,11 +17,11 @@ export type Base = {
   casas?: Record<string, Record<string, string>>;
 };
 const CAMPOS_GERAL: [string, string][] = [
-  ['endereco', 'Endereço'], ['localizacao', 'Link da localização'], ['checkin', 'Horário de check-in'], ['checkout', 'Horário de check-out'],
+  ['endereco', 'Endereço'], ['checkin', 'Horário de check-in'], ['checkout', 'Horário de check-out'],
   ['pets', 'Pets'], ['regras', 'Regras da casa'], ['pagamento', 'Como funciona o pagamento'], ['outros', 'Outras informações'],
 ];
 const CAMPOS_CASA: [string, string][] = [
-  ['capacidade', 'Capacidade'], ['quartos', 'Quartos e camas'], ['comodidades', 'Comodidades'], ['wifi_rede', 'Wi-Fi (rede)'],
+  ['localizacao', 'Link da localização'], ['capacidade', 'Capacidade'], ['quartos', 'Quartos e camas'], ['comodidades', 'Comodidades'], ['wifi_rede', 'Wi-Fi (rede)'],
   ['wifi_senha', 'Wi-Fi (senha)'], ['observacoes', 'Observações'],
 ];
 
@@ -30,7 +30,8 @@ export async function lerBase(sb: any): Promise<Base> {
   try { return JSON.parse(data?.value || '{}') || {}; } catch { return {}; }
 }
 
-// Texto da base para o prompt. paraRobo: sem senha do Wi-Fi e sem dados de Pix (o robô nunca envia isso).
+// Texto da base para o prompt. paraRobo: sem senha do Wi-Fi, sem link da localização exata e sem dados de Pix
+// (o robô nunca envia isso; vão só no rascunho da IA, que o Claudio revisa).
 export function baseTexto(base: Base, casas: { id: string; nome: string }[], { paraRobo = false } = {}) {
   const linhas: string[] = [];
   const g = base.geral || {};
@@ -39,7 +40,7 @@ export function baseTexto(base: Base, casas: { id: string; nome: string }[], { p
   if (!paraRobo && g.sinal_pct) linhas.push(`Sinal para reservar: ${g.sinal_pct}% do total`);
   for (const c of casas) {
     const x = base.casas?.[c.id] || {};
-    const cs = CAMPOS_CASA.filter(([k]) => x[k]?.trim() && !(paraRobo && k === 'wifi_senha')).map(([k, rot]) => `  ${rot}: ${x[k].trim()}`);
+    const cs = CAMPOS_CASA.filter(([k]) => x[k]?.trim() && !(paraRobo && (k === 'wifi_senha' || k === 'localizacao'))).map(([k, rot]) => `  ${rot}: ${x[k].trim()}`);
     if (cs.length) linhas.push(`${c.nome} (${c.id}):`, ...cs);
   }
   return linhas.join('\n');

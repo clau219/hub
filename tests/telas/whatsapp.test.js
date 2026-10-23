@@ -165,7 +165,8 @@ describe('WhatsApp: conexão da Z-API e número no menu', () => {
 });
 
 // ---------- responder pelo Hub ----------
-const BASE = { geral: { pix_chave: '12.345.678/0001-90', pix_nome: 'Claudio Braga', sinal_pct: '50', endereco: 'Cond. Pipa Natureza, casa 39', localizacao: 'https://maps.app.goo.gl/x', checkin: '14h', checkout: '11h', pets: 'Aceitamos pet pequeno.', regras: 'Sem festas.' } };
+const BASE = { geral: { pix_chave: '12.345.678/0001-90', pix_nome: 'Claudio Braga', sinal_pct: '50', endereco: 'Cond. Pipa Natureza', checkin: '14h', checkout: '11h', pets: 'Aceitamos pet pequeno.', regras: 'Sem festas.' },
+  casas: { QS39: { localizacao: 'https://maps.app.goo.gl/frida' }, QS40: { localizacao: 'https://maps.app.goo.gl/azul' } } };
 const comBase = (x = {}) => {
   const d = dados(x);
   d.app_config = [...(d.app_config || []), { key: 'wa_base', value: JSON.stringify(BASE) }];
@@ -217,7 +218,27 @@ describe('WhatsApp: responder pelo Hub', () => {
     digitar('Claro!');
     $('[data-pronta=horarios]').click();
     $('[data-pronta=local]').click();
-    assert.equal(tx().value, 'Claro!\n\nO check-in é a partir das 14h e o check-out até as 11h.\n\nEndereço: Cond. Pipa Natureza, casa 39\nhttps://maps.app.goo.gl/x');
+    // a IA entendeu Casa Azul na conversa: vai o link da Azul
+    assert.equal(tx().value, 'Claro!\n\nO check-in é a partir das 14h e o check-out até as 11h.\n\nEndereço: Cond. Pipa Natureza\nLocalização da Casa Azul: https://maps.app.goo.gl/azul');
+  });
+  test('Localização: a casa da oportunidade tem prioridade', async () => {
+    const d = comBase(); d.deals[0].local = 'Casa Frida';
+    await trocarDados(d, { supabase: true }); await abrir(`#/whatsapp?c=${ANA}`); digitar('');
+    $('[data-pronta=local]').click();
+    assert.match(tx().value, /Localização da Casa Frida: https:\/\/maps\.app\.goo\.gl\/frida$/);
+  });
+  test('Localização sem casa definida: manda o link de cada casa que tem link', async () => {
+    const d = comBase(); for (const m of d.wa_messages) if (m.extracao) m.extracao.casa = 'qualquer';
+    await trocarDados(d, { supabase: true }); await abrir(`#/whatsapp?c=${ANA}`); digitar('');
+    $('[data-pronta=local]').click();
+    assert.equal(tx().value, 'Endereço: Cond. Pipa Natureza\nLocalização de cada casa:\n• Casa Frida: https://maps.app.goo.gl/frida\n• Casa Azul: https://maps.app.goo.gl/azul');
+  });
+  test('Localização de casa sem link cadastrado: pede o link daquela casa', async () => {
+    const d = comBase(); d.deals[0].local = 'Casa Terracota';
+    await trocarDados(d, { supabase: true }); await abrir(`#/whatsapp?c=${ANA}`); digitar('');
+    $('[data-pronta=local]').click(); await esperar();
+    assert.match(texto('#toast'), /Preencha “Link da localização \(Casa Terracota\)”/);
+    $('#modal').close();
   });
   test('resposta pronta sem a informação na base: avisa e abre o formulário da base', async () => {
     const d = comBase(); d.app_config = [{ key: 'wa_base', value: '{}' }];
@@ -283,6 +304,7 @@ describe('WhatsApp: informações das casas', () => {
     assert.equal(v.geral.pets, 'Não aceitamos pets.');
     assert.equal(v.geral.pix_chave, '12.345.678/0001-90');
     assert.ok(!('regras' in v.geral));
-    assert.deepEqual(v.casas, { QS40: { wifi_rede: 'CasaAzul' } });
+    assert.deepEqual(v.casas, { QS39: { localizacao: 'https://maps.app.goo.gl/frida' }, QS40: { localizacao: 'https://maps.app.goo.gl/azul', wifi_rede: 'CasaAzul' } });
+    assert.ok(!f.querySelector('[name="g.localizacao"]'), 'o link da localização é por casa');
   });
 });

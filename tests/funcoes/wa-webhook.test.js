@@ -141,7 +141,7 @@ describe('wa-webhook: quando o robô fica quieto', () => {
     assert.deepEqual([x.resumo, x.robo], ['Pet', 'assunto "outro": fica para você']);
   });
   test('dúvida que a base das casas responde: o robô responde (a base vai para a IA sem senha de Wi-Fi nem Pix)', async () => {
-    const base = { geral: { pets: 'Aceitamos pet pequeno.', pix_chave: 'pix@x.com' }, casas: { QS40: { wifi_senha: 'segredo', quartos: '3 suítes' } } };
+    const base = { geral: { pets: 'Aceitamos pet pequeno.', pix_chave: 'pix@x.com' }, casas: { QS40: { wifi_senha: 'segredo', quartos: '3 suítes', localizacao: 'https://maps.app.goo.gl/azul' } } };
     novoBanco(DADOS({ app_config: [{ key: 'wa_base', value: JSON.stringify(base) }] }));
     responderIA(IA({ assunto: 'duvida', resumo: 'Pergunta sobre pet', resposta: 'Aceitamos sim, pet de pequeno porte.' }));
     const { corpo } = await teste({ texto: 'Aceitam cachorro pequeno?' });
@@ -149,6 +149,7 @@ describe('wa-webhook: quando o robô fica quieto', () => {
     const sys = globalThis.__anthropic.chamadas[0].system;
     assert.match(sys, /Pets: Aceitamos pet pequeno\./);
     assert.match(sys, /Quartos e camas: 3 suítes/);
+    assert.doesNotMatch(sys, /maps\.app\.goo\.gl/, 'o robô nunca recebe o link da localização exata');
     assert.doesNotMatch(sys, /segredo|pix@x\.com/);
     assert.equal(deal().proxima_acao, 'Acompanhar: o robô respondeu uma dúvida');
     assert.equal(banco().t('wa_messages')[0].extracao.robo, 'respondeu');

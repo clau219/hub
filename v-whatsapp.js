@@ -243,6 +243,8 @@ const STATUS = { ocupada: 'ocupada', min_noites: 'pede mais noites', capacidade:
 
 function ligarConversa(el, conv) {
   const wa = conv.wa_id;
+  // A tela só se redesenha quando chegam mensagens: no clique, usa a conversa e a oportunidade de agora
+  const atual = () => conversas().find(c => c.wa_id === wa) || conv;
   const $ = s => el.querySelector(s);
   const tx = $('#wzTexto');
   tx.oninput = () => { rascunhos[wa] = tx.value; };
@@ -278,7 +280,7 @@ function ligarConversa(el, conv) {
   $('#wzEnviar').onclick = enviar;
 
   el.querySelectorAll('[data-pronta]').forEach(b => b.onclick = () => {
-    const r = pronta(b.dataset.pronta, conv);
+    const r = pronta(b.dataset.pronta, atual());
     if (r.falta) { toast(`Preencha “${r.falta}” em Informações das casas`, 4000); return baseForm(); }
     inserir(r.texto);
   });
@@ -298,7 +300,7 @@ function ligarConversa(el, conv) {
   };
   $('#wzFaltouBase')?.addEventListener('click', () => baseForm());
 
-  $('#wzDeal')?.addEventListener('click', () => dealForm(conv.deal));
+  $('#wzDeal')?.addEventListener('click', () => dealForm(atual().deal));
   el.querySelectorAll('[data-bk]').forEach(b => b.onclick = () => bookingForm(S.bookings.find(x => x.id === b.dataset.bk)));
   el.querySelector('#wzPausa').onchange = async ev => {
     const v = ev.target.checked;
@@ -329,7 +331,7 @@ function ligarConversa(el, conv) {
       const { data, error } = await db.client().functions.invoke('airbnb-quote', { body: { checkin: q.checkin, checkout: q.checkout, adultos: q.adultos } });
       if (error || data?.error) throw new Error(data?.error || await erroDe(error));
       q.res = data.casas || [];
-      if (data.mensagem) { inserirRascunho(wa, saudar(data.mensagem, conv)); }
+      if (data.mensagem) { inserirRascunho(wa, saudar(data.mensagem, atual())); }
       else q.erro = 'O Airbnb não devolveu uma mensagem pronta.';
     } catch (e) { q.erro = 'Não foi possível consultar: ' + e.message; }
     q.carregando = false;
@@ -372,8 +374,19 @@ function pronta(tipo, conv) {
     return { texto: `Para garantir a reserva, o sinal é de ${reais(sinal)} (${pct}% do total de ${reais(d.valor)}).\n${chave}\nAssim que fizer, me manda o comprovante, por favor.` };
   }
   if (tipo === 'local') {
-    if (!g.endereco?.trim() && !g.localizacao?.trim()) return falta('Endereço');
-    return { texto: [g.endereco?.trim() && `Endereço: ${g.endereco.trim()}`, g.localizacao?.trim()].filter(Boolean).join('\n') };
+    // Cada casa tem o seu link: o da casa da conversa; sem saber a casa, os links de todas
+    const casas = casasDaBase();
+    const link = id => D.base.casas?.[id]?.localizacao?.trim();
+    const casa = casaDaConversa(conv);
+    const endereco = g.endereco?.trim() ? `Endereço: ${g.endereco.trim()}` : '';
+    if (casa) {
+      const nome = casas.find(c => c.id === casa)?.nome || casa;
+      if (!link(casa)) return falta(`Link da localização (${nome})`);
+      return { texto: [endereco, `Localização da ${nome}: ${link(casa)}`].filter(Boolean).join('\n') };
+    }
+    const comLink = casas.filter(c => link(c.id));
+    if (!comLink.length) return falta('Link da localização');
+    return { texto: [endereco, 'Localização de cada casa:', ...comLink.map(c => `• ${c.nome}: ${link(c.id)}`)].filter(Boolean).join('\n') };
   }
   if (tipo === 'horarios') {
     if (!g.checkin?.trim() || !g.checkout?.trim()) return falta(!g.checkin?.trim() ? 'Horário de check-in' : 'Horário de check-out');
@@ -386,7 +399,7 @@ function pronta(tipo, conv) {
 
 // ---------- base de informações das casas (app_config 'wa_base') ----------
 const GERAL = [
-  ['endereco', 'Endereço', 'Condomínio Pipa Natureza, …'], ['localizacao', 'Link da localização', 'https://maps.app.goo.gl/…'],
+  ['endereco', 'Endereço (do condomínio)', 'Condomínio Pipa Natureza, …'],
   ['checkin', 'Check-in a partir das', '14h'], ['checkout', 'Check-out até as', '11h'],
   ['pix_chave', 'Chave Pix', 'CNPJ, e-mail ou telefone'], ['pix_nome', 'Nome na conta do Pix', 'Claudio R. S. Braga'],
   ['sinal_pct', 'Sinal para reservar (%)', '50'],
@@ -398,7 +411,7 @@ const GERAL_LONGO = [
   ['outros', 'Outras informações (estacionamento, roupa de cama, limpeza…)', ''],
 ];
 const POR_CASA = [
-  ['capacidade', 'Capacidade', '8 pessoas'], ['quartos', 'Quartos e camas', '3 suítes: 2 casal + 1 com 2 solteiro'],
+  ['localizacao', 'Link da localização — vai nas respostas prontas e no rascunho, nunca pelo robô', 'https://maps.app.goo.gl/…'], ['capacidade', 'Capacidade', '8 pessoas'], ['quartos', 'Quartos e camas', '3 suítes: 2 casal + 1 com 2 solteiro'],
   ['comodidades', 'Comodidades', 'Piscina, churrasqueira, ar-condicionado nos quartos…'], ['wifi_rede', 'Wi-Fi (rede)', ''],
   ['wifi_senha', 'Wi-Fi (senha) — só vai no rascunho da IA, nunca pelo robô', ''], ['observacoes', 'Observações', ''],
 ];
@@ -407,7 +420,7 @@ function baseForm() {
   const campo = (nome, rot, ph, v, longo) => longo
     ? `<label class="span2">${rot}<textarea name="${nome}" rows="2" placeholder="${h(ph)}">${h(v || '')}</textarea></label>`
     : `<label>${rot}<input name="${nome}" value="${h(v || '')}" placeholder="${h(ph)}"></label>`;
-  const casas = S.properties.length ? S.properties : Object.entries(CASA).map(([id, nome]) => ({ id, nome }));
+  const casas = casasDaBase();
   modal('Informações das casas', `
     <p class="muted small">Usadas nas respostas prontas, no rascunho da IA e pelo robô, que passa a responder sozinho as dúvidas que estas informações cobrem (nunca senha de Wi-Fi nem Pix).</p>
     <h3 class="wz-form-h">Todas as casas</h3>
@@ -430,6 +443,15 @@ function baseForm() {
       if (naTela() && viewEl) desenhar(viewEl);
     },
   });
+}
+
+const casasDaBase = () => (S.properties.length ? S.properties : Object.entries(CASA).map(([id, nome]) => ({ id, nome })));
+// A casa de que se fala na conversa: a da oportunidade (campo local) ou a última que a IA entendeu
+function casaDaConversa(conv) {
+  const local = String(conv.deal?.local || '').toLowerCase();
+  const pelaDeal = local && casasDaBase().find(c => local.includes(c.nome.toLowerCase()) || local.includes(c.id.toLowerCase()));
+  if (pelaDeal) return pelaDeal.id;
+  return [...conv.msgs].reverse().find(m => m.extracao?.casa && m.extracao.casa !== 'qualquer')?.extracao.casa || null;
 }
 
 // O que a IA entendeu e o que o robô fez com a mensagem do cliente

@@ -12,7 +12,7 @@ const ZAPI = 'https://api.z-api.io/instances/INST1/token/tok1/send-text';
 const ANA = '5584991118864';
 const BASE = {
   geral: { checkin: '14h', checkout: '11h', pets: 'Pet pequeno, R$ 100', pix_chave: 'pix@casas.com', pix_nome: 'Claudio', sinal_pct: '50' },
-  casas: { QS40: { wifi_rede: 'CasaAzul', wifi_senha: 'segredo123', quartos: '3 suítes' } },
+  casas: { QS40: { wifi_rede: 'CasaAzul', wifi_senha: 'segredo123', quartos: '3 suítes', localizacao: 'https://maps.app.goo.gl/azul' } },
 };
 const DADOS = (x = {}) => ({
   properties: [{ id: 'QS39', nome: 'Casa Frida' }, { id: 'QS40', nome: 'Casa Azul' }],
@@ -83,6 +83,7 @@ describe('wa-responder: rascunho da IA', () => {
     const p = globalThis.__anthropic.chamadas[0];
     assert.equal(p.model, 'claude-haiku-5-5');
     assert.match(p.system, /Wi-Fi \(senha\): segredo123/);
+    assert.match(p.system, /Casa Azul \(QS40\):\n  Link da localização: https:\/\/maps\.app\.goo\.gl\/azul/);
     assert.match(p.system, /Chave Pix: pix@casas\.com \(Claudio\)/);
     assert.match(p.system, /Valor total combinado: R\$ 1\.650,00\nSinal \(50%\): R\$ 825,00\nJá recebido: R\$ 300,00; falta R\$ 1\.350,00/);
     assert.match(p.system, /NÃO comece com "Olá"/, 'o robô respondeu há menos de 24 h');
