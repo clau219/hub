@@ -1,6 +1,6 @@
 // Tela WhatsApp: conversas que chegaram pela wa-webhook, quem está esperando resposta, o que o robô fez em cada
 // mensagem (respondeu ou por que ficou quieto), liga/desliga do robô e pausa por pessoa.
-import { test, describe, before } from 'node:test';
+import { test, describe, before, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { hub, $, $$, texto, textoSep, ate, esperar } from '../helpers/dom.js';
 import { abrirHub, trocarDados } from '../helpers/tela.js';
@@ -82,7 +82,7 @@ describe('WhatsApp: conversa aberta', () => {
   test('cabeçalho: telefone, oportunidade e link do WhatsApp', () => {
     assert.match(textoSep($('.wz-conv-quem')), /Ana Lima \(84\) 99111-8864/);
     assert.ok($('#wzDeal'));
-    assert.equal($('.wz-conv-acoes a.wa').getAttribute('href'), `https://wa.me/${ANA}`);
+    assert.equal($('.wz-conv-head a.wa').getAttribute('href'), `https://wa.me/${ANA}`);
   });
   test('pausar o robô só com esta pessoa grava no banco', async () => {
     const p = $('#wzPausa'); p.checked = true; p.dispatchEvent(new Event('change')); await esperar(10);
@@ -126,7 +126,7 @@ describe('WhatsApp: robô e atualização', () => {
     await trocarDados(d, { supabase: true });
     await abrir('#/whatsapp?c=1701@lid');
     assert.match(texto('.wz-conv-quem'), /número oculto pelo WhatsApp/);
-    assert.ok(!$('.wz-conv-acoes a.wa'));
+    assert.ok(!$('.wz-conv-head a.wa'));
   });
 });
 
@@ -161,5 +161,128 @@ describe('WhatsApp: conexão da Z-API e número no menu', () => {
     const n = () => banco().consultas.filter(c => c.tabela === 'wa_messages').length;
     const a = n(); await V.selo(); await V.selo(); await esperar(5);
     assert.equal(n() - a, 1);
+  });
+});
+
+// ---------- responder pelo Hub ----------
+const BASE = { geral: { pix_chave: '12.345.678/0001-90', pix_nome: 'Claudio Braga', sinal_pct: '50', endereco: 'Cond. Pipa Natureza, casa 39', localizacao: 'https://maps.app.goo.gl/x', checkin: '14h', checkout: '11h', pets: 'Aceitamos pet pequeno.', regras: 'Sem festas.' } };
+const comBase = (x = {}) => {
+  const d = dados(x);
+  d.app_config = [...(d.app_config || []), { key: 'wa_base', value: JSON.stringify(BASE) }];
+  d.deals[0] = { ...d.deals[0], valor: 1650, pagamentos: [] };
+  d.bookings = [{ id: 'b1', property_id: 'QS40', hospede: 'Ana Lima Souza', checkin: '2026-11-17', checkout: '2026-11-20', valor: 1650, status: 'confirmada' }, { id: 'b2', property_id: 'QS39', hospede: 'Anabela', checkin: '2026-12-01', checkout: '2026-12-03', status: 'confirmada' }];
+  d.properties = [{ id: 'QS39', nome: 'Casa Frida' }, { id: 'QS40', nome: 'Casa Azul' }, { id: 'QS50', nome: 'Casa Terracota' }];
+  return d;
+};
+const tx = () => $('#wzTexto');
+const digitar = v => { tx().value = v; tx().dispatchEvent(new Event('input')); };
+
+describe('WhatsApp: responder pelo Hub', () => {
+  beforeEach(async () => { await trocarDados(comBase(), { supabase: true }); await abrir(`#/whatsapp?c=${ANA}`); digitar(''); });
+  test('Enviar: chama a wa-responder com o texto, limpa a caixa e mostra a mensagem como sua', async () => {
+    // como o servidor: grava a mensagem como sua
+    banco().funcoes['wa-responder'] = async b => { banco().t('wa_messages').push({ id: 'z1', wa_id: b.wa_id, autor: 'claudio', direcao: 'out', tipo: 'text', texto: b.texto, enviado_em: new Date().toISOString() }); return { ok: true, wamid: 'Z1' }; };
+    digitar('Oi Ana, mando já!');
+    $('#wzEnviar').click(); await esperar(10);
+    assert.deepEqual(banco().invocacoes.at(-1), { nome: 'wa-responder', body: { acao: 'enviar', wa_id: ANA, texto: 'Oi Ana, mando já!' } });
+    assert.equal(tx().value, '');
+    const ult = $$('.wz-msg').at(-1);
+    assert.match(texto(ult.querySelector('small')), /^Você ·/);
+    assert.match(texto(ult), /Oi Ana, mando já!/);
+  });
+  test('falha no envio: avisa e mantém o texto', async () => {
+    banco().funcoes['wa-responder'] = async () => ({ error: 'a Z-API não aceitou o envio' });
+    digitar('teste');
+    $('#wzEnviar').click(); await esperar(10);
+    assert.match(texto('#toast'), /Não foi possível enviar: a Z-API não aceitou/);
+    assert.equal(tx().value, 'teste');
+  });
+  test('o texto em andamento sobrevive ao redesenho automático (mensagem nova chegando)', async () => {
+    digitar('Estou escrevendo…');
+    banco().t('wa_messages').push({ id: 'm9', wa_id: BIA, autor: 'cliente', direcao: 'in', tipo: 'text', texto: 'oi', enviado_em: '2026-10-19T14:59:30Z' });
+    await abrir(`#/whatsapp?c=${ANA}`);
+    assert.equal(tx().value, 'Estou escrevendo…');
+  });
+  test('Pix do sinal: 50% do valor da oportunidade, com a chave e o nome', () => {
+    $('[data-pronta=pix]').click();
+    assert.equal(tx().value, 'Para garantir a reserva, o sinal é de R$ 825 (50% do total de R$ 1.650).\nChave Pix: 12.345.678/0001-90 (Claudio Braga)\nAssim que fizer, me manda o comprovante, por favor.');
+  });
+  test('Pix com sinal já pago: diz o que falta', async () => {
+    const d = comBase(); d.deals[0].pagamentos = [{ data: '2026-10-18', valor: 825, forma: 'Pix' }];
+    await trocarDados(d, { supabase: true }); await abrir(`#/whatsapp?c=${ANA}`);
+    $('[data-pronta=pix]').click();
+    assert.match(tx().value, /^O sinal já está pago ✅ Falta R\$ 825 do total de R\$ 1\.650\./);
+  });
+  test('respostas prontas se somam ao que já está escrito', () => {
+    digitar('Claro!');
+    $('[data-pronta=horarios]').click();
+    $('[data-pronta=local]').click();
+    assert.equal(tx().value, 'Claro!\n\nO check-in é a partir das 14h e o check-out até as 11h.\n\nEndereço: Cond. Pipa Natureza, casa 39\nhttps://maps.app.goo.gl/x');
+  });
+  test('resposta pronta sem a informação na base: avisa e abre o formulário da base', async () => {
+    const d = comBase(); d.app_config = [{ key: 'wa_base', value: '{}' }];
+    await trocarDados(d, { supabase: true }); await abrir(`#/whatsapp?c=${ANA}`);
+    $('[data-pronta=pets]').click(); await esperar();
+    assert.match(texto('#toast'), /Preencha “Pets” em Informações das casas/);
+    assert.equal(texto('#modalTitle'), 'Informações das casas');
+    $('#modal').close();
+  });
+  test('Rascunho da IA: coloca o texto na caixa e mostra o que faltou na base', async () => {
+    banco().funcoes['wa-responder'] = async b => (b.acao === 'rascunho' ? { texto: 'O Wi-Fi é [senha do Wi-Fi].', faltou: ['senha do Wi-Fi'] } : {});
+    $('#wzIA').click(); await esperar(10);
+    assert.equal(tx().value, 'O Wi-Fi é [senha do Wi-Fi].');
+    assert.match(texto('.wz-faltou'), /A IA não achou na base: senha do Wi-Fi/);
+  });
+  test('Enviar com [colchetes] pede confirmação', async () => {
+    banco().funcoes['wa-responder'] = async () => ({ ok: true });
+    let perguntou = ''; globalThis.confirm = m => { perguntou = m; return false; };
+    digitar('Sinal de [valor]');
+    $('#wzEnviar').click(); await esperar(10);
+    assert.match(perguntou, /\[colchetes\]/);
+    assert.equal(banco().invocacoes.filter(i => i.body?.acao === 'enviar').length, 0);
+  });
+});
+
+describe('WhatsApp: painel ao lado da conversa', () => {
+  beforeEach(async () => { await trocarDados(comBase(), { supabase: true }); await abrir(`#/whatsapp?c=${ANA}`); digitar(''); });
+  test('oportunidade com etapa, valor e quanto falta', () => {
+    assert.match(textoSep($('.wz-painel')), /Aluguéis — Ana Lima.*Valor R\$ 1\.650.*Recebido R\$ 0 · falta R\$ 1\.650/s);
+  });
+  test('reservas pelo nome (Ana Lima × "Ana Lima Souza"; "Anabela" não)', () => {
+    assert.deepEqual($$('.wz-reservas li').map(texto), ['Casa Azul: 17 nov a 20 nov R$ 1.650']);
+  });
+  test('Cotar datas: usa as datas que a IA entendeu e põe a mensagem na caixa, sem "Olá" na conversa em andamento', async () => {
+    const d = comBase(); d.wa_messages.push({ id: 'r', wa_id: ANA, autor: 'robo', direcao: 'out', tipo: 'text', texto: 'x', enviado_em: '2026-10-19T14:55:00Z' });
+    await trocarDados(d, { supabase: true }); await abrir(`#/whatsapp?c=${ANA}`);
+    assert.deepEqual([$('#wzQin').value, $('#wzQout').value, $('#wzQad').value], ['2026-11-17', '2026-11-20', '6']);
+    banco().funcoes['airbnb-quote'] = async () => ({ casas: [{ id: 'QS40', nome: 'Casa Azul', status: 'livre', total: 1650 }, { id: 'QS39', nome: 'Casa Frida', status: 'ocupada' }], mensagem: 'Olá! Para 17/11 a 20/11: Casa Azul livre, R$ 1.650.' });
+    $('#wzCotar').click(); await esperar(10);
+    assert.deepEqual(banco().invocacoes.at(-1).body, { checkin: '2026-11-17', checkout: '2026-11-20', adultos: 6 });
+    assert.equal(tx().value, 'Para 17/11 a 20/11: Casa Azul livre, R$ 1.650.');
+    assert.deepEqual($$('.wz-cota-res li').map(texto), ['Casa Azul: livre, R$ 1.650', 'Casa Frida: ocupada']);
+  });
+  test('Cotar com saída antes da entrada: avisa sem consultar', async () => {
+    const i = $('#wzQout'); i.value = '2026-11-10'; i.dispatchEvent(new Event('change'));
+    $('#wzCotar').click(); await esperar(5);
+    assert.match(texto('.wz-painel'), /A saída precisa ser depois da entrada/);
+    assert.equal(banco().invocacoes.filter(x => x.nome === 'airbnb-quote').length, 0);
+  });
+});
+
+describe('WhatsApp: informações das casas', () => {
+  test('salva a base em app_config wa_base (vazios ficam de fora)', async () => {
+    await trocarDados(comBase(), { supabase: true }); await abrir();
+    $('#wzBase').click(); await esperar();
+    const f = $('#modalForm');
+    f.querySelector('[name="g.pets"]').value = 'Não aceitamos pets.';
+    f.querySelector('[name="c.QS40.wifi_rede"]').value = 'CasaAzul';
+    f.querySelector('[name="g.regras"]').value = '';
+    const ev = new Event('submit', { bubbles: true, cancelable: true }); ev.submitter = f.querySelector('button[value=ok]');
+    f.dispatchEvent(ev); await esperar(10);
+    const v = JSON.parse(banco().t('app_config').find(c => c.key === 'wa_base').value);
+    assert.equal(v.geral.pets, 'Não aceitamos pets.');
+    assert.equal(v.geral.pix_chave, '12.345.678/0001-90');
+    assert.ok(!('regras' in v.geral));
+    assert.deepEqual(v.casas, { QS40: { wifi_rede: 'CasaAzul' } });
   });
 });

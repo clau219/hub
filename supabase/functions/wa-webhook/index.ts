@@ -16,6 +16,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
 import Anthropic from 'npm:@anthropic-ai/sdk@0.134.0';
 import { zodOutputFormat } from 'npm:@anthropic-ai/sdk@0.134.0/helpers/zod';
 import { z } from 'npm:zod@4.6.7';
+import { enviarZapi, lerBase, baseTexto } from '../_shared/wa.ts';
 
 const SB_URL = Deno.env.get('SUPABASE_URL')!;
 const SB_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -148,17 +149,22 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
 
   const historico = await historicoConversa(sb, e.wa_id);
   const { data: casas } = await sb.from('properties').select('id,nome').order('nome');
+  const base = baseTexto(await lerBase(sb), casas || [], { paraRobo: true });
   let x: Extracao;
-  try { x = await extrair(historico, casas || []); }
+  try { x = await extrair(historico, casas || [], base); }
   catch (err) { console.error('IA', err); return { deal_id, respondeu: false, motivo: 'IA indisponível: ' + (err as Error).message }; }
   await sb.from('wa_messages').update({ extracao: x }).eq('id', msgId);
   if (x.resumo) await sb.from('deals').update({ proxima_acao: `${ACAO_RESPONDER}: ${x.resumo}`.slice(0, 140) }).eq('id', deal_id);
 
-  if (x.assunto !== 'disponibilidade_preco') return { deal_id, respondeu: false, motivo: `assunto "${x.assunto}": fica para você`, extracao: x };
+  // Dúvida que a base das casas responde: o robô responde só com os fatos da base (a IA escreveu a resposta)
+  const duvida = x.assunto === 'duvida' && !!base && !!x.resposta?.trim();
+  if (x.assunto !== 'disponibilidade_preco' && !duvida) return { deal_id, respondeu: false, motivo: `assunto "${x.assunto}": fica para você`, extracao: x };
 
-  const datas = normalizarDatas(x);
+  const datas = duvida ? null : normalizarDatas(x);
   let texto: string, cot: any = null;
-  if (!datas) {
+  if (duvida) {
+    texto = x.resposta!.trim();
+  } else if (!datas) {
     // Falta a data: pede só o que falta (não chuta)
     texto = 'Para eu verificar a disponibilidade e os valores, me diga a data de entrada, a data de saída e quantas pessoas vão se hospedar.';
   } else if (!x.datas_exatas) {
@@ -187,6 +193,9 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
     if (pedida) { patch.valor = pedida.total; patch.local = pedida.nome; }
     const { data: d } = await sb.from('deals').select('etapa').eq('id', deal_id).single();
     if (d?.etapa === 'lead') patch.etapa = 'orcamento';
+  } else if (duvida) {
+    patch.proxima_acao = 'Acompanhar: o robô respondeu uma dúvida';
+    patch.data_proxima_acao = addDays(hoje(), 1);
   } else {
     patch.proxima_acao = datas ? 'Acompanhar: o robô pediu para confirmar as datas' : 'Acompanhar: o robô pediu as datas';
     patch.data_proxima_acao = addDays(hoje(), 1);
@@ -268,7 +277,7 @@ async function historicoConversa(sb: SB, wa_id: string) {
 
 // ---------- IA: o que o cliente quer ----------
 const ExtracaoSchema = z.object({
-  assunto: z.enum(['disponibilidade_preco', 'confirmar_reserva', 'outro']),
+  assunto: z.enum(['disponibilidade_preco', 'confirmar_reserva', 'duvida', 'outro']),
   casa: z.enum(['QS39', 'QS40', 'QS50', 'qualquer']),
   checkin: z.string().nullable(),
   checkout: z.string().nullable(),
@@ -276,10 +285,11 @@ const ExtracaoSchema = z.object({
   hospedes: z.number().int().nullable(),
   datas_exatas: z.boolean(),
   resumo: z.string(),
+  resposta: z.string().nullable(),
 });
 type Extracao = z.infer<typeof ExtracaoSchema>;
 
-async function extrair(historico: any[], casas: { id: string; nome: string }[]): Promise<Extracao> {
+async function extrair(historico: any[], casas: { id: string; nome: string }[], base = ''): Promise<Extracao> {
   const d = hoje();
   const dia = new Intl.DateTimeFormat('pt-BR', { weekday: 'long', timeZone: 'America/Sao_Paulo' }).format(new Date());
   const system = `Você lê conversas do WhatsApp de atendimento de 3 casas de temporada no Condomínio Pipa Natureza (Pipa/RN) e extrai dados para um sistema. Hoje é ${dia}, ${d}.
@@ -288,12 +298,18 @@ Casas: ${casas.map(c => `${c.id} = ${c.nome}`).join('; ')}.
 Classifique a ÚLTIMA mensagem do cliente, usando as anteriores como contexto:
 - "disponibilidade_preco": pergunta se há vaga, quanto custa, valores ou diária para um período (mesmo que ainda sem datas).
 - "confirmar_reserva": quer fechar, reservar, pagar, mandar comprovante ou negociar desconto.
-- "outro": qualquer outra coisa (dúvidas sobre a casa, regras, check-in, reclamação, conversa).
+- "duvida": pergunta sobre as casas, regras, localização, horários, pets ou comodidades que as INFORMAÇÕES DAS CASAS abaixo respondem por completo.
+- "outro": qualquer outra coisa (dúvida que as informações não respondem, reclamação, pedido especial, conversa).
 
 Datas: converta para AAAA-MM-DD. Datas sem ano são a próxima ocorrência a partir de hoje. "Fim de semana" = sexta a domingo (saída no domingo). Feriados citados pelo nome (Réveillon, Carnaval etc.): use as datas do próximo feriado. Se o cliente der só a entrada e o número de noites, preencha noites e deixe checkout nulo. Se não houver data clara, deixe nulo: nunca invente.
 datas_exatas: true SOMENTE se o cliente disse o dia e o mês da entrada e também o dia da saída ou o número exato de noites (ex.: "de 17 a 20 de novembro", "dia 5/12, 3 noites"), ou se respondeu confirmando ("sim", "isso", "certo") as datas que o Robô perguntou. false quando usou expressões vagas: "fim de semana", "semana que vem", feriado pelo nome (Réveillon, Carnaval, Natal, Páscoa), só o mês, "umas X noites", "entre X e Y", "por volta de". Mesmo com datas_exatas false, preencha checkin/checkout com a sua melhor interpretação (o sistema vai perguntar ao cliente se está certo).
 casa: a casa citada pelo nome, ou "qualquer". hospedes: total de pessoas (adultos + crianças), nulo se não disser.
-resumo: até 8 palavras para o card, ex.: "Vaga 20-23/11, 6 pessoas, Casa Azul".`;
+resumo: até 8 palavras para o card, ex.: "Vaga 20-23/11, 6 pessoas, Casa Azul".
+resposta: só quando assunto = "duvida": a resposta para o cliente, em português do Brasil, curta e cordial, no tom de quem já está conversando (sem "Olá"), usando SOMENTE fatos das informações das casas, sem inventar nem prometer nada além delas. Nos outros assuntos, nulo.
+
+<informacoes_das_casas>
+${base || '(nenhuma informação cadastrada: nunca use "duvida")'}
+</informacoes_das_casas>`;
   const conversa = historico.map(m => `${m.autor === 'cliente' ? 'Cliente' : m.autor === 'robo' ? 'Robô' : 'Claudio'}: ${m.texto}`).join('\n');
   const client = new Anthropic();
   const r = await client.messages.parse({
@@ -328,16 +344,7 @@ async function cotar(checkin: string, checkout: string, adultos: number) {
 
 // ---------- envio: Z-API (se configurada) ou WhatsApp Cloud API ----------
 async function enviar(to: string, body: string, phoneIdWebhook?: string) {
-  const inst = Deno.env.get('ZAPI_INSTANCE');
-  if (inst) {
-    const r = await fetch(`https://api.z-api.io/instances/${inst}/token/${Deno.env.get('ZAPI_TOKEN')}/send-text`, {
-      method: 'POST', headers: { 'Client-Token': Deno.env.get('ZAPI_CLIENT_TOKEN') || '', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone: to, message: body, delayTyping: 3 }),
-    });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || !(j.messageId || j.id)) { console.error('envio Z-API', r.status, JSON.stringify(j)); return null; }
-    return { wamid: (j.messageId || j.id) as string };
-  }
+  if (Deno.env.get('ZAPI_INSTANCE')) return enviarZapi(to, body);
   const phoneId = Deno.env.get('WA_PHONE_ID') || phoneIdWebhook;
   const token = Deno.env.get('WA_TOKEN');
   if (!phoneId || !token) { console.error('WA_TOKEN/WA_PHONE_ID ausentes'); return null; }
