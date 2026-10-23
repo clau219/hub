@@ -1039,3 +1039,10 @@ kbd { font: 600 11px/1 var(--f); border: 1px solid var(--line-2); border-bottom-
   .wz-msg { max-width: 88%; }
 }
 .wz-liberar { margin: 0 0 0 6px; font-size: 12px; }
+.wz-caiu { margin: 0 0 14px; background: var(--late-bg); color: var(--late); border-color: color-mix(in srgb, var(--late) 40%, transparent); }
+.wz-caiu a { color: inherit; font-weight: 650; }
+.wz-con { color: var(--wa); }
+.selo { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: auto; border-radius: 999px; background: var(--wa); color: #fff; font-size: 11px; font-weight: 700; line-height: 1; }
+.selo[hidden] { display: none; }
+#moreBtn { position: relative; }
+#moreBtn .selo { position: absolute; top: 2px; right: 50%; margin: 0 -22px 0 0; }

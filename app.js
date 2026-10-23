@@ -31,6 +31,7 @@ function render() {
   const y = window.scrollY;
   VIEWS[r].render(el);
   window.scrollTo(0, y);
+  whatsapp.selo().catch(() => {});
 }
 
 async function start() {

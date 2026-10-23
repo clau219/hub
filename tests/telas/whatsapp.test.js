@@ -129,3 +129,37 @@ describe('WhatsApp: robô e atualização', () => {
     assert.ok(!$('.wz-conv-acoes a.wa'));
   });
 });
+
+describe('WhatsApp: conexão da Z-API e número no menu', () => {
+  test('Z-API desconectada: faixa vermelha com o motivo e link para a Z-API', async () => {
+    await trocarDados(dados({ app_config: [{ key: 'zapi_status', value: JSON.stringify({ ok: false, motivo: 'O celular das casas não está conectado à Z-API', desde: '2026-10-19T14:10:00Z', em: '2026-10-19T14:55:00Z' }) }] }), { supabase: true });
+    await abrir();
+    assert.match(texto('.wz-caiu'), /WhatsApp das casas desconectado desde 11:10: O celular das casas não está conectado/);
+    assert.equal($('.wz-caiu a').getAttribute('href'), 'https://app.z-api.io/app/instances');
+    assert.ok(!$('.wz-con'));
+  });
+  test('conectada: selo verde discreto com a hora da última verificação', async () => {
+    await trocarDados(dados({ app_config: [{ key: 'zapi_status', value: JSON.stringify({ ok: true, em: '2026-10-19T14:55:00Z' }) }] }), { supabase: true });
+    await abrir();
+    assert.ok(!$('.wz-caiu'));
+    assert.match(texto('.wz-con'), /Z-API conectada · 11:55/);
+  });
+  test('menu mostra quantas pessoas esperam resposta (some quando ninguém espera)', async () => {
+    await trocarDados(dados(), { supabase: true });
+    await abrir();
+    const selos = $$('a[data-route="whatsapp"] .selo');
+    assert.ok(selos.length >= 1);
+    assert.ok(selos.every(s => texto(s) === '1' && !s.hidden));
+    const d = dados(); d.wa_messages.push({ id: 'm9', wa_id: ANA, autor: 'claudio', direcao: 'out', tipo: 'text', texto: 'Mando sim', enviado_em: '2026-10-19T14:58:00Z' });
+    await trocarDados(d, { supabase: true });
+    await abrir();
+    assert.ok($$('a[data-route="whatsapp"] .selo').every(s => s.hidden));
+  });
+  test('selo() do app consulta o banco no máximo 1x por minuto', async () => {
+    await trocarDados(dados(), { supabase: true });
+    globalThis.__relogio.avancar(61e3);
+    const n = () => banco().consultas.filter(c => c.tabela === 'wa_messages').length;
+    const a = n(); await V.selo(); await V.selo(); await esperar(5);
+    assert.equal(n() - a, 1);
+  });
+});

@@ -11,7 +11,7 @@ const ASSUNTO = { disponibilidade_preco: 'Disponibilidade e valor', confirmar_re
 const CASA = { QS39: 'Casa Frida', QS40: 'Casa Azul', QS50: 'Casa Terracota' };
 const ATUALIZA = 10e3;
 
-let D = { contatos: [], msgs: [], cfg: null, at: 0, erro: '', assinatura: '' };
+let D = { contatos: [], msgs: [], cfg: null, zapi: null, at: 0, erro: '', assinatura: '' };
 let filtro = 'todas';
 let aberto = null; // wa_id da conversa aberta
 let viewEl = null;
@@ -25,17 +25,19 @@ async function carregar() {
   carregando = true;
   try {
     const sb = db.client();
-    const [c, m, s] = await Promise.all([
+    const [c, m, s, z] = await Promise.all([
       sb.from('wa_contacts').select('*'),
       sb.from('wa_messages').select('id,wa_id,deal_id,direcao,autor,tipo,texto,extracao,enviado_em').order('enviado_em', { ascending: false }).limit(1000),
       sb.from('wa_settings').select('*').eq('id', 1).maybeSingle(),
+      sb.from('app_config').select('value').eq('key', 'zapi_status').maybeSingle(),
     ]);
     const erro = c.error || m.error || s.error;
     if (erro) throw erro;
     const msgs = (m.data || []).reverse();
-    const assinatura = JSON.stringify([msgs.length, msgs.at(-1)?.id, msgs.map(x => x.extracao?.robo || '').join(), c.data, s.data]);
+    let zapi = null; try { zapi = JSON.parse(z.data?.value || 'null'); } catch {}
+    const assinatura = JSON.stringify([msgs.length, msgs.at(-1)?.id, msgs.map(x => x.extracao?.robo || '').join(), c.data, s.data, zapi?.ok, zapi?.motivo]);
     const mudou = assinatura !== D.assinatura;
-    D = { contatos: c.data || [], msgs, cfg: s.data, at: Date.now(), erro: '', assinatura };
+    D = { contatos: c.data || [], msgs, cfg: s.data, zapi, at: Date.now(), erro: '', assinatura };
     if (mudou && naTela() && viewEl) desenhar(viewEl);
     else if (naTela() && viewEl) { const t = viewEl.querySelector('.wz-at'); if (t) t.textContent = atualizado(); }
   } catch (e) {
@@ -92,7 +94,9 @@ function desenhar(el) {
     <h1>WhatsApp</h1>
     ${cfg ? `<label class="wa-switch wz-robo ${cfg.bot_ativo ? 'on' : ''}"><input type="checkbox" id="wzBot" ${cfg.bot_ativo ? 'checked' : ''}> <b>Robô ${cfg.bot_ativo ? 'ligado' : 'desligado'}</b></label>` : ''}
     <span class="muted small wz-at">${atualizado()}</span>
+    ${D.zapi?.ok ? `<span class="muted small wz-con" title="A vigia confere a conexão a cada 5 min">● Z-API conectada · ${quandoHora(D.zapi.em)}</span>` : ''}
   </div>
+  ${D.zapi?.ok === false ? `<p class="banner wz-caiu"><b>WhatsApp das casas desconectado</b> desde ${quandoHora(D.zapi.desde)}: ${h(D.zapi.motivo)}. As mensagens não estão chegando e o robô está parado. Abra a <a href="https://app.z-api.io/app/instances" target="_blank" rel="noopener">Z-API</a> e confira a instância (talvez seja preciso ler o QR code de novo).</p>` : ''}
   ${D.erro ? `<p class="banner warn">Não foi possível ler as conversas: ${h(D.erro)}. Tentando de novo a cada 10 s.</p>` : ''}
   ${cfg && !cfg.bot_ativo ? '<p class="muted small wz-aviso">Com o robô desligado, as mensagens só chegam aqui e no Pipeline; ninguém recebe resposta automática.</p>' : ''}
   <div class="wz ${conv ? 'tem-aberta' : ''}">
@@ -137,6 +141,7 @@ function desenhar(el) {
   });
   el.querySelector('#wzDeal')?.addEventListener('click', () => dealForm(conv.deal));
 
+  pintarSelo(esperando.length);
   const box = el.querySelector('.wz-msgs');
   if (box) box.scrollTop = noFim || yAntes == null ? box.scrollHeight : yAntes;
 }
@@ -199,6 +204,27 @@ function robo(m) {
   return fez || ia ? `<span class="wz-ia">${fez}${fez && ia ? '<br>' : ''}${ia ? `IA: ${h(ia)}` : ''}</span>` : '';
 }
 
+// ---------- número no menu: quantas pessoas esperam resposta ----------
+// Chamado pelo app a cada redesenho; consulta o banco no máximo 1x por minuto (a aba aberta atualiza na hora)
+let seloEm = 0;
+export async function selo() {
+  if (db.mode !== 'supabase' || db.leitura || Date.now() - seloEm < 60e3) return;
+  seloEm = Date.now();
+  const { data, error } = await db.client().from('wa_messages').select('wa_id,autor').order('enviado_em', { ascending: false }).limit(1000);
+  if (error) return;
+  const ult = new Map();
+  for (const m of data || []) if (!ult.has(m.wa_id)) ult.set(m.wa_id, m.autor);
+  pintarSelo([...ult.values()].filter(a => a === 'cliente').length);
+}
+function pintarSelo(n) {
+  for (const a of document.querySelectorAll('a[data-route="whatsapp"], #moreBtn')) {
+    let s = a.querySelector('.selo');
+    if (!s) { s = document.createElement('span'); s.className = 'selo'; s.setAttribute('aria-label', 'esperando resposta'); a.append(s); }
+    s.textContent = n || '';
+    s.hidden = !n;
+  }
+}
+
 // ---------- formatos ----------
 function fone(wa) {
   const s = String(wa || '');
@@ -209,4 +235,5 @@ function fone(wa) {
 const inicial = n => (String(n).replace(/[^\p{L}\d]/gu, '')[0] || '?').toUpperCase();
 const dm = iso => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
 const quando = ts => localDate(ts) === today() ? hhmm(ts) : dm(localDate(ts));
+const quandoHora = ts => !ts ? '' : localDate(ts) === today() ? hhmm(ts) : `${dm(localDate(ts))} ${hhmm(ts)}`;
 const atualizado = () => D.at ? `Atualiza sozinho · ${hhmm(new Date(D.at).toISOString())}` : '';
