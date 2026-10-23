@@ -988,3 +988,53 @@ kbd { font: 600 11px/1 var(--f); border: 1px solid var(--line-2); border-bottom-
 .fn-sub td:first-child { padding-left: 34px; }
 .fn-sub .fn-desc { font-weight: 500; font-size: 13px; }
 .fn-badge-n { background: var(--hover); color: var(--ink-2); border: 1px solid var(--line-2); }
+
+/* ---------- WhatsApp das casas (v-whatsapp.js) ---------- */
+.wz-robo { margin: 0; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: 14px; }
+.wz-robo.on { border-color: var(--wa); color: var(--wa); }
+.wz-aviso { margin: -8px 0 12px; }
+.wz { display: grid; grid-template-columns: minmax(260px, 340px) 1fr; gap: 16px; align-items: start; }
+.wz-col-lista { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.wz-lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.wz-item { display: flex; gap: 10px; width: 100%; text-align: left; padding: 10px; border: 1px solid transparent; border-radius: var(--r-m); background: none; color: var(--ink); cursor: pointer; font: inherit; }
+.wz-item:hover { background: var(--hover, var(--sunk)); }
+.wz-item.on { background: var(--surface); border-color: var(--line); box-shadow: var(--shadow-sm); }
+.wz-av { flex: none; display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; background: var(--brand-soft); color: var(--brand); font-weight: 700; }
+.wz-item.esperando .wz-av { background: var(--wa); color: #fff; }
+.wz-item-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.wz-item-top { display: flex; justify-content: space-between; gap: 8px; }
+.wz-item-top b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wz-item-top time { flex: none; font-size: 12px; color: var(--muted); }
+.wz-item.esperando .wz-item-top time { color: var(--wa); font-weight: 650; }
+.wz-prev { font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wz-tags { display: flex; gap: 4px; flex-wrap: wrap; }
+.wz-tags:empty { display: none; }
+.wz-tag { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--sunk); color: var(--muted); }
+.wz-tag.quente { background: color-mix(in srgb, var(--wa) 14%, transparent); color: var(--wa); }
+.wz-col-conversa { min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-m); padding: 12px; }
+.wz-vazio { margin: 0; border: 0; }
+.wz-conv-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.wz-conv-quem { display: flex; flex-direction: column; margin-right: auto; }
+.wz-conv-acoes { display: flex; gap: 6px; flex-wrap: wrap; }
+.wz-voltar { display: none; font-size: 22px; }
+.wz-conv-sub { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; font-size: 13px; }
+.wz-conv-sub .wa-pausa { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.wz-msgs { list-style: none; margin: 0; padding: 10px; display: flex; flex-direction: column; gap: 6px; height: min(62vh, 640px); overflow-y: auto; background: var(--sunk); border-radius: var(--r-s); }
+.wz-dia { align-self: center; font-size: 12px; color: var(--muted); padding: 2px 10px; background: var(--surface); border-radius: 999px; margin: 6px 0; }
+.wz-msg { max-width: 80%; padding: 6px 10px; border-radius: 10px; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface); border: 1px solid var(--line); align-self: flex-start; }
+.wz-msg small { display: block; font-size: 11px; color: var(--muted); }
+.wz-msg.wz-robo, .wz-msg.wz-claudio { align-self: flex-end; border-color: color-mix(in srgb, var(--wa) 45%, var(--line)); background: color-mix(in srgb, var(--wa) 8%, var(--surface)); }
+.wz-ia { display: block; margin-top: 6px; padding-top: 5px; border-top: 1px dashed var(--line-2); font-size: 12px; color: var(--muted); white-space: normal; }
+.wz-ia b { color: var(--ink-2); }
+.wz-ia b.ok { color: var(--wa); }
+@media (max-width: 760px) {
+  .wz { grid-template-columns: 1fr; }
+  .wz.tem-aberta .wz-col-lista { display: none; }
+  .wz:not(.tem-aberta) .wz-col-conversa { display: none; }
+  .wz-voltar { display: inline-grid; }
+  .wz-conv-acoes { width: 100%; }
+  .wz-conv-acoes .btn { flex: 1; justify-content: center; }
+  .wz-col-conversa { padding: 8px; }
+  .wz-msgs { height: calc(100dvh - 300px); min-height: 280px; }
+  .wz-msg { max-width: 88%; }
+}

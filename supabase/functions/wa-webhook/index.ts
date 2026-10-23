@@ -1,12 +1,15 @@
-// WhatsApp das casas → Hub. Recebe o webhook da WhatsApp Cloud API (número em coexistência com o app Business):
+// WhatsApp das casas → Hub. Recebe o webhook da Z-API (aparelho conectado por QR code) ou da WhatsApp Cloud API
+// (número em coexistência com o app Business):
 // - cada mensagem recebida vira/atualiza uma oportunidade de Aluguéis no Pipeline ("Responder WhatsApp");
 // - a IA (Claude Haiku) lê a conversa e extrai casa, datas e hóspedes;
 // - se for pergunta de disponibilidade/valor, consulta a airbnb-quote e responde sozinho;
 // - mensagens que você manda pelo app (ecos) ficam registradas e silenciam o robô naquela conversa.
 // O robô só informa disponibilidade e valor: nunca confirma reserva, não negocia e não responde o que não entendeu.
 //
-// Segredos (supabase secrets set): WA_VERIFY_TOKEN, WA_APP_SECRET, WA_TOKEN, ANTHROPIC_API_KEY
-// Opcionais: WA_PHONE_ID (senão usa o do webhook), WA_GRAPH_VERSION (padrão v25.0)
+// Segredos (supabase secrets set): ANTHROPIC_API_KEY e
+//   Z-API: ZAPI_INSTANCE, ZAPI_TOKEN, ZAPI_CLIENT_TOKEN, ZAPI_WEBHOOK_KEY (a Z-API não assina o webhook: a URL
+//          cadastrada nela leva ?zapi=<ZAPI_WEBHOOK_KEY>). Com ZAPI_INSTANCE definido, as respostas saem pela Z-API.
+//   Meta:  WA_VERIFY_TOKEN, WA_APP_SECRET, WA_TOKEN; opcionais WA_PHONE_ID (senão usa o do webhook), WA_GRAPH_VERSION (padrão v25.0)
 // Teste sem a Meta: POST com cabeçalho x-hub-cron e corpo { "teste": { "wa_id": "5584...", "nome": "Ana", "texto": "..." } }
 //   (acrescente "eco": true para simular uma mensagem sua). Nada é enviado ao WhatsApp no teste.
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
@@ -46,12 +49,16 @@ Deno.serve(async req => {
     return json(t.eco ? await processarEco(sb, e) : await processarEntrada(sb, e, { teste: true }));
   }
 
-  if (!(await assinaturaOk(req, raw))) return new Response('assinatura inválida', { status: 401 });
+  const zapi = url.searchParams.has('zapi');
+  if (zapi) {
+    const chave = Deno.env.get('ZAPI_WEBHOOK_KEY');
+    if (!chave || url.searchParams.get('zapi') !== chave) return new Response('chave inválida', { status: 401 });
+  } else if (!(await assinaturaOk(req, raw))) return new Response('assinatura inválida', { status: 401 });
   let body: any;
   try { body = JSON.parse(raw); } catch { return new Response('ok'); }
 
-  // Responde 200 na hora (a Meta reenvia se demorar) e processa em segundo plano
-  const tarefa = processarWebhook(sb, body).catch(e => console.error('wa-webhook', e));
+  // Responde 200 na hora (Meta e Z-API reenviam se demorar) e processa em segundo plano
+  const tarefa = (zapi ? processarZapi(sb, body) : processarWebhook(sb, body)).catch(e => console.error('wa-webhook', e));
   // @ts-ignore EdgeRuntime existe no Supabase
   if (typeof EdgeRuntime !== 'undefined') EdgeRuntime.waitUntil(tarefa); else await tarefa;
   return new Response('ok');
@@ -75,6 +82,46 @@ async function processarWebhook(sb: SB, body: any) {
   }
 }
 
+// Z-API: um evento por chamada. "Ao receber" traz as do cliente e, com "notificar as enviadas por mim", as suas
+// (fromMe). As que o próprio robô mandou pela API vêm com fromApi e já estão gravadas.
+async function processarZapi(sb: SB, m: any) {
+  if (m?.type !== 'ReceivedCallback') return;
+  const inst = Deno.env.get('ZAPI_INSTANCE');
+  if (inst && m.instanceId && m.instanceId !== inst) return console.warn('Z-API: instância desconhecida', m.instanceId);
+  if (m.isGroup || m.isNewsletter || m.broadcast || m.isStatusReply || m.isEdit || m.reaction || !m.phone || !m.messageId) return;
+  if (m.fromMe && m.fromApi) return;
+  // O WhatsApp às vezes identifica a conversa por LID ("1701...@lid") em vez do telefone, sobretudo nas suas
+  // mensagens: a Z-API traduz, senão a conversa sairia duplicada no Pipeline
+  let phone = String(m.phone);
+  if (phone.endsWith('@lid')) phone = (await telefoneDoLid(phone)) || phone;
+  const wa_id = phone.includes('@') ? phone : phone.replace(/\D/g, '');
+  const { tipo, texto } = conteudoZapi(m);
+  const e: Entrada = { wa_id, nome: m.fromMe ? null : m.senderName || m.chatName, wamid: m.messageId, tipo, texto, ts: new Date(m.momment || Date.now()) };
+  if (m.fromMe) await processarEco(sb, e); else await processarEntrada(sb, e, {});
+}
+
+async function telefoneDoLid(lid: string): Promise<string | null> {
+  try {
+    const r = await fetch(`https://api.z-api.io/instances/${Deno.env.get('ZAPI_INSTANCE')}/token/${Deno.env.get('ZAPI_TOKEN')}/chats/${encodeURIComponent(lid)}`, {
+      headers: { 'Client-Token': Deno.env.get('ZAPI_CLIENT_TOKEN') || '' }, signal: AbortSignal.timeout(10000),
+    });
+    const j = await r.json().catch(() => ({}));
+    return r.ok && /^\d{10,15}$/.test(j.phone || '') ? j.phone : null;
+  } catch (e) { console.error('Z-API lid', e); return null; }
+}
+
+function conteudoZapi(m: any): { tipo: string; texto: string | null } {
+  if (m.text?.message != null) return { tipo: 'text', texto: m.text.message };
+  if (m.buttonsResponseMessage) return { tipo: 'text', texto: m.buttonsResponseMessage.message ?? null };
+  if (m.listResponseMessage) return { tipo: 'text', texto: m.listResponseMessage.title ?? m.listResponseMessage.message ?? null };
+  for (const tipo of ['image', 'video', 'audio', 'document', 'sticker', 'location', 'contact']) {
+    if (!m[tipo]) continue;
+    const leg = m[tipo].caption || m[tipo].fileName;
+    return { tipo, texto: `[${tipo}]${leg ? ' ' + leg : ''}` };
+  }
+  return { tipo: 'outro', texto: null };
+}
+
 // ---------- mensagem do cliente ----------
 async function processarEntrada(sb: SB, e: Entrada, { teste = false }) {
   const { data: dup } = await sb.from('wa_messages').select('id').eq('wamid', e.wamid).maybeSingle();
@@ -88,6 +135,13 @@ async function processarEntrada(sb: SB, e: Entrada, { teste = false }) {
   }).select('id').single();
   await sb.from('deals').update({ proxima_acao: ACAO_RESPONDER, data_proxima_acao: hoje(), updated_at: new Date().toISOString() }).eq('id', deal_id);
 
+  // O que o robô decidiu fica gravado na mensagem (a aba WhatsApp mostra "por que não respondeu")
+  const r: Record<string, any> = await decidir(sb, e, conversa, deal_id, msg!.id, teste);
+  await sb.from('wa_messages').update({ extracao: { ...(r.extracao || {}), robo: r.respondeu ? 'respondeu' : r.motivo } }).eq('id', msg!.id);
+  return r;
+}
+
+async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId: string, teste: boolean) {
   // ---------- o robô deve responder? ----------
   const motivo = await motivoSilencio(sb, conversa, e);
   if (motivo) return { deal_id, respondeu: false, motivo };
@@ -97,7 +151,7 @@ async function processarEntrada(sb: SB, e: Entrada, { teste = false }) {
   let x: Extracao;
   try { x = await extrair(historico, casas || []); }
   catch (err) { console.error('IA', err); return { deal_id, respondeu: false, motivo: 'IA indisponível: ' + (err as Error).message }; }
-  await sb.from('wa_messages').update({ extracao: x }).eq('id', msg!.id);
+  await sb.from('wa_messages').update({ extracao: x }).eq('id', msgId);
   if (x.resumo) await sb.from('deals').update({ proxima_acao: `${ACAO_RESPONDER}: ${x.resumo}`.slice(0, 140) }).eq('id', deal_id);
 
   if (x.assunto !== 'disponibilidade_preco') return { deal_id, respondeu: false, motivo: `assunto "${x.assunto}": fica para você`, extracao: x };
@@ -263,8 +317,18 @@ async function cotar(checkin: string, checkout: string, adultos: number) {
   } catch (e) { console.error('airbnb-quote', e); return null; }
 }
 
-// ---------- WhatsApp Cloud API ----------
+// ---------- envio: Z-API (se configurada) ou WhatsApp Cloud API ----------
 async function enviar(to: string, body: string, phoneIdWebhook?: string) {
+  const inst = Deno.env.get('ZAPI_INSTANCE');
+  if (inst) {
+    const r = await fetch(`https://api.z-api.io/instances/${inst}/token/${Deno.env.get('ZAPI_TOKEN')}/send-text`, {
+      method: 'POST', headers: { 'Client-Token': Deno.env.get('ZAPI_CLIENT_TOKEN') || '', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: to, message: body, delayTyping: 3 }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !(j.messageId || j.id)) { console.error('envio Z-API', r.status, JSON.stringify(j)); return null; }
+    return { wamid: (j.messageId || j.id) as string };
+  }
   const phoneId = Deno.env.get('WA_PHONE_ID') || phoneIdWebhook;
   const token = Deno.env.get('WA_TOKEN');
   if (!phoneId || !token) { console.error('WA_TOKEN/WA_PHONE_ID ausentes'); return null; }

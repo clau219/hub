@@ -12,12 +12,13 @@ import * as cripto from './v-cripto.js';
 import * as saude from './v-saude.js';
 import * as financas from './v-financas.js';
 import * as ajustes from './v-ajustes.js';
+import * as whatsapp from './v-whatsapp.js';
 import * as paleta from './palette.js';
 
-const VIEWS = { hoje, pipeline, agenda, alugueis, tarefas, contatos, cripto, saude, financas, ajustes };
+const VIEWS = { hoje, pipeline, agenda, alugueis, tarefas, contatos, cripto, saude, financas, ajustes, whatsapp };
 const $ = s => document.querySelector(s);
 const route = () => (location.hash.replace(/^#\//, '') || 'hoje').split('?')[0];
-const NO_MAIS = ['alugueis', 'tarefas', 'contatos', 'cripto', 'saude', 'financas', 'ajustes'];
+const NO_MAIS = ['alugueis', 'whatsapp', 'tarefas', 'contatos', 'cripto', 'saude', 'financas', 'ajustes'];
 
 function render() {
   const r = VIEWS[route()] ? route() : 'hoje';

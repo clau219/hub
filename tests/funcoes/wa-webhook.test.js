@@ -31,7 +31,12 @@ function webhook(valor, field = 'messages', { assinatura } = {}) {
 const msgCliente = (texto, x = {}) => ({ contacts: [{ wa_id: WA, profile: { name: 'Ana Lima' } }], messages: [{ from: WA, id: 'wamid.' + Math.random(), timestamp: String(Date.parse('2026-10-19T14:59:00Z') / 1000), type: 'text', text: { body: texto }, ...x }] });
 const deal = () => banco().t('deals')[0];
 before(async () => { fn = await carregarFuncao('wa-webhook', ENV); });
-beforeEach(() => { limparRede(); for (const [k, v] of Object.entries(ENV)) definirEnv(k, v); definirEnv('WA_PHONE_ID', undefined); });
+const ZAPI = { ZAPI_INSTANCE: 'INST1', ZAPI_TOKEN: 'tok1', ZAPI_CLIENT_TOKEN: 'cli1', ZAPI_WEBHOOK_KEY: 'chave-z' };
+beforeEach(() => {
+  limparRede();
+  for (const [k, v] of Object.entries(ENV)) definirEnv(k, v);
+  for (const k of ['WA_PHONE_ID', ...Object.keys(ZAPI)]) definirEnv(k, undefined);
+});
 
 describe('wa-webhook: Meta (verificação, assinatura)', () => {
   test('verificação do webhook (GET) com o token certo devolve o desafio', async () => {
@@ -120,6 +125,20 @@ describe('wa-webhook: quando o robô fica quieto', () => {
     const m = banco().t('wa_messages')[0];
     assert.equal(m.texto, '[image] foto da casa');
     assert.equal(banco().t('wa_messages').length, 1);
+  });
+  test('a decisão do robô fica gravada na mensagem do cliente (para a aba WhatsApp)', async () => {
+    novoBanco(DADOS());
+    responderIA(IA());
+    await teste({ texto: 'Quanto custa?' });
+    assert.equal(banco().t('wa_messages').find(m => m.autor === 'cliente').extracao.robo, 'respondeu');
+    const d = DADOS(); d.wa_settings[0].bot_ativo = false; novoBanco(d);
+    await teste({ texto: 'oi' });
+    assert.deepEqual(banco().t('wa_messages')[0].extracao, { robo: 'robô desligado em Ajustes' });
+    novoBanco(DADOS());
+    responderIA(IA({ assunto: 'outro', resumo: 'Pet' }));
+    await teste({ texto: 'Aceitam cachorro?' });
+    const x = banco().t('wa_messages')[0].extracao;
+    assert.deepEqual([x.resumo, x.robo], ['Pet', 'assunto "outro": fica para você']);
   });
   test('IA fora do ar: não responde e explica', async () => {
     novoBanco(DADOS());
@@ -245,5 +264,94 @@ describe('wa-webhook: envio real e ecos', () => {
     responderIA(IA({ assunto: 'outro' }));
     await webhook(msgCliente(null, { type: 'interactive', text: undefined, interactive: { button_reply: { title: 'Quero reservar' } } }));
     assert.equal(banco().t('wa_messages')[0].texto, 'Quero reservar');
+  });
+});
+
+describe('wa-webhook: Z-API', () => {
+  const ZURL = /api\.z-api\.io/;
+  const zapi = (x = {}, chave = 'chave-z') => fn(pedido(`/wa-webhook?zapi=${chave}`, { corpo: {
+    type: 'ReceivedCallback', instanceId: 'INST1', messageId: 'Z' + Math.random(), phone: WA, fromMe: false,
+    momment: Date.parse('2026-10-19T14:59:00Z'), status: 'RECEIVED', senderName: 'Ana Lima', chatName: 'Ana Lima',
+    isGroup: false, isNewsletter: false, text: { message: 'Qual o valor?' }, ...x,
+  }, auth: null }));
+  beforeEach(() => { for (const [k, v] of Object.entries(ZAPI)) definirEnv(k, v); });
+
+  test('chave da URL errada ou ausente nos segredos: 401, nada gravado', async () => {
+    novoBanco(DADOS());
+    assert.equal((await zapi({}, 'errada')).status, 401);
+    definirEnv('ZAPI_WEBHOOK_KEY', undefined);
+    assert.equal((await zapi({}, '')).status, 401);
+    assert.equal(banco().t('wa_messages').length, 0);
+  });
+  test('mensagem do cliente: cria a oportunidade e responde pela Z-API (send-text com Client-Token)', async () => {
+    novoBanco(DADOS());
+    responderIA(IA());
+    simular(ZURL, { zaapId: 'zz', messageId: 'Z-resposta', id: 'Z-resposta' });
+    const r = await zapi();
+    assert.deepEqual([r.status, await r.text()], [200, 'ok']);
+    assert.equal(banco().t('contacts')[0].nome, 'Ana Lima');
+    assert.equal(banco().t('wa_messages').find(m => m.autor === 'cliente').texto, 'Qual o valor?');
+    const env = chamadasPara(ZURL)[0];
+    assert.equal(env.url, 'https://api.z-api.io/instances/INST1/token/tok1/send-text');
+    assert.equal(env.headers['client-token'], 'cli1');
+    assert.equal(env.json().phone, WA);
+    assert.match(env.json().message, /me diga a data de entrada/);
+    assert.equal(banco().t('wa_messages').find(m => m.autor === 'robo').wamid, 'Z-resposta');
+    assert.equal(chamadasPara(/graph\.facebook\.com/).length, 0);
+  });
+  test('falha no envio pela Z-API: não registra resposta', async () => {
+    novoBanco(DADOS());
+    responderIA(IA());
+    simular(ZURL, { status: 400, json: { error: 'NOT_CONNECTED' } });
+    await zapi();
+    assert.equal(banco().t('wa_messages').filter(m => m.autor === 'robo').length, 0);
+  });
+  test('grupo, canal, status, reação, outra instância e outros eventos são ignorados', async () => {
+    novoBanco(DADOS());
+    responderIA(() => { throw new Error('não devia'); });
+    for (const x of [{ isGroup: true }, { isNewsletter: true }, { isStatusReply: true }, { reaction: { value: '👍' } }, { instanceId: 'OUTRA' }, { type: 'MessageStatusCallback' }]) await zapi(x);
+    assert.equal(banco().t('wa_messages').length, 0);
+  });
+  test('mensagem sua pelo celular (fromMe): vira eco e silencia o robô; a do próprio robô (fromApi) é ignorada', async () => {
+    novoBanco(DADOS());
+    responderIA(() => { throw new Error('não devia'); });
+    await zapi({ fromMe: true, fromApi: true, messageId: 'Z-robo', text: { message: 'resposta do robô' } });
+    assert.equal(banco().t('wa_messages').length, 0);
+    await zapi({ fromMe: true, messageId: 'Z-eu', senderName: 'Claudio', text: { message: 'Oi Ana, vou ver!' } });
+    const m = banco().t('wa_messages')[0];
+    assert.deepEqual([m.autor, m.direcao, m.texto], ['claudio', 'out', 'Oi Ana, vou ver!']);
+    assert.equal(banco().t('wa_contacts')[0].ultima_manual, '2026-10-19T14:59:00.000Z');
+    assert.equal(banco().t('contacts')[0].nome, '(84) 99111-8864', 'o nome do eco é o seu, não o do cliente');
+  });
+  test('imagem com legenda e áudio ficam para você; resposta de botão vira texto', async () => {
+    novoBanco(DADOS());
+    responderIA(IA({ assunto: 'outro' }));
+    await zapi({ messageId: 'Z1', text: undefined, image: { imageUrl: 'x', caption: 'foto da casa' } });
+    await zapi({ messageId: 'Z2', text: undefined, audio: { audioUrl: 'x' } });
+    await zapi({ messageId: 'Z3', text: undefined, buttonsResponseMessage: { buttonId: '1', message: 'Quero reservar' } });
+    assert.deepEqual(banco().t('wa_messages').map(m => [m.tipo, m.texto]), [['image', '[image] foto da casa'], ['audio', '[audio]'], ['text', 'Quero reservar']]);
+  });
+  test('conversa identificada por LID: a Z-API traduz para o telefone e tudo cai na mesma oportunidade', async () => {
+    novoBanco(DADOS());
+    responderIA(IA({ assunto: 'outro' }));
+    simular(/\/chats\/1701%40lid$/, { phone: WA, lid: '1701@lid' });
+    await zapi({ messageId: 'Z-in', text: { message: 'oi' } });
+    await zapi({ fromMe: true, phone: '1701@lid', messageId: 'Z-eco', text: { message: 'Oi Ana!' } });
+    assert.equal(chamadasPara(/\/chats\//)[0].headers['client-token'], 'cli1');
+    assert.deepEqual(banco().t('wa_messages').map(m => [m.wa_id, m.autor]), [[WA, 'cliente'], [WA, 'claudio']]);
+    assert.equal(banco().t('deals').length, 1);
+  });
+  test('LID que a Z-API não traduz: guarda como veio, sem travar', async () => {
+    novoBanco(DADOS());
+    simular(/\/chats\//, { status: 404, json: {} });
+    await zapi({ fromMe: true, phone: '999@lid', messageId: 'Z-x', text: { message: 'oi' } });
+    assert.equal(banco().t('wa_messages')[0].wa_id, '999@lid');
+  });
+  test('reentrega (mesmo messageId) não duplica', async () => {
+    novoBanco(DADOS());
+    responderIA(IA({ assunto: 'outro' }));
+    await zapi({ messageId: 'Z-mesmo' });
+    await zapi({ messageId: 'Z-mesmo' });
+    assert.equal(banco().t('wa_messages').length, 1);
   });
 });
