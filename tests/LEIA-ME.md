@@ -25,6 +25,14 @@ Para ver os `console.warn/error` do Hub: `HUB_TESTE_LOG=1 npm test`.
 | `telas/` | app (abertura, login, offline), ui (formulários), Hoje, Pipeline (computador e celular), Agenda, Aluguéis, Tarefas/Contatos, paleta e hábitos, Cripto, Saúde, Finanças (com o Painel), Ajustes |
 | `funcoes/` | airbnb-quote, cripto-carteiras, fin-sync, garmin-sync, gcal-sync, ical-feed, ical-sync, wa-webhook |
 
+## Robô do WhatsApp testado como hóspede (`funcoes/wa-hospede.test.js`)
+
+Conversas inteiras: hóspede manda mensagem pela Z-API → wa-webhook → IA simulada (`helpers/ia-robo.js`, segue as regras
+escritas nos prompts do robô) → airbnb-quote de verdade → Airbnb falso (`helpers/airbnb-falso.js`) → resposta pela Z-API.
+O hóspede responde ao que o robô perguntar (confirmação, saída, datas, pessoas). Depois de cada teste, toda mensagem do
+robô é conferida: telefone certo, sem campo a preencher, sem senha do Wi-Fi, Pix ou link da localização, sem confirmar
+reserva e só com valores que o Airbnb deu. Se o prompt do robô mudar de regra, ajuste `ia-robo.js` junto.
+
 ## Como funciona (pasta `helpers/`)
 
 - `ambiente.js`: carregado antes de tudo; para o relógio, bloqueia a rede e guarda o console.

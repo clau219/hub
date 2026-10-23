@@ -23,6 +23,11 @@ export function criarBanco(tabelas = {}) {
     erroSessao: null,
     login: null, // [email, senha] do último signInWithPassword
     senhaCerta: 'senha-certa',
+    // Valores padrão das colunas, como no banco real (supabase/*.sql): valem no insert quando a coluna não vem
+    padroes: {
+      wa_messages: { tipo: () => 'text', enviado_em: () => new Date().toISOString() },
+      wa_contacts: { bot_pausado: () => false },
+    },
     t(nome) { return (this.tabelas[nome] ||= []); },
   };
   return b;
@@ -153,6 +158,7 @@ class Consulta {
         } else {
           const novo = { id: uuid(), created_at: new Date().toISOString(), ...r };
           if (novo.id == null) novo.id = uuid();
+          for (const [k, f] of Object.entries(b.padroes[this.tabela] || {})) if (novo[k] === undefined) novo[k] = f();
           tab.push(novo); out.push(novo);
         }
       }
