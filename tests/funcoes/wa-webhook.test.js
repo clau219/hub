@@ -161,6 +161,20 @@ describe('wa-webhook: quando o robô fica quieto', () => {
     assert.deepEqual([corpo.respondeu, corpo.motivo], [false, 'assunto "duvida": fica para você']);
     assert.match(globalThis.__anthropic.chamadas[0].system, /nenhuma informação cadastrada/);
   });
+  test('cumprimento ("oi") numa conversa nova: boas-vindas com as casas e pede datas e pessoas', async () => {
+    novoBanco(DADOS());
+    responderIA(IA({ assunto: 'saudacao', resumo: 'Cumprimento' }));
+    const { corpo } = await teste({ texto: 'oi' });
+    assert.equal(corpo.respondeu, true);
+    assert.equal(corpo.texto, 'Olá! Tudo bem? Aqui é o atendimento das casas Azul, Frida e Terracota, no Condomínio Pipa Natureza, em Pipa. Me diga a data de entrada, a data de saída e quantas pessoas vão se hospedar, que eu já verifico a disponibilidade e os valores.');
+    assert.equal(deal().proxima_acao, 'Acompanhar: o robô pediu as datas');
+    assert.match(globalThis.__anthropic.chamadas[0].system, /"saudacao": só cumprimenta/);
+  });
+  test('cumprimento ou "?" numa conversa em andamento: só pede as datas, sem boas-vindas', async () => {
+    novoBanco(DADOS({ wa_messages: [{ id: 'r', wamid: 'r', wa_id: WA, autor: 'robo', texto: 'Oi!', enviado_em: '2026-10-19T14:00:00Z' }] }));
+    responderIA(IA({ assunto: 'saudacao' }));
+    assert.equal((await teste({ texto: '?' })).corpo.texto, 'Para eu verificar a disponibilidade e os valores, me diga a data de entrada, a data de saída e quantas pessoas vão se hospedar.');
+  });
   test('IA fora do ar: não responde e explica', async () => {
     novoBanco(DADOS());
     responderIA(() => { throw new Error('overloaded'); });

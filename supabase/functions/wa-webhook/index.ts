@@ -158,12 +158,18 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
 
   // Dúvida que a base das casas responde: o robô responde só com os fatos da base (a IA escreveu a resposta)
   const duvida = x.assunto === 'duvida' && !!base && !!x.resposta?.trim();
-  if (x.assunto !== 'disponibilidade_preco' && !duvida) return { deal_id, respondeu: false, motivo: `assunto "${x.assunto}": fica para você`, extracao: x };
+  // Só cumprimento ("oi", "bom dia", "?") ou pedido genérico de informação: o robô dá as boas-vindas e pede as datas
+  const saudacao = x.assunto === 'saudacao';
+  if (x.assunto !== 'disponibilidade_preco' && !duvida && !saudacao) return { deal_id, respondeu: false, motivo: `assunto "${x.assunto}": fica para você`, extracao: x };
 
-  const datas = duvida ? null : normalizarDatas(x);
+  const datas = duvida || saudacao ? null : normalizarDatas(x);
   let texto: string, cot: any = null;
   if (duvida) {
     texto = x.resposta!.trim();
+  } else if (saudacao && !conversando(historico)) {
+    const nomes = (casas || []).map((c: any) => String(c.nome).replace(/^Casa\s+/i, ''));
+    const lista = nomes.length > 1 ? `${nomes.slice(0, -1).join(', ')} e ${nomes.at(-1)}` : nomes[0] || '';
+    texto = `Tudo bem? Aqui é o atendimento das casas ${lista}, no Condomínio Pipa Natureza, em Pipa. Me diga a data de entrada, a data de saída e quantas pessoas vão se hospedar, que eu já verifico a disponibilidade e os valores.`;
   } else if (!datas) {
     // Falta a data: pede só o que falta (não chuta)
     texto = 'Para eu verificar a disponibilidade e os valores, me diga a data de entrada, a data de saída e quantas pessoas vão se hospedar.';
@@ -266,9 +272,9 @@ async function motivoSilencio(sb: SB, c: any, e: Entrada) {
 // (a mensagem da airbnb-quote vem com "Olá!" porque também é usada no botão de Aluguéis)
 function saudar(texto: string, historico: any[]) {
   const corpo = texto.replace(/^Olá!\s*/, '');
-  const conversando = historico.some(m => m.autor !== 'cliente' && Date.now() - Date.parse(m.enviado_em) < 864e5);
-  return conversando ? corpo : `Olá! ${corpo}`;
+  return conversando(historico) ? corpo : `Olá! ${corpo}`;
 }
+const conversando = (historico: any[]) => historico.some(m => m.autor !== 'cliente' && Date.now() - Date.parse(m.enviado_em) < 864e5);
 
 async function historicoConversa(sb: SB, wa_id: string) {
   const { data } = await sb.from('wa_messages').select('autor,texto,enviado_em').eq('wa_id', wa_id).order('enviado_em', { ascending: false }).limit(12);
@@ -277,7 +283,7 @@ async function historicoConversa(sb: SB, wa_id: string) {
 
 // ---------- IA: o que o cliente quer ----------
 const ExtracaoSchema = z.object({
-  assunto: z.enum(['disponibilidade_preco', 'confirmar_reserva', 'duvida', 'outro']),
+  assunto: z.enum(['disponibilidade_preco', 'confirmar_reserva', 'duvida', 'saudacao', 'outro']),
   casa: z.enum(['QS39', 'QS40', 'QS50', 'qualquer']),
   checkin: z.string().nullable(),
   checkout: z.string().nullable(),
@@ -298,6 +304,7 @@ Casas: ${casas.map(c => `${c.id} = ${c.nome}`).join('; ')}.
 Classifique a ÚLTIMA mensagem do cliente, usando as anteriores como contexto:
 - "disponibilidade_preco": pergunta se há vaga, quanto custa, valores ou diária para um período (mesmo que ainda sem datas).
 - "confirmar_reserva": quer fechar, reservar, pagar, mandar comprovante ou negociar desconto.
+- "saudacao": só cumprimenta ou chama ("oi", "olá", "bom dia", "tudo bem?", "?", "alguém aí?") ou pede informações de forma genérica ("queria informações sobre as casas"), sem pergunta concreta.
 - "duvida": pergunta sobre as casas, regras, localização, horários, pets ou comodidades que as INFORMAÇÕES DAS CASAS abaixo respondem por completo.
 - "outro": qualquer outra coisa (dúvida que as informações não respondem, reclamação, pedido especial, conversa).
 

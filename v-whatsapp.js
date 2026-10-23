@@ -9,7 +9,7 @@ import { h, today, localDate, hhmm, waLink, fmtDate, etapa, recebido, saldoDeal 
 import { dealForm, bookingForm, modal, toast } from './ui.js';
 
 const QUEM = { cliente: 'Cliente', robo: 'Robô', claudio: 'Você' };
-const ASSUNTO = { disponibilidade_preco: 'Disponibilidade e valor', confirmar_reserva: 'Quer reservar / pagar', duvida: 'Dúvida respondida pela base', outro: 'Outro assunto' };
+const ASSUNTO = { disponibilidade_preco: 'Disponibilidade e valor', confirmar_reserva: 'Quer reservar / pagar', duvida: 'Dúvida respondida pela base', saudacao: 'Cumprimento', outro: 'Outro assunto' };
 const CASA = { QS39: 'Casa Frida', QS40: 'Casa Azul', QS50: 'Casa Terracota' };
 const ATUALIZA = 10e3;
 const PRONTAS = [['pix', 'Pix do sinal'], ['local', 'Localização'], ['horarios', 'Check-in/out'], ['regras', 'Regras'], ['pets', 'Pets']];
