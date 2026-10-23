@@ -292,7 +292,7 @@ describe('wa-webhook: respostas automáticas', () => {
     novoBanco(DADOS());
     responderIA(IA({ assunto: 'outro' }));
     await teste({ texto: 'a azul, dia 05/11' });
-    assert.match(globalThis.__anthropic.chamadas[0].system, /"a azul, dia 05\/11".*NÃO é confirmar: é "disponibilidade_preco"/);
+    assert.match(globalThis.__anthropic.chamadas[0].system, /"a azul, dia 05\/11".*NÃO é reservar: é "disponibilidade_preco"/);
   });
   test('entrada + noites, sem saída: calcula a saída', async () => {
     novoBanco(DADOS());
@@ -438,7 +438,7 @@ describe('wa-webhook: pergunta que só o Claudio responde', () => {
     assert.deepEqual([push[0].title, push[0].body, push[0].tag], ['Ana perguntou algo que só você responde', 'Pede desconto para 5 noites', 'wa-pergunta']);
     assert.match(push[0].url, /#\/whatsapp\?c=5584991118864/);
     assert.equal(banco().t('wa_messages').filter(m => m.autor === 'robo').length, 1);
-    assert.match(globalThis.__anthropic.chamadas[0].system, /pergunta_claudio: .*desconto.*check-in antecipado.*fora do Airbnb/s);
+    assert.match(globalThis.__anthropic.chamadas[0].system, /pergunta_claudio: .*desconto.*check-in antecipado.*diferente do Pix do sinal/s);
   });
 
   test('no meio da conversa (já pediu datas): "posso levar meu cachorro?" sem base de pets → avisa e destaca; depois a 2ª pergunta não repete aviso nem push', async () => {
@@ -502,6 +502,177 @@ describe('wa-webhook: pergunta que só o Claudio responde', () => {
     const { corpo } = await teste({ texto: 'quero fechar a azul' });
     assert.deepEqual([corpo.respondeu, corpo.texto, corpo.para_claudio], [true, 'Olá! Vou confirmar isso e já te retorno.', 'Quer fechar a Casa Azul']);
     assert.equal(globalThis.__webpush.envios.length, 0);
+  });
+});
+
+describe('wa-webhook: reserva direta com sinal por Pix e comprovante lido pela IA', () => {
+  const AIRBNB = 'https://projeto.supabase.co/functions/v1/airbnb-quote';
+  const BASE = { geral: { pix_chave: '12.345.678/0001-90', pix_nome: 'Claudio Roberto Sousa Braga LTDA', sinal_pct: '50' } };
+  const PEDIDO = { casa: 'QS40', checkin: '2026-11-17', checkout: '2026-11-20', noites: null, hospedes: 4, datas_exatas: true, em: '2026-10-19T10:00:00Z' };
+  const COT_LIVRE = { checkin: '2026-11-17', checkout: '2026-11-20', noites: 3, adultos: 4, mensagem: 'Olá! Para 17/11 a 20/11...',
+    casas: [{ id: 'QS40', nome: 'Casa Azul', status: 'livre', total: 1650 }, { id: 'QS50', nome: 'Casa Terracota', status: 'livre', total: 1350 }, { id: 'QS39', nome: 'Casa Frida', status: 'ocupada' }] };
+  const PUSH = { app_secrets: [{ key: 'cron_token', value: 'cron-teste' }, { key: 'vapid_public', value: 'pub' }, { key: 'vapid_private', value: 'priv' }],
+    push_subscriptions: [{ id: 's1', endpoint: 'https://push/celular', p256dh: 'p', auth: 'a' }] };
+  const dados = (x = {}) => DADOS({ ...PUSH, contacts: [{ id: 'c1', nome: 'Ana Lima', telefone: '(84) 99111-8864' }],
+    deals: [{ id: 'd1', etapa: 'orcamento', contato_id: 'c1', pagamentos: [] }],
+    wa_contacts: [{ wa_id: WA, contato_id: 'c1', deal_id: 'd1', pedido: PEDIDO }],
+    app_config: [{ key: 'wa_base', value: JSON.stringify(BASE) }], ...x });
+  const SINAL = { casa: 'QS40', nome: 'Casa Azul', checkin: '2026-11-17', checkout: '2026-11-20', hospedes: 4, total: 1650, valor: 825, pct: 50, desde: '2026-10-19T14:00:00Z' };
+  const comSinal = (x = {}) => dados({ wa_contacts: [{ wa_id: WA, contato_id: 'c1', deal_id: 'd1', pedido: { ...PEDIDO, sinal: SINAL } }],
+    deals: [{ id: 'd1', etapa: 'negociacao', contato_id: 'c1', valor: 1650, pagamentos: [] }], ...x });
+  const E2E = 'E18236120202610191455s0123456789';
+  const LEITURA = (x = {}) => ({ e_comprovante_pix: true, valor: 825, recebedor_nome: 'CLAUDIO ROBERTO SOUSA BRAGA LTDA', recebedor_chave: '12.345.678/0001-90',
+    pagador_nome: 'ANA LIMA', data_hora: '2026-10-19T11:55:00-03:00', e2e: E2E, ...x });
+  // 1ª chamada: extração; a leitura do comprovante tem o system próprio
+  const ias = (extracao, leitura) => responderIA(q => (q.system.includes('comprovantes de Pix') ? (typeof leitura === 'function' ? leitura(q) : leitura) : extracao));
+  beforeEach(() => { globalThis.__webpush = { envios: [], falhar: null }; });
+
+  test('"quero reservar" com tudo conhecido: consulta de novo e manda total, sinal (50%) e Pix; card aguardando sinal', async () => {
+    novoBanco(dados());
+    simular(AIRBNB, COT_LIVRE);
+    responderIA(IA({ assunto: 'reservar', casa: 'QS40' }));
+    const { corpo } = await teste({ texto: 'quero reservar a azul' });
+    assert.deepEqual(chamadasPara(/airbnb-quote/)[0].json(), { checkin: '2026-11-17', checkout: '2026-11-20', adultos: 4 });
+    assert.equal(corpo.texto, 'Olá! Ótimo! Para reservar a Casa Azul de terça, 17/11, a sexta, 20/11, para 4 pessoas, o total é R$ 1.650.\nO sinal é de R$ 825 (50%), por Pix:\nChave: 12.345.678/0001-90\nNome: Claudio Roberto Sousa Braga LTDA\nDepois é só me mandar o comprovante aqui (foto ou PDF) que eu confirmo a reserva.');
+    const d = deal();
+    assert.deepEqual([d.etapa, d.valor, d.local, d.data_evento, d.proxima_acao], ['negociacao', 1650, 'Casa Azul', '2026-11-17', 'Aguardando sinal de R$ 825']);
+    assert.deepEqual(banco().t('wa_contacts')[0].pedido.sinal, { ...SINAL, desde: banco().t('wa_contacts')[0].pedido.sinal.desde });
+    assert.equal(banco().t('bookings').length, 0, 'nada é bloqueado antes do sinal');
+  });
+  test('quer reservar sem dizer a casa: mostra só as livres para escolher (sem Pix)', async () => {
+    novoBanco(dados({ wa_contacts: [{ wa_id: WA, contato_id: 'c1', deal_id: 'd1', pedido: { ...PEDIDO, casa: 'qualquer' } }] }));
+    simular(AIRBNB, COT_LIVRE);
+    responderIA(IA({ assunto: 'reservar' }));
+    const { corpo } = await teste({ texto: 'quero reservar' });
+    assert.equal(corpo.texto, 'Olá! Para reservar de 17/11 a 20/11, qual casa vocês preferem?\n• Casa Azul: R$ 1.650 no total\n• Casa Terracota: R$ 1.350 no total');
+    assert.doesNotMatch(corpo.texto, /Chave/);
+  });
+  test('a casa pedida não está mais livre: diz e mostra as livres; nada de Pix', async () => {
+    novoBanco(dados({ wa_contacts: [{ wa_id: WA, contato_id: 'c1', deal_id: 'd1', pedido: { ...PEDIDO, casa: 'QS39' } }] }));
+    simular(AIRBNB, COT_LIVRE);
+    responderIA(IA({ assunto: 'reservar', casa: 'QS39' }));
+    const { corpo } = await teste({ texto: 'quero reservar a frida' });
+    assert.equal(corpo.texto, 'Olá! A Casa Frida não está mais livre de 17/11 a 20/11.\nLivres de 17/11 a 20/11:\n• Casa Azul: R$ 1.650 no total\n• Casa Terracota: R$ 1.350 no total');
+    assert.equal(deal().etapa, 'orcamento');
+  });
+  test('quer reservar mas faltam dados: pergunta o que falta antes de qualquer Pix', async () => {
+    novoBanco(dados({ wa_contacts: [{ wa_id: WA, contato_id: 'c1', deal_id: 'd1', pedido: null }] }));
+    responderIA(IA({ assunto: 'reservar', casa: 'QS40', checkin: '2026-11-17', checkout: '2026-11-20', datas_exatas: true }));
+    const { corpo } = await teste({ texto: 'quero reservar a azul de 17 a 20/11' });
+    assert.equal(corpo.texto, 'Olá! Para eu consultar de 17/11 a 20/11: quantas pessoas vão se hospedar?');
+    assert.equal(chamadasPara(/airbnb-quote/).length, 0);
+  });
+  test('sem chave Pix cadastrada na base: não inventa, fica para você com a pergunta destacada', async () => {
+    novoBanco(dados({ app_config: [{ key: 'wa_base', value: '{}' }] }));
+    responderIA(IA({ assunto: 'reservar', casa: 'QS40' }));
+    const { corpo } = await teste({ texto: 'quero reservar a azul' });
+    assert.equal(corpo.texto, 'Olá! Vou confirmar isso e já te retorno.');
+    assert.match(deal().proxima_acao, /^❓ Cliente pergunta: Quer reservar a Casa Azul de 17\/11 a 20\/11 \(chave Pix não cadastrada\)/);
+  });
+  test('pede o Pix de novo com o sinal já enviado: só lembra do comprovante, sem consultar de novo', async () => {
+    novoBanco(comSinal({ wa_messages: [{ id: 'r', wamid: 'r', wa_id: WA, autor: 'robo', texto: 'O sinal é de R$ 825...', enviado_em: '2026-10-19T14:00:00Z' }] }));
+    responderIA(IA({ assunto: 'reservar' }));
+    const { corpo } = await teste({ texto: 'me passa o pix de novo?' });
+    assert.equal(corpo.texto, 'Assim que fizer o Pix de R$ 825, me manda o comprovante aqui (foto ou PDF) que eu confirmo a reserva da Casa Azul.');
+    assert.equal(chamadasPara(/airbnb-quote/).length, 0);
+  });
+
+  test('comprovante válido (foto pela Z-API): lê com a IA, confere tudo, cria a reserva direta, registra o sinal, fecha o card, confirma e avisa por push', async () => {
+    for (const [k, v] of Object.entries({ ZAPI_INSTANCE: 'INST1', ZAPI_TOKEN: 'tok1', ZAPI_CLIENT_TOKEN: 'cli1', ZAPI_WEBHOOK_KEY: 'chave-z' })) definirEnv(k, v);
+    novoBanco(comSinal());
+    simular(AIRBNB, COT_LIVRE);
+    simular('https://midia.z-api.io/comprovante.jpg', new Response(new Uint8Array([0xff, 0xd8, 0xff, 1, 2, 3]), { headers: { 'content-type': 'image/jpeg' } }));
+    simular(/api\.z-api\.io/, { messageId: 'z-r' + Math.random() });
+    let leu;
+    ias(IA(), q => { leu = q; return LEITURA(); });
+    const ev = { type: 'ReceivedCallback', instanceId: 'INST1', phone: WA, messageId: 'z1', fromMe: false, senderName: 'Ana Lima', momment: Date.now(),
+      image: { imageUrl: 'https://midia.z-api.io/comprovante.jpg', mimeType: 'image/jpeg', caption: '' } };
+    const res = await fn(pedido('/wa-webhook?zapi=chave-z', { corpo: ev, auth: null }));
+    assert.equal(res.status, 200);
+    // a IA recebeu a foto (base64) e o pedido de transcrição
+    assert.deepEqual([leu.messages[0].content[0].type, leu.messages[0].content[0].source.media_type, leu.messages[0].content[0].source.data], ['image', 'image/jpeg', '/9j/AQID']);
+    assert.deepEqual(chamadasPara(/airbnb-quote/)[0].json(), { checkin: '2026-11-17', checkout: '2026-11-20', adultos: 4 }, 'confere de novo no Airbnb');
+    const bk = banco().t('bookings')[0];
+    assert.deepEqual([bk.property_id, bk.checkin, bk.checkout, bk.origem, bk.status, bk.valor, bk.hospede, bk.contato_id], ['QS40', '2026-11-17', '2026-11-20', 'direto', 'confirmada', 1650, 'Ana Lima', 'c1']);
+    assert.match(bk.notas, /E2E E18236120202610191455S0123456789/);
+    const d = deal();
+    assert.deepEqual([d.etapa, d.pagamentos.length, d.pagamentos[0].valor, d.pagamentos[0].forma, d.proxima_acao], ['fechado', 1, 825, 'Pix', 'Conferir o sinal no banco (reserva confirmada pelo robô)']);
+    const cp = banco().t('wa_comprovantes')[0];
+    assert.deepEqual([cp.status, cp.e2e, cp.booking_id], ['valido', E2E.toUpperCase(), bk.id]);
+    const env = chamadasPara(/send-text/).map(c => c.json().message);
+    assert.equal(env.at(-1), 'Olá! Reserva confirmada! ✅\nCasa Azul, de terça, 17/11, a sexta, 20/11, para 4 pessoas.\nRecebi o sinal de R$ 825; faltam R$ 825 do total de R$ 1.650.\nQualquer dúvida, é só chamar por aqui.');
+    const push = globalThis.__webpush.envios;
+    assert.equal(push.length, 1);
+    assert.match(push[0].title, /Reserva confirmada pelo robô: Casa Azul, 17\/11 a 20\/11/);
+    assert.match(push[0].body, /Confira o sinal no banco/);
+    assert.equal(banco().t('wa_contacts')[0].pedido.sinal, null, 'o sinal pendente acaba');
+  });
+
+  const invalidos = [
+    ['valor menor que o sinal', LEITURA({ valor: 500 }), /valor R\$ 500 menor que o sinal de R\$ 825/],
+    ['recebedor diferente', LEITURA({ recebedor_nome: 'FULANO DE TAL', recebedor_chave: 'fulano@x.com' }), /recebedor não confere/],
+    ['data antes do pedido', LEITURA({ data_hora: '2026-10-18T09:00:00-03:00' }), /data fora do período/],
+    ['sem E2E', LEITURA({ e2e: null }), /E2E\) ausente/],
+    ['não é comprovante', LEITURA({ e_comprovante_pix: false }), /não parece um comprovante/],
+  ];
+  for (const [nome, leitura, motivo] of invalidos) test(`comprovante inválido (${nome}): não confirma, avisa que vai conferir e destaca o motivo`, async () => {
+    novoBanco(comSinal());
+    simular(AIRBNB, COT_LIVRE);
+    ias(IA(), leitura);
+    const { corpo } = await teste({ texto: '[image]', midia: { mime: 'image/png', base64: 'iVBORw0KGgo=' } });
+    assert.deepEqual([corpo.respondeu, corpo.texto, corpo.comprovante], [true, 'Olá! Recebi o comprovante! Vou conferir e já te retorno.', 'conferir']);
+    assert.match(corpo.motivo_comprovante, motivo);
+    assert.equal(banco().t('bookings').length, 0);
+    assert.match(deal().proxima_acao, /^❓ Conferir comprovante: /);
+    assert.equal(deal().etapa, 'negociacao');
+    assert.equal(banco().t('wa_comprovantes')[0].status, 'invalido');
+  });
+  test('o mesmo E2E não confirma duas reservas', async () => {
+    novoBanco(comSinal({ wa_comprovantes: [{ id: 'cp0', wa_id: '5584000000000', e2e: E2E.toUpperCase(), status: 'valido' }] }));
+    simular(AIRBNB, COT_LIVRE);
+    ias(IA(), LEITURA());
+    const { corpo } = await teste({ texto: '[image]', midia: { mime: 'image/png', base64: 'iVBORw0KGgo=' } });
+    assert.match(corpo.motivo_comprovante, /já usado em outra reserva/);
+    assert.equal(banco().t('bookings').length, 0);
+  });
+  test('comprovante certo mas a casa foi ocupada no Airbnb (ou no Hub) nesse meio tempo: não confirma', async () => {
+    novoBanco(comSinal());
+    simular(AIRBNB, { ...COT_LIVRE, casas: [{ id: 'QS40', nome: 'Casa Azul', status: 'ocupada' }] });
+    ias(IA(), LEITURA());
+    assert.match((await teste({ texto: '[image]', midia: { mime: 'image/png', base64: 'iVBORw0KGgo=' } })).corpo.motivo_comprovante, /não está mais livre no Airbnb/);
+    novoBanco(comSinal({ bookings: [{ id: 'b0', property_id: 'QS40', checkin: '2026-11-18', checkout: '2026-11-22', status: 'confirmada', origem: 'airbnb' }] }));
+    simular(AIRBNB, COT_LIVRE);
+    ias(IA(), LEITURA());
+    assert.match((await teste({ texto: '[image]', midia: { mime: 'image/png', base64: 'iVBORw0KGgo=' } })).corpo.motivo_comprovante, /já existe reserva ou bloqueio/);
+    assert.equal(banco().t('bookings').length, 1);
+  });
+  test('PDF também é lido (bloco de documento)', async () => {
+    novoBanco(comSinal());
+    simular(AIRBNB, COT_LIVRE);
+    let leu;
+    ias(IA(), q => { leu = q; return LEITURA(); });
+    const { corpo } = await teste({ texto: '[document]', midia: { mime: 'application/pdf', base64: 'JVBERi0=' } });
+    assert.equal(corpo.comprovante, 'confirmada');
+    assert.deepEqual([leu.messages[0].content[0].type, leu.messages[0].content[0].source.media_type], ['document', 'application/pdf']);
+  });
+  test('foto sem sinal pendente continua ficando para você', async () => {
+    novoBanco(dados());
+    responderIA(() => { throw new Error('a IA não devia ser chamada'); });
+    const { corpo } = await teste({ texto: '[image]', midia: { mime: 'image/png', base64: 'iVBORw0KGgo=' } });
+    assert.deepEqual([corpo.respondeu, corpo.motivo], [false, 'mensagem do tipo image: fica para você']);
+  });
+  test('regras de recebedor: nome (primeiro e último) ou a mesma chave; chave mascarada não basta sozinha', async () => {
+    novoBanco(comSinal());
+    simular(AIRBNB, COT_LIVRE);
+    for (const [leitura, ok] of [
+      [LEITURA({ recebedor_nome: 'Claudio R S Braga Ltda', recebedor_chave: null }), true],
+      [LEITURA({ recebedor_nome: null, recebedor_chave: '12345678000190' }), true],
+      [LEITURA({ recebedor_nome: 'CLAUDIO SOUZA', recebedor_chave: '**.345.678/0001-**' }), false],
+    ]) {
+      novoBanco(comSinal()); simular(AIRBNB, COT_LIVRE); ias(IA(), leitura);
+      const { corpo } = await teste({ texto: '[image]', midia: { mime: 'image/png', base64: 'iVBORw0KGgo=' } });
+      assert.equal(corpo.comprovante, ok ? 'confirmada' : 'conferir', JSON.stringify(leitura));
+    }
   });
 });
 

@@ -8,6 +8,10 @@
 // - pergunta que só o Claudio responde (desconto, pet, festa, check-in antecipado, pagamento fora do Airbnb, reserva,
 //   informação que a base não tem): o robô diz "vou confirmar isso e já te retorno", o card fica pendente com a
 //   pergunta em destaque e vai um push;
+// - "quero reservar" com casa, datas e pessoas: consulta o Airbnb de novo e manda o total, o sinal e o Pix;
+//   comprovante (foto/PDF) que chega depois é lido pela IA e, se tudo bater (valor, recebedor, data, E2E inédito
+//   e casa ainda livre), o robô cria a reserva direta, registra o sinal e confirma; senão, manda conferir.
+//   Um comprovante bem falsificado ainda passa: o push "confira o sinal no banco" existe para isso.
 // - mensagens que você manda pelo app (ecos) ficam registradas e silenciam o robô naquela conversa.
 // O robô só informa disponibilidade e valor: nunca confirma reserva, não negocia e não responde o que não entendeu.
 //
@@ -30,7 +34,8 @@ const ABERTAS = ['lead', 'orcamento', 'negociacao', 'fechado', 'realizado'];
 const ACAO_RESPONDER = 'Responder WhatsApp';
 
 type SB = ReturnType<typeof createClient>;
-type Entrada = { wa_id: string; nome?: string | null; wamid: string; tipo: string; texto: string | null; ts: Date; phoneId?: string };
+type Midia = { url?: string; mime: string; base64?: string };
+type Entrada = { wa_id: string; nome?: string | null; wamid: string; tipo: string; texto: string | null; ts: Date; phoneId?: string; midia?: Midia | null };
 
 Deno.serve(async req => {
   const url = new URL(req.url);
@@ -50,8 +55,10 @@ Deno.serve(async req => {
     const { data } = await sb.from('app_secrets').select('value').eq('key', 'cron_token').single();
     if (!data || data.value !== cron) return json({ error: 'não autorizado' }, 401);
     const t = JSON.parse(raw).teste;
-    if (!t?.wa_id || !t?.texto) return json({ error: 'informe teste.wa_id e teste.texto' }, 400);
-    const e: Entrada = { wa_id: String(t.wa_id).replace(/\D/g, ''), nome: t.nome, wamid: `teste-${crypto.randomUUID()}`, tipo: 'text', texto: t.texto, ts: new Date() };
+    if (!t?.wa_id || !(t?.texto || t?.midia)) return json({ error: 'informe teste.wa_id e teste.texto' }, 400);
+    // teste.midia = {mime, base64}: simula um comprovante (foto/PDF) sem a Z-API
+    const midia = t.midia?.base64 && t.midia?.mime ? { mime: String(t.midia.mime), base64: String(t.midia.base64) } : null;
+    const e: Entrada = { wa_id: String(t.wa_id).replace(/\D/g, ''), nome: t.nome, wamid: `teste-${crypto.randomUUID()}`, tipo: midia ? (midia.mime === 'application/pdf' ? 'document' : 'image') : 'text', texto: t.texto, ts: new Date(), midia };
     return json(t.eco ? await processarEco(sb, e) : await processarEntrada(sb, e, { teste: true }));
   }
 
@@ -101,8 +108,8 @@ async function processarZapi(sb: SB, m: any) {
   let phone = String(m.phone);
   if (phone.endsWith('@lid')) phone = (await telefoneDoLid(phone)) || phone;
   const wa_id = phone.includes('@') ? phone : phone.replace(/\D/g, '');
-  const { tipo, texto } = conteudoZapi(m);
-  const e: Entrada = { wa_id, nome: m.fromMe ? null : m.senderName || m.chatName, wamid: m.messageId, tipo, texto, ts: new Date(m.momment || Date.now()) };
+  const { tipo, texto, midia } = conteudoZapi(m);
+  const e: Entrada = { wa_id, nome: m.fromMe ? null : m.senderName || m.chatName, wamid: m.messageId, tipo, texto, ts: new Date(m.momment || Date.now()), midia };
   if (m.fromMe) await processarEco(sb, e); else await processarEntrada(sb, e, {});
 }
 
@@ -116,14 +123,17 @@ async function telefoneDoLid(lid: string): Promise<string | null> {
   } catch (e) { console.error('Z-API lid', e); return null; }
 }
 
-function conteudoZapi(m: any): { tipo: string; texto: string | null } {
+function conteudoZapi(m: any): { tipo: string; texto: string | null; midia?: Midia | null } {
   if (m.text?.message != null) return { tipo: 'text', texto: m.text.message };
   if (m.buttonsResponseMessage) return { tipo: 'text', texto: m.buttonsResponseMessage.message ?? null };
   if (m.listResponseMessage) return { tipo: 'text', texto: m.listResponseMessage.title ?? m.listResponseMessage.message ?? null };
   for (const tipo of ['image', 'video', 'audio', 'document', 'sticker', 'location', 'contact']) {
     if (!m[tipo]) continue;
     const leg = m[tipo].caption || m[tipo].fileName;
-    return { tipo, texto: `[${tipo}]${leg ? ' ' + leg : ''}` };
+    // Foto ou PDF pode ser o comprovante do sinal: guarda o link para a IA ler
+    const url = tipo === 'image' ? m.image.imageUrl : tipo === 'document' ? m.document.documentUrl : null;
+    const midia = url ? { url, mime: String(m[tipo].mimeType || (tipo === 'image' ? 'image/jpeg' : 'application/pdf')) } : null;
+    return { tipo, texto: `[${tipo}]${leg ? ' ' + leg : ''}`, midia };
   }
   return { tipo: 'outro', texto: null };
 }
@@ -153,6 +163,8 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
   if (motivo) return { deal_id, respondeu: false, motivo };
 
   const historico = await historicoConversa(sb, e.wa_id);
+  // Foto/PDF com o sinal pendente: é o comprovante
+  if (comprovanteEsperado(conversa, e)) return await conferirComprovante(sb, e, conversa, deal_id, historico, teste);
   const { data: casas } = await sb.from('properties').select('id,nome').order('nome');
   const base = baseTexto(await lerBase(sb), casas || [], { paraRobo: true });
   let x: Extracao;
@@ -169,6 +181,9 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
   const trouxeDados = !!(x.checkin || x.checkout || x.noites || x.hospedes);
   const disponibilidade = x.assunto === 'disponibilidade_preco' || (!!paraClaudio && trouxeDados && !!conversa.pedido);
   if (paraClaudio && !disponibilidade) return await encaminhar(sb, e, deal_id, x, paraClaudio, historico, teste);
+
+  // Quer reservar: confere de novo no Airbnb e manda total, sinal e Pix (ou pergunta o que falta)
+  if (x.assunto === 'reservar') return await reservar(sb, e, conversa, deal_id, x, historico, casas || [], teste);
 
   const duvida = x.assunto === 'duvida' && !!base && !!x.resposta?.trim();
   // Só cumprimento ("oi", "bom dia", "?") ou pedido genérico de informação: o robô dá as boas-vindas e pede as datas
@@ -311,7 +326,7 @@ async function motivoSilencio(sb: SB, c: any, e: Entrada) {
   const { data: cfg } = await sb.from('wa_settings').select('*').eq('id', 1).single();
   if (!cfg?.bot_ativo) return 'robô desligado em Ajustes';
   if (c.bot_pausado) return 'robô pausado para esta pessoa';
-  if (e.tipo !== 'text' || !e.texto?.trim()) return `mensagem do tipo ${e.tipo}: fica para você`;
+  if (!comprovanteEsperado(c, e) && (e.tipo !== 'text' || !e.texto?.trim())) return `mensagem do tipo ${e.tipo}: fica para você`;
   if (c.ultima_manual && Date.now() - Date.parse(c.ultima_manual) < cfg.horas_silencio * 3600e3) return `você respondeu à mão nas últimas ${cfg.horas_silencio} h`;
   const { count } = await sb.from('wa_messages').select('id', { count: 'exact', head: true })
     .eq('wa_id', c.wa_id).eq('autor', 'robo').gte('enviado_em', new Date(Date.now() - 864e5).toISOString());
@@ -332,9 +347,200 @@ async function historicoConversa(sb: SB, wa_id: string) {
   return (data || []).reverse().filter((m: any) => m.texto);
 }
 
+// ---------- reserva direta: sinal por Pix e comprovante lido pela IA ----------
+type Sinal = { casa: string; nome: string; checkin: string; checkout: string; hospedes: number; total: number; valor: number; pct: number; desde: string };
+const centavos = (v: number) => Math.round(v * 100) / 100;
+const comprovanteEsperado = (c: any, e: Entrada) => !!e.midia && ['image', 'document'].includes(e.tipo) && !!c?.pedido?.sinal;
+
+async function responderRobo(sb: SB, e: Entrada, deal_id: string, texto: string, teste: boolean, extra: Record<string, unknown> = {}) {
+  const campo = campoAPreencher(texto);
+  if (campo) return { deal_id, respondeu: false, motivo: `texto com campo a preencher (${campo}): fica para você`, ...extra };
+  const enviado = teste ? { wamid: `teste-out-${crypto.randomUUID()}` } : await enviar(e.wa_id, texto, e.phoneId);
+  if (!enviado) return { deal_id, respondeu: false, motivo: 'falha ao enviar pelo WhatsApp', ...extra };
+  await sb.from('wa_messages').insert({ wamid: enviado.wamid, wa_id: e.wa_id, deal_id, direcao: 'out', autor: 'robo', texto });
+  return { deal_id, respondeu: true, texto, teste, ...extra };
+}
+
+async function reservar(sb: SB, e: Entrada, conversa: any, deal_id: string, x: Extracao, historico: any[], casas: { id: string; nome: string }[], teste: boolean) {
+  const pedido = combinarPedido(conversa.pedido, x);
+  const sinalAntes: Sinal | undefined = conversa.pedido?.sinal;
+  const g = (await lerBase(sb)).geral || {};
+  // Já mandou o Pix desta mesma reserva: só lembra de mandar o comprovante
+  if (sinalAntes && (!isoOk(x.checkin) || x.checkin === sinalAntes.checkin) && (x.casa === 'qualquer' || x.casa === sinalAntes.casa)) {
+    await sb.from('wa_contacts').update({ pedido: { ...pedido, sinal: sinalAntes } }).eq('wa_id', e.wa_id);
+    return responderRobo(sb, e, deal_id, saudar(`Assim que fizer o Pix de ${moeda(sinalAntes.valor)}, me manda o comprovante aqui (foto ou PDF) que eu confirmo a reserva da ${sinalAntes.nome}.`, historico), teste, { extracao: x });
+  }
+  await sb.from('wa_contacts').update({ pedido }).eq('wa_id', e.wa_id);
+  const falta = oQueFalta(pedido);
+  if (falta) {
+    await sb.from('deals').update({ proxima_acao: 'Acompanhar: o robô pediu os dados para reservar', data_proxima_acao: addDays(hoje(), 1) }).eq('id', deal_id);
+    return responderRobo(sb, e, deal_id, saudar(pergunta(falta, pedido), historico), teste, { extracao: x });
+  }
+  if (!g.pix_chave?.trim() || !g.pix_nome?.trim()) {
+    const nomeCasa = casas.find(c => c.id === pedido.casa)?.nome;
+    return encaminhar(sb, e, deal_id, x, `Quer reservar${nomeCasa ? ` a ${nomeCasa}` : ''} de ${dm(pedido.checkin!)} a ${dm(fimDe(pedido)!)} (chave Pix não cadastrada)`, historico, teste);
+  }
+  const datas = normalizarDatas(pedido)!;
+  const cot = await cotar(datas.checkin, datas.checkout, pedido.hospedes!);
+  const lista = (cot?.casas || []) as any[];
+  if (!lista.some(c => c.status !== 'erro')) return { deal_id, respondeu: false, motivo: 'consulta ao Airbnb falhou: fica para você', extracao: x };
+  const livres = lista.filter(c => c.status === 'livre');
+  const periodo = `de ${dm(datas.checkin)} a ${dm(datas.checkout)}`;
+  if (pedido.casa === 'qualquer') {
+    // Falta escolher a casa: mostra só as livres
+    const texto = livres.length
+      ? `Para reservar ${periodo}, qual casa vocês preferem?\n${livres.map(c => `• ${c.nome}: ${moeda(c.total)} no total`).join('\n')}`
+      : String(cot.mensagem).replace(/^Olá!\s*/, '');
+    return responderRobo(sb, e, deal_id, saudar(texto, historico), teste, { extracao: x });
+  }
+  const c = lista.find(k => k.id === pedido.casa);
+  const nomeCasa = c?.nome || casas.find(k => k.id === pedido.casa)?.nome || pedido.casa;
+  if (!c || c.status !== 'livre') {
+    const outras = livres.length ? `\nLivres ${periodo}:\n${livres.map(k => `• ${k.nome}: ${moeda(k.total)} no total`).join('\n')}` : '';
+    const alt = c?.alternativa ? `\nA ${nomeCasa} fica livre de ${dm(c.alternativa.checkin)} a ${dm(c.alternativa.checkout)}, por ${moeda(c.alternativa.total)}.` : '';
+    return responderRobo(sb, e, deal_id, saudar(`A ${nomeCasa} não está mais livre ${periodo}.${alt}${outras}${alt || outras ? '' : '\nSe tiver outras datas, me diga que eu verifico.'}`, historico), teste, { extracao: x });
+  }
+  const pct = Math.min(100, Math.max(1, +g.sinal_pct || 50));
+  const sinal: Sinal = { casa: pedido.casa, nome: nomeCasa, checkin: datas.checkin, checkout: datas.checkout, hospedes: pedido.hospedes!, total: c.total, valor: centavos(c.total * pct / 100), pct, desde: new Date().toISOString() };
+  await sb.from('wa_contacts').update({ pedido: { ...pedido, sinal } }).eq('wa_id', e.wa_id);
+  const p = (n: number) => `${n} ${n === 1 ? 'pessoa' : 'pessoas'}`;
+  const texto = saudar(`Ótimo! Para reservar a ${nomeCasa} de ${diaDm(datas.checkin)}, a ${diaDm(datas.checkout)}, para ${p(sinal.hospedes)}, o total é ${moeda(sinal.total)}.\n` +
+    `O sinal é de ${moeda(sinal.valor)} (${pct}%), por Pix:\nChave: ${g.pix_chave.trim()}\nNome: ${g.pix_nome.trim()}\n` +
+    `Depois é só me mandar o comprovante aqui (foto ou PDF) que eu confirmo a reserva.`, historico);
+  const r = await responderRobo(sb, e, deal_id, texto, teste, { extracao: x, sinal });
+  if (r.respondeu) await sb.from('deals').update({ etapa: 'negociacao', valor: sinal.total, local: nomeCasa, data_evento: sinal.checkin,
+    proxima_acao: `Aguardando sinal de ${moeda(sinal.valor)}`, data_proxima_acao: addDays(hoje(), 1), updated_at: new Date().toISOString() }).eq('id', deal_id);
+  return r;
+}
+
+// O que a IA lê do comprovante
+const ComprovanteSchema = z.object({
+  e_comprovante_pix: z.boolean(),
+  valor: z.number().nullable(),
+  recebedor_nome: z.string().nullable(),
+  recebedor_chave: z.string().nullable(),
+  pagador_nome: z.string().nullable(),
+  data_hora: z.string().nullable(),
+  e2e: z.string().nullable(),
+});
+type Leitura = z.infer<typeof ComprovanteSchema>;
+
+async function baixarMidia(m: Midia): Promise<{ mime: string; base64: string }> {
+  if (m.base64) return { mime: m.mime, base64: m.base64 };
+  const r = await fetch(m.url!, { signal: AbortSignal.timeout(20000) });
+  if (!r.ok) throw new Error(`download ${r.status}`);
+  const buf = new Uint8Array(await r.arrayBuffer());
+  if (buf.length > 8 * 1024 * 1024) throw new Error('arquivo grande demais');
+  let bin = '';
+  for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+  const mime = (r.headers.get('content-type') || m.mime).split(';')[0].trim();
+  return { mime: /^image\/|^application\/pdf$/.test(mime) ? mime : m.mime, base64: btoa(bin) };
+}
+
+async function lerComprovante(arq: { mime: string; base64: string }): Promise<Leitura> {
+  const bloco = arq.mime === 'application/pdf'
+    ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: arq.base64 } }
+    : { type: 'image', source: { type: 'base64', media_type: /^image\/(jpeg|png|gif|webp)$/.test(arq.mime) ? arq.mime : 'image/jpeg', data: arq.base64 } };
+  const r = await new Anthropic().messages.parse({
+    model: 'claude-haiku-5-5',
+    max_tokens: 2000,
+    output_config: { effort: 'medium', format: zodOutputFormat(ComprovanteSchema) },
+    system: `Você lê comprovantes de Pix de bancos brasileiros e transcreve os dados exatamente como aparecem. Não deduza nem complete nada que não esteja legível: use nulo.
+e_comprovante_pix: true só se for um comprovante de transferência Pix concluída (não agendamento, não boleto, não print de chave).
+valor: o valor transferido, em reais (número, ex.: 825.5). recebedor_nome e recebedor_chave: quem recebeu e a chave Pix do recebedor, como aparecem (podem vir mascarados). pagador_nome: quem pagou.
+data_hora: data e hora da transferência em ISO 8601 com o fuso de Brasília (ex.: 2026-10-23T14:05:00-03:00).
+e2e: o "ID da transação" / "Identificador" / "ID E2E" / "Código de autenticação" que começa com E e tem 32 caracteres, sem espaços; nulo se não houver.`,
+    messages: [{ role: 'user', content: [bloco as any, { type: 'text', text: 'Transcreva os dados deste comprovante.' }] }],
+  });
+  if (r.stop_reason === 'refusal' || !r.parsed_output) throw new Error(`sem leitura (${r.stop_reason})`);
+  return r.parsed_output;
+}
+
+const semAcento = (t: string) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const PALAVRAS_VAZIAS = new Set(['da', 'de', 'do', 'das', 'dos', 'e']);
+const palavras = (t: string) => semAcento(t).split(/[^a-z0-9]+/).filter(w => w.length > 1 && !PALAVRAS_VAZIAS.has(w));
+
+// Recebedor confere com o titular: o primeiro e o último nome aparecem, ou a chave é a mesma
+export function recebedorConfere(l: Leitura, pixNome: string, pixChave: string) {
+  const esperado = palavras(pixNome), lido = new Set(palavras(l.recebedor_nome || ''));
+  const nomeOk = esperado.length > 0 && lido.has(esperado[0]) && lido.has(esperado.at(-1)!);
+  const ch = semAcento(pixChave).trim(), chLida = semAcento(l.recebedor_chave || '').trim();
+  const dig = ch.replace(/\D/g, ''), digLido = chLida.replace(/\D/g, '');
+  const chaveOk = !!chLida && (chLida === ch || (dig.length >= 11 && !/[a-z@]/.test(ch) && digLido === dig));
+  return nomeOk || chaveOk;
+}
+
+// Lista do que não confere (vazia = comprovante aceito)
+export function problemasComprovante(l: Leitura, s: Sinal, g: { pix_nome?: string; pix_chave?: string }, agora = Date.now()) {
+  const p: string[] = [];
+  if (!l.e_comprovante_pix) return ['não parece um comprovante de Pix'];
+  if (l.valor == null || l.valor + 0.009 < s.valor) p.push(l.valor == null ? 'valor ilegível' : `valor ${moeda(l.valor)} menor que o sinal de ${moeda(s.valor)}`);
+  if (!recebedorConfere(l, g.pix_nome || '', g.pix_chave || '')) p.push(`recebedor não confere (${l.recebedor_nome || l.recebedor_chave || 'ilegível'})`);
+  const t = Date.parse(l.data_hora || '');
+  if (isNaN(t)) p.push('data ilegível');
+  else if (t < Date.parse(s.desde) - 15 * 60e3 || t > agora + 15 * 60e3) p.push('data fora do período da reserva');
+  const e2e = String(l.e2e || '').replace(/\s/g, '');
+  if (!/^E\d{20}[A-Za-z0-9]{11}$/.test(e2e)) p.push('ID da transação (E2E) ausente ou fora do formato');
+  return p;
+}
+
+async function conferirComprovante(sb: SB, e: Entrada, conversa: any, deal_id: string, historico: any[], teste: boolean) {
+  const s: Sinal = conversa.pedido.sinal;
+  const g = (await lerBase(sb)).geral || {};
+  let leitura: Leitura | null = null, problemas: string[] = [];
+  try { leitura = await lerComprovante(await baixarMidia(e.midia!)); problemas = problemasComprovante(leitura, s, g); }
+  catch (err) { console.error('comprovante', err); problemas = ['não consegui ler o arquivo: ' + (err as Error).message]; }
+  const e2e = leitura?.e2e ? String(leitura.e2e).replace(/\s/g, '').toUpperCase() : null;
+  if (!problemas.length && e2e) {
+    const { data: usado } = await sb.from('wa_comprovantes').select('id').eq('e2e', e2e).eq('status', 'valido').maybeSingle();
+    if (usado) problemas.push('comprovante já usado em outra reserva');
+  }
+  if (!problemas.length) {
+    // Antes de confirmar: a casa continua livre no Airbnb e no Hub
+    const cot = await cotar(s.checkin, s.checkout, s.hospedes);
+    if ((cot?.casas || []).find((c: any) => c.id === s.casa)?.status !== 'livre') problemas.push('a casa não está mais livre no Airbnb');
+    const { data: bks } = await sb.from('bookings').select('id,checkin,checkout,status').eq('property_id', s.casa).neq('status', 'cancelada');
+    if ((bks || []).some((b: any) => b.checkin < s.checkout && b.checkout > s.checkin)) problemas.push('já existe reserva ou bloqueio nessas datas no Hub');
+  }
+  const registro = { wa_id: e.wa_id, deal_id, e2e, valor: leitura?.valor ?? null, leitura, sinal: s };
+
+  if (problemas.length) {
+    const motivo = problemas.join('; ');
+    await sb.from('wa_comprovantes').insert({ ...registro, status: 'invalido', motivo });
+    await sb.from('deals').update({ proxima_acao: `❓ Conferir comprovante: ${motivo}`.slice(0, 140), data_proxima_acao: hoje(), updated_at: new Date().toISOString() }).eq('id', deal_id);
+    const r = await responderRobo(sb, e, deal_id, saudar('Recebi o comprovante! Vou conferir e já te retorno.', historico), teste, { comprovante: 'conferir', motivo_comprovante: motivo });
+    if (!teste) await avisarComprovante(sb, e, `Comprovante para conferir (${s.nome}, ${moeda(s.valor)})`, motivo);
+    return r;
+  }
+
+  // Tudo certo: reserva direta confirmada (vai para o ical-feed e bloqueia o Airbnb), sinal registrado, card fechado
+  const { data: ct } = await sb.from('contacts').select('nome').eq('id', conversa.contato_id).maybeSingle();
+  const hospede = ct?.nome || e.nome || telefoneBonito(e.wa_id);
+  const { data: bk } = await sb.from('bookings').insert({
+    property_id: s.casa, checkin: s.checkin, checkout: s.checkout, origem: 'direto', status: 'confirmada', valor: s.total,
+    hospede, contato_id: conversa.contato_id, notas: `Reserva confirmada pelo robô do WhatsApp. Sinal ${moeda(leitura!.valor!)} por Pix (E2E ${e2e}). ${s.hospedes} pessoas.`,
+  }).select('id').single();
+  await sb.from('wa_comprovantes').insert({ ...registro, status: 'valido', booking_id: bk?.id });
+  const { data: d } = await sb.from('deals').select('pagamentos').eq('id', deal_id).maybeSingle();
+  const pagamentos = [...((d?.pagamentos as any[]) || []), { data: hoje(), valor: leitura!.valor, forma: 'Pix', obs: `Sinal (comprovante lido pelo robô, E2E ${e2e})` }];
+  await sb.from('deals').update({ etapa: 'fechado', valor: s.total, local: s.nome, data_evento: s.checkin, pagamentos,
+    proxima_acao: 'Conferir o sinal no banco (reserva confirmada pelo robô)', data_proxima_acao: hoje(), updated_at: new Date().toISOString() }).eq('id', deal_id);
+  await sb.from('wa_contacts').update({ pedido: { ...conversa.pedido, sinal: null, reservado: { booking_id: bk?.id, em: new Date().toISOString() } } }).eq('wa_id', e.wa_id);
+  const falta = centavos(s.total - leitura!.valor!);
+  const texto = saudar(`Reserva confirmada! ✅\n${s.nome}, de ${diaDm(s.checkin)}, a ${diaDm(s.checkout)}, para ${s.hospedes} ${s.hospedes === 1 ? 'pessoa' : 'pessoas'}.\n` +
+    `Recebi o sinal de ${moeda(leitura!.valor!)}${falta > 0 ? `; faltam ${moeda(falta)} do total de ${moeda(s.total)}` : ''}.\nQualquer dúvida, é só chamar por aqui.`, historico);
+  const r = await responderRobo(sb, e, deal_id, texto, teste, { comprovante: 'confirmada', booking_id: bk?.id });
+  if (!teste) await avisarComprovante(sb, e, `Reserva confirmada pelo robô: ${s.nome}, ${dm(s.checkin)} a ${dm(s.checkout)}`, `Sinal de ${moeda(leitura!.valor!)} (E2E ${e2e}). Confira o sinal no banco.`);
+  return r;
+}
+
+async function avisarComprovante(sb: SB, e: Entrada, title: string, body: string) {
+  await avisarPush(sb, { title, body, tag: 'wa-comprovante', url: `./#/whatsapp?c=${encodeURIComponent(e.wa_id)}` }).catch(err => console.error('push', err));
+}
+
 // ---------- IA: o que o cliente quer ----------
 const ExtracaoSchema = z.object({
-  assunto: z.enum(['disponibilidade_preco', 'confirmar_reserva', 'duvida', 'saudacao', 'outro']),
+  assunto: z.enum(['disponibilidade_preco', 'reservar', 'confirmar_reserva', 'duvida', 'saudacao', 'outro']),
   casa: z.enum(['QS39', 'QS40', 'QS50', 'qualquer']),
   checkin: z.string().nullable(),
   checkout: z.string().nullable(),
@@ -355,7 +561,8 @@ Casas: ${casas.map(c => `${c.id} = ${c.nome}`).join('; ')}.
 
 Classifique a ÚLTIMA mensagem do cliente, usando as anteriores como contexto:
 - "disponibilidade_preco": pergunta se há vaga, quanto custa, valores ou diária para um período (mesmo que ainda sem datas).
-- "confirmar_reserva": quer fechar, reservar, pagar, mandar comprovante ou negociar desconto. Escolher uma casa ou dizer novas datas depois de receber valores ("a azul, dia 05/11", "e para o feriado?") NÃO é confirmar: é "disponibilidade_preco".
+- "reservar": quer reservar ou fechar uma casa ("quero reservar", "vamos fechar a azul", "como faço para reservar?"), pede o Pix ou os dados para pagar o sinal, ou diz que já pagou ou vai mandar o comprovante. Escolher uma casa ou dizer novas datas depois de receber valores SEM dizer que quer reservar ("a azul, dia 05/11", "e para o feriado?") NÃO é reservar: é "disponibilidade_preco".
+- "confirmar_reserva": quer negociar desconto, condição especial ou forma de pagamento diferente do Pix do sinal (cartão, parcelado).
 - "saudacao": só cumprimenta ou chama ("oi", "olá", "bom dia", "tudo bem?", "?", "alguém aí?") ou pede informações de forma genérica ("queria informações sobre as casas"), sem pergunta concreta.
 - "duvida": pergunta sobre as casas, regras, localização, horários, pets ou comodidades que as INFORMAÇÕES DAS CASAS abaixo respondem por completo.
 - "outro": qualquer outra coisa (dúvida que as informações não respondem, reclamação, pedido especial, conversa).
@@ -364,7 +571,7 @@ Datas: converta para AAAA-MM-DD. Datas sem ano são a próxima ocorrência a par
 datas_exatas: true SOMENTE se as datas que o cliente disse são precisas, com dia e mês (ex.: "de 17 a 20 de novembro", "dia 5/12, 3 noites", "chego dia 17/11" — mesmo que ainda falte a saída), ou se respondeu confirmando ("sim", "isso", "certo") as datas que o Robô perguntou. false quando usou expressões vagas: "fim de semana", "semana que vem", feriado pelo nome (Réveillon, Carnaval, Natal, Páscoa), só o mês, dia sem o mês ("dia 20"), "umas X noites", "entre X e Y", "por volta de". Mesmo com datas_exatas false, preencha checkin/checkout com a sua melhor interpretação (o sistema pergunta ao cliente se está certo). Se nesta mensagem o cliente só respondeu o que o Robô perguntou (ex.: "fico até dia 20", "somos 4"), junte com o que ele já tinha dito antes na conversa.
 casa: a casa citada pelo nome na última mensagem ou antes na conversa (se o cliente não mudou de ideia), ou "qualquer". hospedes: total de pessoas (adultos + crianças) considerando a conversa toda: se o cliente disse antes ("somos 6") e não mudou, repita; nulo só se nunca disse.
 resumo: até 8 palavras para o card, ex.: "Vaga 20-23/11, 6 pessoas, Casa Azul".
-pergunta_claudio: se a ÚLTIMA mensagem do cliente traz uma pergunta ou pedido que só o dono (Claudio) pode decidir ou informar, escreva-a aqui, curta e em 3ª pessoa (ex.: "Pede desconto para 5 noites", "Quer levar um cachorro grande", "Quer fazer check-in às 8h", "Quer pagar por Pix fora do Airbnb"). Entram: desconto ou negociação de preço; pet, festa, evento ou visita quando as informações das casas não respondem; check-in antecipado ou checkout tardio; pagamento direto ou fora do Airbnb; fechar a reserva ou mandar comprovante; qualquer informação das casas que não está abaixo. Se a mesma mensagem também traz datas ou número de pessoas para a reserva, use assunto "disponibilidade_preco" e preencha pergunta_claudio. NÃO entram: o que o próprio cliente responde (datas, pessoas, casa), o que as informações das casas respondem, cumprimentos, agradecimentos e conversa. Senão, nulo.
+pergunta_claudio: se a ÚLTIMA mensagem do cliente traz uma pergunta ou pedido que só o dono (Claudio) pode decidir ou informar, escreva-a aqui, curta e em 3ª pessoa (ex.: "Pede desconto para 5 noites", "Quer levar um cachorro grande", "Quer fazer check-in às 8h", "Quer pagar por Pix fora do Airbnb"). Entram: desconto ou negociação de preço; pet, festa, evento ou visita quando as informações das casas não respondem; check-in antecipado ou checkout tardio; forma de pagamento diferente do Pix do sinal (cartão, parcelado); qualquer informação das casas que não está abaixo. Se a mesma mensagem também traz datas ou número de pessoas para a reserva, use assunto "disponibilidade_preco" e preencha pergunta_claudio. NÃO entram: o que o próprio cliente responde (datas, pessoas, casa), o que as informações das casas respondem, cumprimentos, agradecimentos e conversa. Senão, nulo.
 resposta: só quando assunto = "duvida": a resposta para o cliente, em português do Brasil, curta e cordial, no tom de quem já está conversando (sem "Olá"), usando SOMENTE fatos das informações das casas, sem inventar nem prometer nada além delas. Nunca escreva campos para preencher (colchetes, chaves, "XX", "nome do cliente"): o texto vai pronto para o cliente. Nos outros assuntos, nulo.
 
 <informacoes_das_casas>
