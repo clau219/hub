@@ -127,6 +127,14 @@ function desenhar(el) {
     toast(v ? 'Robô pausado para esta pessoa' : 'Robô ativo para esta pessoa');
     desenhar(el);
   });
+  // Depois que você responde à mão, o robô fica quieto por N horas; aqui ele volta já na próxima mensagem
+  el.querySelector('#wzLiberar')?.addEventListener('click', async () => {
+    const { error } = await db.client().from('wa_contacts').update({ ultima_manual: null }).eq('wa_id', conv.wa_id);
+    if (error) return toast('Não foi possível salvar');
+    const c = D.contatos.find(x => x.wa_id === conv.wa_id); if (c) c.ultima_manual = null;
+    toast('Robô liberado: responde já na próxima mensagem desta pessoa');
+    desenhar(el);
+  });
   el.querySelector('#wzDeal')?.addEventListener('click', () => dealForm(conv.deal));
 
   const box = el.querySelector('.wz-msgs');
@@ -173,7 +181,7 @@ function conversa(c) {
     </header>
     <div class="wz-conv-sub">
       <label class="wa-pausa"><input type="checkbox" id="wzPausa" ${c.bot_pausado ? 'checked' : ''}> Robô pausado com esta pessoa</label>
-      <span>${etiquetas({ ...c, bot_pausado: false })}</span>
+      <span>${etiquetas({ ...c, bot_pausado: false })}${c.silencio && !c.bot_pausado ? ' <button class="link-btn wz-liberar" id="wzLiberar" title="O robô volta a responder já na próxima mensagem">Liberar robô agora</button>' : ''}</span>
     </div>
     <ol class="wz-msgs">${linhas}</ol>`;
 }

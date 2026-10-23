@@ -160,17 +160,18 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
   let texto: string, cot: any = null;
   if (!datas) {
     // Falta a data: pede só o que falta (não chuta)
-    texto = 'Olá! Para eu verificar a disponibilidade e os valores, me diga a data de entrada, a data de saída e quantas pessoas vão se hospedar.';
+    texto = 'Para eu verificar a disponibilidade e os valores, me diga a data de entrada, a data de saída e quantas pessoas vão se hospedar.';
   } else if (!x.datas_exatas) {
     // Data vaga ("fim de semana", "Réveillon", "umas 5 noites"): confirma a data exata antes de cotar
     const pessoas = x.hospedes ? '' : ' e quantas pessoas vão se hospedar';
-    texto = `Olá! Para eu conferir certinho: qual a data exata de entrada e de saída${pessoas}? Entendi de ${dm(datas.checkin)} a ${dm(datas.checkout)}, está certo?`;
+    texto = `Para eu conferir certinho: qual a data exata de entrada e de saída${pessoas}? Entendi de ${dm(datas.checkin)} a ${dm(datas.checkout)}, está certo?`;
   } else {
     cot = await cotar(datas.checkin, datas.checkout, x.hospedes || 2);
     const casasOk = (cot?.casas || []).filter((c: any) => c.status !== 'erro');
     if (!cot?.mensagem || !casasOk.length) return { deal_id, respondeu: false, motivo: 'consulta ao Airbnb falhou: fica para você', extracao: x, cotacao: cot };
     texto = cot.mensagem;
   }
+  texto = saudar(texto, historico);
 
   const enviado = teste ? { wamid: `teste-out-${crypto.randomUUID()}` } : await enviar(e.wa_id, texto, e.phoneId);
   if (!enviado) return { deal_id, respondeu: false, motivo: 'falha ao enviar pelo WhatsApp', extracao: x };
@@ -250,6 +251,14 @@ async function motivoSilencio(sb: SB, c: any, e: Entrada) {
     .eq('wa_id', c.wa_id).eq('autor', 'robo').gte('enviado_em', new Date(Date.now() - 864e5).toISOString());
   if ((count || 0) >= cfg.max_respostas_dia) return `limite de ${cfg.max_respostas_dia} respostas automáticas em 24 h`;
   return null;
+}
+
+// "Olá!" só quando o robô abre a conversa: se você ou ele já responderam nas últimas 24 h, segue o papo sem cumprimentar
+// (a mensagem da airbnb-quote vem com "Olá!" porque também é usada no botão de Aluguéis)
+function saudar(texto: string, historico: any[]) {
+  const corpo = texto.replace(/^Olá!\s*/, '');
+  const conversando = historico.some(m => m.autor !== 'cliente' && Date.now() - Date.parse(m.enviado_em) < 864e5);
+  return conversando ? corpo : `Olá! ${corpo}`;
 }
 
 async function historicoConversa(sb: SB, wa_id: string) {

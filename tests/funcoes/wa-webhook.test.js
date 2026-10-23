@@ -167,6 +167,21 @@ describe('wa-webhook: respostas automáticas', () => {
     assert.deepEqual([out.direcao, out.texto], ['out', corpo.texto]);
     assert.equal(chamadasPara(/graph\.facebook\.com/).length, 0, 'modo teste não envia ao WhatsApp');
   });
+  test('"Olá!" só ao abrir a conversa; com resposta sua ou do robô nas últimas 24 h, segue sem cumprimentar', async () => {
+    const anterior = (autor, em) => ({ wa_messages: [{ id: 'p', wamid: 'p', wa_id: WA, autor, texto: 'Oi! Em que posso ajudar?', enviado_em: em }] });
+    novoBanco(DADOS(anterior('robo', '2026-10-19T09:00:00Z')));
+    responderIA(IA());
+    assert.equal((await teste({ texto: 'quanto custa?' })).corpo.texto, 'Para eu verificar a disponibilidade e os valores, me diga a data de entrada, a data de saída e quantas pessoas vão se hospedar.');
+    novoBanco(DADOS(anterior('claudio', '2026-10-19T09:00:00Z')));
+    responderIA(IA({ casa: 'QS40', checkin: '2026-11-17', checkout: '2026-11-20', hospedes: 6, datas_exatas: true }));
+    simular('https://projeto.supabase.co/functions/v1/airbnb-quote', COTACAO);
+    // sem o silêncio de 12 h (é sobre quem respondeu, não sobre o cumprimento)
+    banco().t('wa_settings')[0].horas_silencio = 0;
+    assert.equal((await teste({ texto: 'vaga 17 a 20/11, 6 pessoas?' })).corpo.texto, 'Para 17/11 a 20/11 (3 noites, 6 hóspedes):\n• Casa Azul: disponível, R$ 1.650 no total');
+    novoBanco(DADOS(anterior('robo', '2026-10-17T09:00:00Z')));
+    responderIA(IA());
+    assert.match((await teste({ texto: 'quanto custa?' })).corpo.texto, /^Olá! Para eu verificar/);
+  });
   test('data vaga (fim de semana): confirma a data antes de cotar', async () => {
     novoBanco(DADOS());
     responderIA(IA({ checkin: '2026-10-23', checkout: '2026-10-25', datas_exatas: false }));

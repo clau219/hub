@@ -89,6 +89,15 @@ describe('WhatsApp: conversa aberta', () => {
     assert.equal(banco().t('wa_contacts').find(c => c.wa_id === ANA).bot_pausado, true);
     assert.match(texto('.wz-item.on'), /Robô pausado/);
   });
+  test('"Liberar robô agora" apaga o silêncio depois da sua resposta', async () => {
+    const d = dados(); d.wa_contacts[1].bot_pausado = false; await trocarDados(d, { supabase: true });
+    await abrir(`#/whatsapp?c=${BIA}`);
+    assert.match(texto('.wz-conv-sub'), /Robô quieto até 23:30/);
+    $('#wzLiberar').click(); await esperar(10);
+    assert.equal(banco().t('wa_contacts').find(c => c.wa_id === BIA).ultima_manual, null);
+    assert.ok(!$('#wzLiberar'));
+    assert.doesNotMatch(texto('.wz-conv-sub'), /Robô quieto/);
+  });
   test('link direto #/whatsapp?c= abre a conversa', async () => {
     await abrir(`#/whatsapp?c=${BIA}`);
     assert.match(texto('.wz-conv-quem'), /Bia/);

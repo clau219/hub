@@ -1038,3 +1038,4 @@ kbd { font: 600 11px/1 var(--f); border: 1px solid var(--line-2); border-bottom-
   .wz-msgs { height: calc(100dvh - 300px); min-height: 280px; }
   .wz-msg { max-width: 88%; }
 }
+.wz-liberar { margin: 0 0 0 6px; font-size: 12px; }
