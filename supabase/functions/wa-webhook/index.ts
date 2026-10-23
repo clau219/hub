@@ -249,6 +249,9 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
   }
   if (!redigido) texto = saudar(texto, historico, e.nome);
   if (paraClaudio && !redigido) texto += `\n\n${avisoConfirmar(true)}`;
+  // Entrada hoje: a casa pode não estar pronta; o próximo passo é do Claudio (a IA foi instruída a não perguntar se quer reservar)
+  const ant = cot && datas ? antecedencia(datas.checkin) : null;
+  if (ant === 0 && cot.casas.some((c: any) => c.status === 'livre')) texto += `\n\n${AVISO_HOJE}`;
 
   // Última barreira: nada com [campo], {campo}, XX... sai para o cliente
   const campo = campoAPreencher(texto);
@@ -279,9 +282,14 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
       : falta && !falta.datas && !falta.saida ? 'Acompanhar: o robô perguntou quantas pessoas' : 'Acompanhar: o robô pediu as datas';
     patch.data_proxima_acao = addDays(hoje(), 1);
   }
+  // Entrada em até 2 dias com casa livre: card urgente e push na hora (limpeza, chaves, horário de chegada)
+  const livre = cot?.casas?.find((c: any) => c.id === pedido?.casa && c.status === 'livre') || cot?.casas?.find((c: any) => c.status === 'livre');
+  const urg = ant != null && ant <= DIAS_URGENTE && livre ? urgente(ant, livre.nome) : null;
+  if (urg) { patch.proxima_acao = urg; patch.data_proxima_acao = hoje(); }
   if (paraClaudio) { patch.proxima_acao = destaque(paraClaudio); patch.data_proxima_acao = hoje(); }
   await sb.from('deals').update(patch).eq('id', deal_id);
   if (paraClaudio && !teste) await avisar(sb, e, paraClaudio);
+  else if (urg && !teste) await avisarUrgente(sb, e, urg, `${livre.nome}, ${dm(datas!.checkin)} a ${dm(datas!.checkout)}, ${quem(pedido!.hospedes!, pedido!.pets)}: ${moeda(livre.total)}`);
   return { deal_id, respondeu: true, texto, extracao: x, teste, ...(paraClaudio ? { para_claudio: paraClaudio } : {}) };
 }
 
@@ -306,6 +314,22 @@ async function encaminhar(sb: SB, e: Entrada, deal_id: string, x: Extracao, q: s
   await sb.from('wa_messages').insert({ wamid: enviado.wamid, wa_id: e.wa_id, deal_id, direcao: 'out', autor: 'robo', texto });
   if (!teste) await avisar(sb, e, q);
   return { deal_id, respondeu: true, texto, extracao: x, para_claudio: q, teste };
+}
+
+// ---------- entrada próxima ----------
+// Com menos de PRAZO_INTEGRAL dias até a entrada, o pagamento é integral na reserva (não há prazo para o restante).
+// Entrada hoje: o robô passa disponibilidade e valor, mas quem confirma é o Claudio (a casa precisa estar pronta).
+const PRAZO_INTEGRAL = 7;
+const DIAS_URGENTE = 2;
+const antecedencia = (checkin: string) => dias(hoje(), checkin);
+const AVISO_HOJE = 'Como a entrada é hoje, vou confirmar com o Claudio o horário em que a casa fica pronta e já te retorno 🙏';
+const urgente = (n: number, casa: string) => `🔥 ${n === 0 ? 'Quer entrar HOJE' : n === 1 ? 'Quer entrar amanhã' : `Entrada em ${n} dias`}: ${casa}`.slice(0, 140);
+
+async function avisarUrgente(sb: SB, e: Entrada, titulo: string, corpo: string) {
+  const { data: c } = await sb.from('wa_contacts').select('nome').eq('wa_id', e.wa_id).maybeSingle();
+  const nome = String(c?.nome || e.nome || telefoneBonito(e.wa_id)).split(' ')[0];
+  await avisarPush(sb, { title: `${nome}: ${titulo.replace(/^🔥 /, '')}`, body: corpo, tag: 'wa-urgente', url: `./#/whatsapp?c=${encodeURIComponent(e.wa_id)}` })
+    .catch(err => console.error('push', err));
 }
 
 async function avisar(sb: SB, e: Entrada, q: string) {
@@ -476,15 +500,21 @@ async function reservar(sb: SB, e: Entrada, conversa: any, deal_id: string, x: E
     const alt = c?.alternativa ? `\nA ${nomeCasa} fica livre de ${dm(c.alternativa.checkin)} a ${dm(c.alternativa.checkout)}, por ${moeda(c.alternativa.total)}.` : '';
     return responderRobo(sb, e, deal_id, saudar(`A ${nomeCasa} não está mais livre ${periodo}.${alt}${outras}${alt || outras ? '' : '\nSe tiver outras datas, me diga que eu verifico.'}`, historico, e.nome), teste, { extracao: x });
   }
-  const pct = Math.min(100, Math.max(1, +g.sinal_pct || 50));
+  // Entrada hoje: não manda Pix; o Claudio confirma se a casa fica pronta
+  const ant = antecedencia(datas.checkin);
+  if (ant === 0) return encaminhar(sb, e, deal_id, x, `Quer reservar a ${nomeCasa} para HOJE (${dm(datas.checkin)} a ${dm(datas.checkout)}, ${moeda(c.total)})`, historico, teste);
+  // Menos de 7 dias até a entrada: pagamento integral na reserva
+  const integral = ant < PRAZO_INTEGRAL;
+  const pct = integral ? 100 : Math.min(100, Math.max(1, +g.sinal_pct || 50));
   const sinal: Sinal = { casa: pedido.casa, nome: nomeCasa, checkin: datas.checkin, checkout: datas.checkout, hospedes: pedido.hospedes!, ...(pedido.pets ? { pets: pedido.pets } : {}), total: c.total, valor: centavos(c.total * pct / 100), pct, desde: new Date().toISOString() };
   await sb.from('wa_contacts').update({ pedido: { ...pedido, sinal } }).eq('wa_id', e.wa_id);
   const texto = saudar(`Ótimo! Para reservar a ${nomeCasa} de ${diaDm(datas.checkin)}, a ${diaDm(datas.checkout)}, para ${quem(sinal.hospedes, sinal.pets)}, o total é ${moeda(sinal.total)}.\n` +
-    `O sinal é de ${moeda(sinal.valor)} (${pct}%), por Pix:\nChave: ${g.pix_chave.trim()}\nNome: ${g.pix_nome.trim()}\n` +
+    (integral ? `Como a entrada é em menos de ${PRAZO_INTEGRAL} dias, o pagamento é integral: ${moeda(sinal.valor)}, por Pix:\n` : `O sinal é de ${moeda(sinal.valor)} (${pct}%), por Pix:\n`) +
+    `Chave: ${g.pix_chave.trim()}\nNome: ${g.pix_nome.trim()}\n` +
     `Depois é só me mandar o comprovante aqui (foto ou PDF) que eu confirmo a reserva.`, historico, e.nome);
   const r = await responderRobo(sb, e, deal_id, texto, teste, { extracao: x, sinal });
   if (r.respondeu) await sb.from('deals').update({ etapa: 'negociacao', valor: sinal.total, local: nomeCasa, data_evento: sinal.checkin,
-    proxima_acao: `Aguardando sinal de ${moeda(sinal.valor)}`, data_proxima_acao: addDays(hoje(), 1), updated_at: new Date().toISOString() }).eq('id', deal_id);
+    proxima_acao: `Aguardando ${integral ? 'pagamento' : 'sinal'} de ${moeda(sinal.valor)}`, data_proxima_acao: addDays(hoje(), 1), updated_at: new Date().toISOString() }).eq('id', deal_id);
   return r;
 }
 
@@ -603,7 +633,7 @@ async function conferirComprovante(sb: SB, e: Entrada, conversa: any, deal_id: s
   await sb.from('wa_contacts').update({ pedido: { ...conversa.pedido, sinal: null, reservado: { booking_id: bk?.id, em: new Date().toISOString() } } }).eq('wa_id', e.wa_id);
   const falta = centavos(s.total - leitura!.valor!);
   const texto = saudar(`Reserva confirmada! ✅\n${s.nome}, de ${diaDm(s.checkin)}, a ${diaDm(s.checkout)}, para ${quem(s.hospedes, s.pets)}.\n` +
-    `Recebi o sinal de ${moeda(leitura!.valor!)}${falta > 0 ? `; faltam ${moeda(falta)} do total de ${moeda(s.total)}` : ''}.\nQualquer dúvida, é só chamar por aqui.`, historico, e.nome);
+    `Recebi ${s.pct >= 100 ? 'o pagamento' : 'o sinal'} de ${moeda(leitura!.valor!)}${falta > 0 ? `; faltam ${moeda(falta)} do total de ${moeda(s.total)}` : ''}.\nQualquer dúvida, é só chamar por aqui.`, historico, e.nome);
   const r = await responderRobo(sb, e, deal_id, texto, teste, { comprovante: 'confirmada', booking_id: bk?.id });
   if (!teste) await avisarComprovante(sb, e, `Reserva confirmada pelo robô: ${s.nome}, ${dm(s.checkin)} a ${dm(s.checkout)}`, `Sinal de ${moeda(leitura!.valor!)} (E2E ${e2e}). Confira o sinal no banco.`);
   return r;
@@ -760,7 +790,9 @@ function fatosCotacao(cot: any) {
     if (c.status === 'erro') return `- ${c.nome}: não foi possível consultar agora (não fale dela).`;
     return `- ${c.nome}: OCUPADA nessas datas.${alt(c.alternativa)}`;
   });
-  return [`Período consultado: ${dm(cot.checkin)} a ${dm(cot.checkout)} (${p(cot.noites, 'noite', 'noites')}), ${p(cot.adultos, 'hóspede', 'hóspedes')}${cot.pets ? ` e ${p(cot.pets, 'pet', 'pets')} (valores já com a taxa de pet)` : ''}.`, ...linhas].join('\n');
+  const ant = antecedencia(cot.checkin);
+  const entrada = ant === 0 ? `Entrada: HOJE (${diaDm(cot.checkin)}).` : ant === 1 ? `Entrada: amanhã (${diaDm(cot.checkin)}).` : `Entrada em ${ant} dias (${diaDm(cot.checkin)}).`;
+  return [`Período consultado: ${dm(cot.checkin)} a ${dm(cot.checkout)} (${p(cot.noites, 'noite', 'noites')}), ${p(cot.adultos, 'hóspede', 'hóspedes')}${cot.pets ? ` e ${p(cot.pets, 'pet', 'pets')} (valores já com a taxa de pet)` : ''}.`, entrada, ...linhas].join('\n');
 }
 
 // Todo "R$ ..." do texto precisa ser um valor da consulta; e, havendo casa livre ou alternativa, ao menos um valor precisa aparecer
@@ -772,9 +804,18 @@ function valoresConferem(texto: string, cot: any) {
   return ok.size === 0 || achados.length > 0;
 }
 
+// O robô não segura data: "deixo separada", "seguro pra você", "fica garantida", "já está reservada"
+const PROMESSA = /separad[ao]s?\b|\bsegur(o|ar|amos)\b.{0,20}(casa|data|pra|para)|bloque(io|ar|ada|amos)|garant(o|ir|ida|imos)\b|j[aá] (est[aá] |fica )?reservad/i;
+
 async function redigir(historico: any[], cot: any, base: string, aviso: string, nomePerfil?: string | null) {
   const primeiro = primeiroNome(nomePerfil);
   const emAndamento = conversando(historico);
+  const ant = antecedencia(cot.checkin);
+  const fim = ant === 0
+    ? '- A entrada é HOJE: não pergunte se quer reservar e não fale de pagamento (o sistema acrescenta o próximo passo).'
+    : `- Termine com o próximo passo, perguntando se quer reservar a casa livre${ant < PRAZO_INTEGRAL
+      ? ` (se falar de pagamento, diga só que, como faltam menos de ${PRAZO_INTEGRAL} dias para a entrada, o pagamento é integral na reserva; nada de sinal nem de prazo para o restante)`
+      : base.includes('Como funciona o pagamento') ? ' (pode dizer, em uma frase, como funciona o pagamento, conforme as informações)' : ''}.`;
   const system = `Você responde, pelo WhatsApp, os clientes das casas de temporada do Claudio no Condomínio Pipa Natureza (Pipa/RN). Escreva a resposta para a ÚLTIMA mensagem do cliente.
 Tom: português do Brasil, cordial e direto, como uma pessoa da equipe conversando no WhatsApp (não um robô nem um e-mail): frases curtas e naturais, no máximo 1 emoji, até 8 linhas. Acompanhe o jeito do cliente: se ele escreve informal, seja informal. Nada de "Prezado", "Informamos que", "Segue abaixo" ou de repetir a pergunta dele. Quebras de linha só para separar casas.
 O cliente pode ter mandado várias mensagens seguidas desde a última resposta: responda a todas juntas, numa mensagem só.
@@ -786,7 +827,10 @@ Regras:
 - Se a mensagem do cliente também perguntar algo que as informações das casas respondem (pets, horários, capacidade, comodidades), responda junto. Se perguntar algo que não está nelas, diga que o Claudio confirma em seguida.
 - Nunca confirme reserva, não peça dados pessoais e não fale de Pix.
 - O texto vai direto para o cliente: nunca escreva campos para preencher (colchetes, chaves, "XX", "nome do cliente", "data"). Se não souber o nome, escreva sem nome.
-- Termine com o próximo passo, perguntando se quer reservar a casa livre${base.includes('Como funciona o pagamento') ? ' (pode dizer, em uma frase, como funciona o pagamento, conforme as informações)' : ''}.${aviso ? `\n- Diga também, com suas palavras: "${aviso}"` : ''}
+- Fale de pets só se o cliente falou de pet ou se a consulta foi feita com pet.
+- Você não segura, separa nem bloqueia datas: nunca ofereça "deixar separada", "segurar" ou "garantir" a casa; a data só fica reservada com o pagamento.
+- Quando a entrada for hoje ou amanhã, diga "hoje" ou "amanhã" junto com a data.
+${fim}${aviso ? `\n- Diga também, com suas palavras: "${aviso}"` : ''}
 
 <consulta_airbnb>
 ${fatosCotacao(cot)}
@@ -804,6 +848,7 @@ ${base || '(nada cadastrado)'}
   });
   const texto = r.parsed_output?.texto?.trim();
   if (!texto) return null;
+  if (PROMESSA.test(texto)) { console.warn('redigir: ofereceu segurar a casa; vai a mensagem padrão'); return null; }
   if (!valoresConferem(texto, cot)) { console.warn('redigir: valor que não está na consulta; vai a mensagem padrão'); return null; }
   return texto;
 }

@@ -127,7 +127,7 @@ function extrair(system, conteudo) {
 }
 
 // Resposta de disponibilidade e valores: copia os valores da consulta, casa pedida primeiro, próximo passo no fim
-function redigir(system, conteudo, { mentir = false } = {}) {
+function redigir(system, conteudo, { mentir = false, separar = false } = {}) {
   const consulta = (system.match(/<consulta_airbnb>\n([\s\S]*?)\n<\/consulta_airbnb>/) || [])[1] || '';
   const base = (system.match(/<informacoes_das_casas>\n([\s\S]*?)\n<\/informacoes_das_casas>/) || [])[1] || '';
   const linhas = consulta.split('\n').filter(l => l.startsWith('- ')).map(l => l.slice(2)).filter(l => !/não foi possível consultar/.test(l));
@@ -147,7 +147,9 @@ function redigir(system, conteudo, { mentir = false } = {}) {
   const aviso = (system.match(/Diga também, com suas palavras: "([^"]+)"/) || [])[1];
   if (aviso) out.push(aviso);
   const casaLivre = usar.find(livre)?.split(':')[0];
-  out.push(casaLivre ? `Quer reservar a ${casaLivre}?` : 'Quer que eu veja outras datas?');
+  // entrada hoje: o prompt manda não perguntar se quer reservar (o sistema completa)
+  if (!/A entrada é HOJE/.test(system)) out.push(casaLivre ? `Quer reservar a ${casaLivre}?` : 'Quer que eu veja outras datas?');
+  if (separar) out.push('Quer que eu deixe ela separada pra você?');
   if (mentir) out.push('Para você faço por R$ 999.');
   return { texto: out.join('\n') };
 }

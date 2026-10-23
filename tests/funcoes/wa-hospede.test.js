@@ -120,7 +120,8 @@ afterEach(() => {
     assert.doesNotMatch(message, /undefined|null|NaN|\[object/, `texto com lixo de programação: ${message}`);
     assert.doesNotMatch(message, /\[[^\]]{1,40}\]|\{\{?[^}]*\}|_{3,}|\bX{2,}\b/, `campo a preencher esquecido: ${message}`);
     assert.ok(!message.includes(SENHA_WIFI), 'nunca manda a senha do Wi-Fi');
-    if (message.includes(PIX)) assert.match(message, /O sinal é de R\$ [\d.,]+ \(\d+%\), por Pix/, 'a chave Pix só vai na mensagem do sinal');
+    if (message.includes(PIX)) assert.match(message, /O sinal é de R\$ [\d.,]+ \(\d+%\), por Pix|o pagamento é integral: R\$ [\d.,]+, por Pix/, 'a chave Pix só vai na mensagem do sinal (ou do pagamento integral)');
+    assert.doesNotMatch(message, /separad[ao]|segurar|garant(o|ida)/i, `o robô não segura datas: ${message}`);
     assert.ok(!message.includes('maps.app.goo.gl'), 'nunca manda o link da localização exata');
     // só confirma reserva com comprovante aprovado e a reserva criada no Hub para esse hóspede
     if (/reserva (est[aá] )?confirmada/i.test(message)) {
@@ -568,5 +569,67 @@ describe('hóspede: atendimento com jeito de gente', () => {
     await h.ateValores('Quanto fica de 20/11 a 23/11 para 4 pessoas?', { pessoas: 4 });
     const d = enviadas().filter(m => m.phone === h.fone).map(m => m.delayTyping);
     assert.ok(d.every(x => x >= 2 && x <= 8), JSON.stringify(d));
+  });
+});
+
+describe('hóspede: entrada próxima (hoje é segunda, 19/10, 12h em Pipa)', () => {
+  beforeEach(() => { globalThis.__webpush = { envios: [], falhar: null }; });
+
+  test('entrada hoje: passa o valor, avisa que o Claudio confirma o horário, card urgente e push; não manda Pix', async () => {
+    const h = new Hospede('5584991110070', 'Sérgio');
+    const r = await h.diz('Tem vaga na Casa Azul de 19/10 a 21/10 para 4 pessoas?');
+    assert.match(r, /R\$/);
+    assert.match(r, /Como a entrada é hoje, vou confirmar com o Claudio o horário em que a casa fica pronta/);
+    assert.doesNotMatch(r, /Quer reservar|sinal|7 dias/i, 'sem pergunta de reserva nem regra de pagamento');
+    assert.equal(h.card.proxima_acao, '🔥 Quer entrar HOJE: Casa Azul');
+    assert.equal(h.card.data_proxima_acao, '2026-10-19');
+    assert.equal(globalThis.__webpush.envios.length, 1);
+    assert.equal(globalThis.__webpush.envios[0].tag, 'wa-urgente');
+    assert.match(globalThis.__webpush.envios[0].title, /^Sérgio: Quer entrar HOJE/);
+    const pix = await h.diz('Quero reservar a Casa Azul, me passa o pix');
+    assert.ok(!pix.includes(PIX), 'para hoje não manda Pix');
+    assert.match(pix, /vou confirmar/i);
+    assert.match(h.card.proxima_acao, /^❓ Cliente pergunta: Quer reservar a Casa Azul para HOJE/);
+  });
+  test('entrada amanhã: responde normal, card urgente e push', async () => {
+    const h = new Hospede('5584991110071', 'Tânia');
+    const r = await h.diz('Quanto fica a Casa Frida de 20/10 a 22/10 para 2 pessoas?');
+    assert.match(r, /Quer reservar/);
+    assert.equal(h.card.proxima_acao, '🔥 Quer entrar amanhã: Casa Frida');
+    assert.equal(globalThis.__webpush.envios.length, 1);
+  });
+  test('entrada daqui a 10 dias: nada de urgência', async () => {
+    const h = new Hospede('5584991110072', 'Ugo');
+    await h.diz('Quanto fica a Casa Frida de 29/10 a 31/10 para 2 pessoas?');
+    assert.equal(h.card.proxima_acao, 'Acompanhar: o robô enviou disponibilidade e valores');
+    assert.equal(globalThis.__webpush.envios.length, 0);
+  });
+  test('menos de 7 dias: pagamento integral por Pix, e a confirmação fala em pagamento (não em sinal)', async () => {
+    const h = new Hospede('5584991110073', 'Vera');
+    await h.diz('Quanto fica a Casa Terracota de 23/10 a 25/10 para 3 pessoas?');
+    const pix = await h.diz('Perfeito, quero reservar a Casa Terracota! Me passa o pix');
+    const total = ab.total('QS50', '2026-10-23', '2026-10-25');
+    assert.match(pix, /menos de 7 dias, o pagamento é integral/);
+    assert.ok(valores(pix).every(v => v === total * 100), `só o total (R$ ${total}), sem sinal`);
+    assert.match(h.card.proxima_acao, /^Aguardando pagamento de/);
+    const ok = await h.manda(pixValido(total));
+    assert.match(ok, /Reserva confirmada/);
+    assert.match(ok, /Recebi o pagamento de/);
+    assert.doesNotMatch(ok, /faltam/);
+  });
+  test('Pix de só 30% numa reserva de última hora: não confirma', async () => {
+    const h = new Hospede('5584991110074', 'Wesley');
+    await h.diz('Quanto fica a Casa Terracota de 23/10 a 25/10 para 3 pessoas?');
+    await h.diz('Quero reservar a Casa Terracota, me passa o pix');
+    const r = await h.manda(pixValido(sinalDe(ab.total('QS50', '2026-10-23', '2026-10-25'))));
+    assert.match(r, /Vou conferir/);
+    assert.equal(banco().t('bookings').length, 0);
+  });
+  test('a IA oferece "deixar separada": o texto é descartado e vai a mensagem padrão', async () => {
+    ia.separar = true;
+    const h = new Hospede('5584991110075', 'Xavier');
+    const r = await h.diz('Quanto fica a Casa Frida de 10/11 a 13/11 para 2 pessoas?');
+    assert.match(r, /R\$/);
+    assert.doesNotMatch(r, /separad/);
   });
 });
