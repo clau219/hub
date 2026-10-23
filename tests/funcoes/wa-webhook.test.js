@@ -217,22 +217,20 @@ describe('wa-webhook: respostas automáticas', () => {
     responderIA(IA());
     assert.match((await teste({ texto: 'quanto custa?' })).corpo.texto, /^Olá! Para eu verificar/);
   });
-  test('data vaga (fim de semana) e sem número de pessoas: cota já e diz o que considerou', async () => {
+  test('data vaga (fim de semana) e sem número de pessoas: pergunta a data exata e as pessoas, sem consultar', async () => {
     novoBanco(DADOS());
     responderIA(IA({ checkin: '2026-10-23', checkout: '2026-10-25', datas_exatas: false }));
-    simular('https://projeto.supabase.co/functions/v1/airbnb-quote', { ...COTACAO, mensagem: 'Olá! Para 23/10 a 25/10 (2 noites, 2 hóspedes): Casa Azul livre' });
     const { corpo } = await teste({ texto: 'Tem vaga no fim de semana?' });
-    assert.deepEqual(chamadasPara(/airbnb-quote/)[0].json(), { checkin: '2026-10-23', checkout: '2026-10-25', adultos: 2 });
-    assert.equal(corpo.texto, 'Olá! Para 23/10 a 25/10 (2 noites, 2 hóspedes): Casa Azul livre\n\nConsiderei de 23/10 a 25/10, para 2 pessoas. Se for outra data ou mais gente, me avise que eu refaço.');
-    assert.equal(deal().proxima_acao, 'Acompanhar: o robô enviou disponibilidade e valores');
+    assert.equal(corpo.texto, 'Olá! Só para eu consultar certinho: seria de sexta, 23/10, a domingo, 25/10? E quantas pessoas vão se hospedar?');
+    assert.equal(chamadasPara(/airbnb-quote/).length, 0);
+    assert.equal(deal().proxima_acao, 'Acompanhar: o robô pediu para confirmar as datas');
   });
-  test('só a data de entrada ("dia 05/11, 4 pessoas"): cota 2 noites e avisa', async () => {
+  test('só a data de entrada, exata ("dia 05/11, 4 pessoas"): pergunta até que dia ficam', async () => {
     novoBanco(DADOS());
-    responderIA(IA({ checkin: '2026-11-05', hospedes: 4, datas_exatas: false }));
-    simular('https://projeto.supabase.co/functions/v1/airbnb-quote', { ...COTACAO, mensagem: 'Para 05/11 a 07/11: Casa Azul livre' });
+    responderIA(IA({ checkin: '2026-11-05', hospedes: 4, datas_exatas: true }));
     const { corpo } = await teste({ texto: 'a azul, dia 05/11, 4 pessoas' });
-    assert.deepEqual(chamadasPara(/airbnb-quote/)[0].json(), { checkin: '2026-11-05', checkout: '2026-11-07', adultos: 4 });
-    assert.match(corpo.texto, /\n\nConsiderei de 05\/11 a 07\/11\. Se for outra data ou mais gente, me avise que eu refaço\.$/);
+    assert.equal(corpo.texto, 'Olá! Anotei a entrada na quinta, 05/11. Até que dia vocês ficam (ou quantas noites)?');
+    assert.equal(chamadasPara(/airbnb-quote/).length, 0);
   });
   test('datas exatas e pessoas informadas: sem aviso no fim', async () => {
     novoBanco(DADOS());
@@ -273,15 +271,16 @@ describe('wa-webhook: respostas automáticas', () => {
       assert.equal((await teste({ texto: '17 a 20/11, 6' })).corpo.texto, 'Olá! Para 17/11 a 20/11: Casa Azul livre');
     }
   });
-  test('conversa em andamento: a IA é instruída a não cumprimentar; o aviso do que foi considerado vai para ela', async () => {
+  test('conversa em andamento: a IA é instruída a não cumprimentar e a nunca deixar campo a preencher', async () => {
     novoBanco(DADOS({ wa_messages: [{ id: 'r', wamid: 'r', wa_id: WA, autor: 'robo', texto: 'Oi!', enviado_em: '2026-10-19T14:00:00Z' }] }));
-    duasIAs(IA({ checkin: '2026-11-17', checkout: '2026-11-20', datas_exatas: false }), { texto: 'Para o feriado, a Casa Azul fica R$ 1.650. Considerei 2 pessoas; se forem mais, me avise.' });
+    duasIAs(IA({ checkin: '2026-11-17', checkout: '2026-11-20', hospedes: 6, datas_exatas: true }), { texto: 'De 17 a 20/11, a Casa Azul fica R$ 1.650. Quer reservar?' });
     simular('https://projeto.supabase.co/functions/v1/airbnb-quote', COT2);
-    const { corpo } = await teste({ texto: 'e no feriado?' });
-    assert.equal(corpo.texto, 'Para o feriado, a Casa Azul fica R$ 1.650. Considerei 2 pessoas; se forem mais, me avise.');
+    const { corpo } = await teste({ texto: 'e de 17 a 20/11, 6 pessoas?' });
+    assert.equal(corpo.texto, 'De 17 a 20/11, a Casa Azul fica R$ 1.650. Quer reservar?');
     const p = globalThis.__anthropic.chamadas[1];
     assert.match(p.system, /NÃO cumprimente/);
-    assert.match(p.system, /Diga também, com suas palavras: "Considerei de 17\/11 a 20\/11, para 2 pessoas\./);
+    assert.match(p.system, /nunca escreva campos para preencher.*Se não souber o nome, escreva sem nome/);
+    assert.doesNotMatch(p.system, /Diga também/);
   });
   test('a extração considera pessoas e casa ditas antes na conversa', async () => {
     novoBanco(DADOS());
@@ -315,7 +314,7 @@ describe('wa-webhook: respostas automáticas', () => {
   });
   test('Airbnb falhou: não responde', async () => {
     novoBanco(DADOS());
-    responderIA(IA({ checkin: '2026-11-17', checkout: '2026-11-20', datas_exatas: true }));
+    responderIA(IA({ checkin: '2026-11-17', checkout: '2026-11-20', hospedes: 2, datas_exatas: true }));
     simular('https://projeto.supabase.co/functions/v1/airbnb-quote', { checkin: 'x', casas: [{ status: 'erro' }], mensagem: null });
     assert.equal((await teste({ texto: 'vaga 17 a 20/11?' })).corpo.motivo, 'consulta ao Airbnb falhou: fica para você');
   });
@@ -336,6 +335,111 @@ describe('wa-webhook: respostas automáticas', () => {
     assert.match(p.system, /Hoje é segunda-feira, 2026-10-19/);
     assert.match(p.system, /Casas: QS40 = Casa Azul; QS39 = Casa Frida; QS50 = Casa Terracota./);
     assert.match(p.messages[0].content, /Robô: Quais datas\?\nCliente: Dia 17\/11/);
+  });
+});
+
+describe('wa-webhook: pergunta o que falta e junta as respostas (várias trocas)', () => {
+  // Cada troca: a IA (simulada) extrai só o que estiver na mensagem; o robô soma ao que já foi dito (wa_contacts.pedido)
+  const troca = async (texto, extracao) => { responderIA(IA(extracao)); return (await teste({ texto })).corpo; };
+  const AIRBNB = 'https://projeto.supabase.co/functions/v1/airbnb-quote';
+  const robo = () => banco().t('wa_messages').filter(m => m.autor === 'robo').map(m => m.texto);
+
+  test('"tem vaga em dezembro?" → pede datas e pessoas → cliente responde → consulta e responde com os valores', async () => {
+    novoBanco(DADOS());
+    simular(AIRBNB, COTACAO);
+    const a = await troca('tem vaga em dezembro?', {});
+    assert.equal(a.texto, 'Olá! Para eu verificar a disponibilidade e os valores, me diga a data de entrada, a data de saída e quantas pessoas vão se hospedar.');
+    assert.equal(chamadasPara(/airbnb-quote/).length, 0);
+    const b = await troca('de 5 a 8 de dezembro, somos 3', { checkin: '2026-12-05', checkout: '2026-12-08', hospedes: 3, datas_exatas: true });
+    assert.equal(b.respondeu, true);
+    assert.deepEqual(chamadasPara(/airbnb-quote/)[0].json(), { checkin: '2026-12-05', checkout: '2026-12-08', adultos: 3 });
+    assert.equal(b.texto, 'Para 17/11 a 20/11 (3 noites, 6 hóspedes):\n• Casa Azul: disponível, R$ 1.650 no total', 'conversa em andamento: sem "Olá!"');
+    assert.equal(robo().length, 2);
+    assert.equal(deal().proxima_acao, 'Acompanhar: o robô enviou disponibilidade e valores');
+  });
+
+  test('guarda o que já foi dito (casa e pessoas) mesmo se a IA não repetir, e consulta quando chegam as datas', async () => {
+    novoBanco(DADOS());
+    simular(AIRBNB, COTACAO);
+    const a = await troca('somos 4, queria a casa azul', { casa: 'QS40', hospedes: 4 });
+    assert.equal(a.texto, 'Olá! Para eu verificar a disponibilidade e os valores para 4 pessoas, me diga a data de entrada e a data de saída.');
+    assert.deepEqual([banco().t('wa_contacts')[0].pedido.casa, banco().t('wa_contacts')[0].pedido.hospedes], ['QS40', 4]);
+    await troca('17 a 20 de novembro', { checkin: '2026-11-17', checkout: '2026-11-20', datas_exatas: true });
+    assert.deepEqual(chamadasPara(/airbnb-quote/)[0].json(), { checkin: '2026-11-17', checkout: '2026-11-20', adultos: 4 });
+    assert.deepEqual([deal().local, deal().valor], ['Casa Azul', 1650], 'a casa dita na 1ª mensagem vale para o card');
+  });
+
+  test('data vaga → robô confirma a interpretação → "isso, 2 pessoas" → consulta', async () => {
+    novoBanco(DADOS());
+    simular(AIRBNB, COTACAO);
+    const a = await troca('tem vaga no fim de semana?', { checkin: '2026-10-23', checkout: '2026-10-25', datas_exatas: false });
+    assert.equal(a.texto, 'Olá! Só para eu consultar certinho: seria de sexta, 23/10, a domingo, 25/10? E quantas pessoas vão se hospedar?');
+    await troca('isso, 2 pessoas', { checkin: '2026-10-23', checkout: '2026-10-25', hospedes: 2, datas_exatas: true });
+    assert.deepEqual(chamadasPara(/airbnb-quote/)[0].json(), { checkin: '2026-10-23', checkout: '2026-10-25', adultos: 2 });
+  });
+
+  test('"dia 20" sem o mês: confirma a entrada e pergunta até quando', async () => {
+    novoBanco(DADOS());
+    const a = await troca('tem vaga dia 20? somos 2', { checkin: '2026-10-20', hospedes: 2, datas_exatas: false });
+    assert.equal(a.texto, 'Olá! Só para eu consultar certinho: a entrada seria na terça, 20/10? E até que dia vocês ficariam?');
+    assert.equal(chamadasPara(/airbnb-quote/).length, 0);
+  });
+
+  test('entrada exata → pergunta a saída → "3 noites" (a IA só manda as noites) → calcula a saída e consulta', async () => {
+    novoBanco(DADOS());
+    simular(AIRBNB, COTACAO);
+    const a = await troca('chego dia 17/11, somos 4', { checkin: '2026-11-17', hospedes: 4, datas_exatas: true });
+    assert.equal(a.texto, 'Olá! Anotei a entrada na terça, 17/11. Até que dia vocês ficam (ou quantas noites)?');
+    await troca('3 noites', { noites: 3 });
+    assert.deepEqual(chamadasPara(/airbnb-quote/)[0].json(), { checkin: '2026-11-17', checkout: '2026-11-20', adultos: 4 });
+  });
+
+  test('só faltam as pessoas: pergunta só isso e depois consulta', async () => {
+    novoBanco(DADOS());
+    simular(AIRBNB, COTACAO);
+    const a = await troca('vaga de 17 a 20/11?', { checkin: '2026-11-17', checkout: '2026-11-20', datas_exatas: true });
+    assert.equal(a.texto, 'Olá! Para eu consultar de 17/11 a 20/11: quantas pessoas vão se hospedar?');
+    assert.equal(deal().proxima_acao, 'Acompanhar: o robô perguntou quantas pessoas');
+    await troca('somos 5', { hospedes: 5 });
+    assert.deepEqual(chamadasPara(/airbnb-quote/)[0].json(), { checkin: '2026-11-17', checkout: '2026-11-20', adultos: 5 });
+  });
+
+  test('nova data de entrada sem saída descarta a saída antiga e pergunta de novo', async () => {
+    novoBanco(DADOS({ wa_contacts: [{ wa_id: WA, pedido: { casa: 'qualquer', checkin: '2026-11-17', checkout: '2026-11-20', noites: null, hospedes: 4, datas_exatas: true, em: '2026-10-19T10:00:00Z' } }] }));
+    const a = await troca('e se for a partir do dia 5/12?', { checkin: '2026-12-05', datas_exatas: true });
+    assert.equal(a.texto, 'Olá! Anotei a entrada no sábado, 05/12. Até que dia vocês ficam (ou quantas noites)?');
+    assert.equal(banco().t('wa_contacts')[0].pedido.checkout, null);
+  });
+
+  test('o que foi dito há mais de 7 dias não vale mais', async () => {
+    novoBanco(DADOS({ wa_contacts: [{ wa_id: WA, pedido: { casa: 'QS40', checkin: '2026-11-17', checkout: '2026-11-20', noites: null, hospedes: 4, datas_exatas: true, em: '2026-10-01T10:00:00Z' } }] }));
+    const a = await troca('tem vaga?', {});
+    assert.equal(a.texto, 'Olá! Para eu verificar a disponibilidade e os valores, me diga a data de entrada, a data de saída e quantas pessoas vão se hospedar.');
+  });
+});
+
+describe('wa-webhook: nenhum campo a preencher sai para o cliente', () => {
+  test('resposta de dúvida com [nome]: não envia e deixa para você', async () => {
+    novoBanco(DADOS({ app_config: [{ key: 'wa_base', value: JSON.stringify({ geral: { pets: 'Aceitamos pet pequeno.' } }) }] }));
+    responderIA(IA({ assunto: 'duvida', resumo: 'Pet', resposta: 'Oi [nome], aceitamos pet pequeno!' }));
+    const { corpo } = await teste({ texto: 'Aceitam cachorro?' });
+    assert.deepEqual([corpo.respondeu, corpo.motivo], [false, 'texto com campo a preencher ([nome]): fica para você']);
+    assert.equal(banco().t('wa_messages').filter(m => m.autor === 'robo').length, 0);
+    assert.equal(deal().proxima_acao, 'Responder WhatsApp: Pet');
+    assert.match(globalThis.__anthropic.chamadas[0].system, /Nunca escreva campos para preencher/);
+  });
+  test('texto da IA com campo a preencher na resposta de valores: troca pela mensagem padrão da consulta', async () => {
+    novoBanco(DADOS());
+    responderIA(p => (p.system.includes('<consulta_airbnb>') ? { texto: 'Oi, {nome}! A Casa Azul fica R$ 1.650.' } : IA({ checkin: '2026-11-17', checkout: '2026-11-20', hospedes: 6, datas_exatas: true })));
+    simular('https://projeto.supabase.co/functions/v1/airbnb-quote', COTACAO);
+    assert.equal((await teste({ texto: '17 a 20/11, 6' })).corpo.texto, COTACAO.mensagem);
+  });
+  test('variações de campo a preencher: XX, ___, <data>, (nome do cliente)', async () => {
+    for (const resposta of ['Fica R$ XX por noite', 'Check-in às ___', 'Chegada em <data>', 'Olá (nome do cliente), tudo bem?']) {
+      novoBanco(DADOS({ app_config: [{ key: 'wa_base', value: JSON.stringify({ geral: { checkin: '14h' } }) }] }));
+      responderIA(IA({ assunto: 'duvida', resposta }));
+      assert.equal((await teste({ texto: 'horário?' })).corpo.respondeu, false, resposta);
+    }
   });
 });
 

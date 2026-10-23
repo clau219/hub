@@ -70,6 +70,15 @@ describe('wa-responder: enviar', () => {
     novoBanco(DADOS());
     assert.equal((await chamar({ acao: 'enviar', wa_id: ANA, texto: '   ' })).status, 400);
     assert.equal((await chamar({ acao: 'enviar', wa_id: ANA, texto: 'x'.repeat(4001) })).status, 400);
+  });
+  test('texto com campo a preencher ([valor], {nome}, XX): 400 e nada é enviado', async () => {
+    novoBanco(DADOS());
+    for (const texto of ['O sinal é [valor do sinal]', 'Oi {nome}', 'Fica R$ XX']) {
+      const { status, corpo } = await chamar({ acao: 'enviar', wa_id: ANA, texto });
+      assert.equal(status, 400);
+      assert.match(corpo.error, /campo a preencher/);
+    }
+    assert.equal(chamadasPara(/z-api\.io/).length, 0);
     assert.equal(chamadasPara(ZAPI).length, 0);
   });
 });

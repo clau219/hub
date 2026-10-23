@@ -12,6 +12,8 @@ const QUEM = { cliente: 'Cliente', robo: 'Robô', claudio: 'Você' };
 const ASSUNTO = { disponibilidade_preco: 'Disponibilidade e valor', confirmar_reserva: 'Quer reservar / pagar', duvida: 'Dúvida respondida pela base', saudacao: 'Cumprimento', outro: 'Outro assunto' };
 const CASA = { QS39: 'Casa Frida', QS40: 'Casa Azul', QS50: 'Casa Terracota' };
 const ATUALIZA = 10e3;
+// Mesma regra de supabase/functions/_shared/wa.ts (campoAPreencher)
+const CAMPO_A_PREENCHER = /\[[^\]\n]{1,60}\]|\{\{?[^}\n]{0,60}\}?\}|\bX{2,}\b|_{3,}|<[^>\n]{1,40}>|\(\s*(?:nome|data|valor|n[uú]mero)\b[^)\n]{0,40}\)/i;
 const PRONTAS = [['pix', 'Pix do sinal'], ['local', 'Localização'], ['horarios', 'Check-in/out'], ['regras', 'Regras'], ['pets', 'Pets']];
 
 let D = { contatos: [], msgs: [], cfg: null, zapi: null, base: {}, at: 0, erro: '', assinatura: '' };
@@ -259,7 +261,13 @@ function ligarConversa(el, conv) {
   const enviar = async () => {
     const texto = tx.value.trim();
     if (!texto) return tx.focus();
-    if (/\[[^\]]+\]/.test(texto) && !confirm('A mensagem ainda tem [colchetes] para completar. Enviar assim mesmo?')) return;
+    // Campo a preencher esquecido ([...], {…}, XX…): não sai para o cliente (o servidor também recusa)
+    const campo = texto.match(CAMPO_A_PREENCHER)?.[0];
+    if (campo) {
+      toast(`Complete ${campo} antes de enviar.`);
+      const i = tx.value.indexOf(campo); tx.focus(); if (i >= 0) tx.setSelectionRange(i, i + campo.length);
+      return;
+    }
     const b = $('#wzEnviar'); b.disabled = true; b.textContent = 'Enviando…';
     try {
       const { data, error } = await db.client().functions.invoke('wa-responder', { body: { acao: 'enviar', wa_id: wa, texto } });
@@ -368,7 +376,7 @@ function pronta(tipo, conv) {
     const chave = `Chave Pix: ${g.pix_chave.trim()}${g.pix_nome?.trim() ? ` (${g.pix_nome.trim()})` : ''}`;
     const d = conv.deal;
     const pct = +g.sinal_pct || 50;
-    if (!d?.valor) return { texto: `Para garantir a reserva, o sinal é de [valor do sinal].\n${chave}\nAssim que fizer, me manda o comprovante, por favor.` };
+    if (!d?.valor) return { texto: `Para garantir a reserva, o sinal é de ${pct}% do total.\n${chave}\nAssim que fizer, me manda o comprovante, por favor.` };
     const sinal = Math.max(0, d.valor * pct / 100 - recebido(d));
     if (!sinal) return { texto: `O sinal já está pago ✅ Falta ${reais(saldoDeal(d))} do total de ${reais(d.valor)}.\n${chave}` };
     return { texto: `Para garantir a reserva, o sinal é de ${reais(sinal)} (${pct}% do total de ${reais(d.valor)}).\n${chave}\nAssim que fizer, me manda o comprovante, por favor.` };

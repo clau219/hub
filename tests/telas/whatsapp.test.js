@@ -208,6 +208,12 @@ describe('WhatsApp: responder pelo Hub', () => {
     $('[data-pronta=pix]').click();
     assert.equal(tx().value, 'Para garantir a reserva, o sinal é de R$ 825 (50% do total de R$ 1.650).\nChave Pix: 12.345.678/0001-90 (Claudio Braga)\nAssim que fizer, me manda o comprovante, por favor.');
   });
+  test('Pix sem valor na oportunidade: diz a porcentagem do sinal, sem campo a preencher', async () => {
+    const d = comBase(); delete d.deals[0].valor;
+    await trocarDados(d, { supabase: true }); await abrir(`#/whatsapp?c=${ANA}`);
+    $('[data-pronta=pix]').click();
+    assert.equal(tx().value, 'Para garantir a reserva, o sinal é de 50% do total.\nChave Pix: 12.345.678/0001-90 (Claudio Braga)\nAssim que fizer, me manda o comprovante, por favor.');
+  });
   test('Pix com sinal já pago: diz o que falta', async () => {
     const d = comBase(); d.deals[0].pagamentos = [{ data: '2026-10-18', valor: 825, forma: 'Pix' }];
     await trocarDados(d, { supabase: true }); await abrir(`#/whatsapp?c=${ANA}`);
@@ -254,12 +260,14 @@ describe('WhatsApp: responder pelo Hub', () => {
     assert.equal(tx().value, 'O Wi-Fi é [senha do Wi-Fi].');
     assert.match(texto('.wz-faltou'), /A IA não achou na base: senha do Wi-Fi/);
   });
-  test('Enviar com [colchetes] pede confirmação', async () => {
+  test('Enviar com campo a preencher ([valor], XX...) não envia: avisa e seleciona o campo', async () => {
     banco().funcoes['wa-responder'] = async () => ({ ok: true });
-    let perguntou = ''; globalThis.confirm = m => { perguntou = m; return false; };
-    digitar('Sinal de [valor]');
-    $('#wzEnviar').click(); await esperar(10);
-    assert.match(perguntou, /\[colchetes\]/);
+    for (const [msg, campo] of [['Sinal de [valor] no Pix', '[valor]'], ['Fica R$ XX', 'XX'], ['Oi {nome}!', '{nome}']]) {
+      digitar(msg);
+      $('#wzEnviar').click(); await esperar(10);
+      assert.ok(texto('#toast').includes(`Complete ${campo} antes de enviar`), texto('#toast'));
+      assert.equal(tx().value.slice(tx().selectionStart, tx().selectionEnd), campo);
+    }
     assert.equal(banco().invocacoes.filter(i => i.body?.acao === 'enviar').length, 0);
   });
 });

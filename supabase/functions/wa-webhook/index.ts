@@ -2,7 +2,9 @@
 // (número em coexistência com o app Business):
 // - cada mensagem recebida vira/atualiza uma oportunidade de Aluguéis no Pipeline ("Responder WhatsApp");
 // - a IA (Claude Haiku) lê a conversa e extrai casa, datas e hóspedes;
-// - se for pergunta de disponibilidade/valor, consulta a airbnb-quote e responde sozinho;
+// - se for pergunta de disponibilidade/valor, junta o que o cliente já disse (wa_contacts.pedido), pergunta só o que
+//   falta (datas, confirmação de data vaga, saída, nº de pessoas) e, com tudo certo, consulta a airbnb-quote e responde;
+// - nenhum texto com campo a preencher ([nome], {data}, XX...) é enviado: fica para você;
 // - mensagens que você manda pelo app (ecos) ficam registradas e silenciam o robô naquela conversa.
 // O robô só informa disponibilidade e valor: nunca confirma reserva, não negocia e não responde o que não entendeu.
 //
@@ -16,7 +18,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
 import Anthropic from 'npm:@anthropic-ai/sdk@0.134.0';
 import { zodOutputFormat } from 'npm:@anthropic-ai/sdk@0.134.0/helpers/zod';
 import { z } from 'npm:zod@4.6.7';
-import { enviarZapi, lerBase, baseTexto } from '../_shared/wa.ts';
+import { enviarZapi, lerBase, baseTexto, campoAPreencher } from '../_shared/wa.ts';
 
 const SB_URL = Deno.env.get('SUPABASE_URL')!;
 const SB_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -162,7 +164,11 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
   const saudacao = x.assunto === 'saudacao';
   if (x.assunto !== 'disponibilidade_preco' && !duvida && !saudacao) return { deal_id, respondeu: false, motivo: `assunto "${x.assunto}": fica para você`, extracao: x };
 
-  const datas = duvida || saudacao ? null : normalizarDatas(x);
+  // Disponibilidade/valor: soma o que o cliente disse agora ao que já tinha dito (estado por contato)
+  const pedido = duvida || saudacao ? null : combinarPedido(conversa.pedido, x);
+  if (pedido) await sb.from('wa_contacts').update({ pedido }).eq('wa_id', e.wa_id);
+  const falta = pedido ? oQueFalta(pedido) : null;
+  const datas = pedido && !falta ? normalizarDatas(pedido)! : null;
   let texto: string, cot: any = null, redigido: string | null = null;
   if (duvida) {
     texto = x.resposta!.trim();
@@ -170,24 +176,24 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
     const nomes = (casas || []).map((c: any) => String(c.nome).replace(/^Casa\s+/i, ''));
     const lista = nomes.length > 1 ? `${nomes.slice(0, -1).join(', ')} e ${nomes.at(-1)}` : nomes[0] || '';
     texto = `Tudo bem? Aqui é o atendimento das casas ${lista}, no Condomínio Pipa Natureza, em Pipa. Me diga a data de entrada, a data de saída e quantas pessoas vão se hospedar, que eu já verifico a disponibilidade e os valores.`;
-  } else if (!datas) {
-    // Falta a data: pede só o que falta (não chuta)
-    texto = 'Para eu verificar a disponibilidade e os valores, me diga a data de entrada, a data de saída e quantas pessoas vão se hospedar.';
+  } else if (saudacao || falta) {
+    // Falta algo para consultar: pergunta só isso, de forma específica (não chuta data nem número de pessoas)
+    texto = falta ? pergunta(falta, pedido!) : PEDE_TUDO;
   } else {
-    // Consulta o Airbnb já com a melhor interpretação (fim de semana, Réveillon, só a entrada = 2 noites,
-    // pessoas não ditas = 2) e diz no fim o que considerou, para o cliente corrigir se for outra coisa
-    const pessoas = x.hospedes || 2;
-    cot = await cotar(datas.checkin, datas.checkout, pessoas);
+    cot = await cotar(datas!.checkin, datas!.checkout, pedido!.hospedes!);
     const casasOk = (cot?.casas || []).filter((c: any) => c.status !== 'erro');
     if (!cot?.mensagem || !casasOk.length) return { deal_id, respondeu: false, motivo: 'consulta ao Airbnb falhou: fica para você', extracao: x, cotacao: cot };
-    const supos = [!x.datas_exatas || datas.suposto ? `de ${dm(datas.checkin)} a ${dm(datas.checkout)}` : '', !x.hospedes ? `${pessoas} pessoas` : ''].filter(Boolean);
-    const aviso = supos.length ? `Considerei ${supos.join(', para ')}. Se for outra data ou mais gente, me avise que eu refaço.` : '';
     // A IA escreve a resposta com os números da consulta (foco na casa pedida, nome do cliente, próximo passo);
-    // se ela errar algum valor ou falhar, vai a mensagem padrão da airbnb-quote
-    redigido = await redigir(historico, cot, base, aviso, e.nome).catch(err => { console.error('redigir', err); return null; });
-    texto = redigido || cot.mensagem + (aviso ? `\n\n${aviso}` : '');
+    // se ela errar algum valor, deixar campo a preencher ou falhar, vai a mensagem padrão da airbnb-quote
+    redigido = await redigir(historico, cot, base, '', e.nome).catch(err => { console.error('redigir', err); return null; });
+    if (redigido && campoAPreencher(redigido)) { console.warn('redigir: campo a preencher; vai a mensagem padrão'); redigido = null; }
+    texto = redigido || cot.mensagem;
   }
   if (!redigido) texto = saudar(texto, historico);
+
+  // Última barreira: nada com [campo], {campo}, XX... sai para o cliente
+  const campo = campoAPreencher(texto);
+  if (campo) return { deal_id, respondeu: false, motivo: `texto com campo a preencher (${campo}): fica para você`, extracao: x };
 
   const enviado = teste ? { wamid: `teste-out-${crypto.randomUUID()}` } : await enviar(e.wa_id, texto, e.phoneId);
   if (!enviado) return { deal_id, respondeu: false, motivo: 'falha ao enviar pelo WhatsApp', extracao: x };
@@ -199,7 +205,7 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
     patch.proxima_acao = 'Acompanhar: o robô enviou disponibilidade e valores';
     patch.data_proxima_acao = addDays(hoje(), 1);
     patch.data_evento = datas.checkin;
-    const pedida = cot.casas.find((c: any) => c.id === x.casa && c.status === 'livre');
+    const pedida = cot.casas.find((c: any) => c.id === pedido!.casa && c.status === 'livre');
     if (pedida) { patch.valor = pedida.total; patch.local = pedida.nome; }
     const { data: d } = await sb.from('deals').select('etapa').eq('id', deal_id).single();
     if (d?.etapa === 'lead') patch.etapa = 'orcamento';
@@ -207,7 +213,8 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
     patch.proxima_acao = 'Acompanhar: o robô respondeu uma dúvida';
     patch.data_proxima_acao = addDays(hoje(), 1);
   } else {
-    patch.proxima_acao = datas ? 'Acompanhar: o robô pediu para confirmar as datas' : 'Acompanhar: o robô pediu as datas';
+    patch.proxima_acao = falta?.confirmar ? 'Acompanhar: o robô pediu para confirmar as datas'
+      : falta && !falta.datas && !falta.saida ? 'Acompanhar: o robô perguntou quantas pessoas' : 'Acompanhar: o robô pediu as datas';
     patch.data_proxima_acao = addDays(hoje(), 1);
   }
   await sb.from('deals').update(patch).eq('id', deal_id);
@@ -313,10 +320,10 @@ Classifique a ÚLTIMA mensagem do cliente, usando as anteriores como contexto:
 - "outro": qualquer outra coisa (dúvida que as informações não respondem, reclamação, pedido especial, conversa).
 
 Datas: converta para AAAA-MM-DD. Datas sem ano são a próxima ocorrência a partir de hoje. "Fim de semana" = sexta a domingo (saída no domingo). Feriados citados pelo nome (Réveillon, Carnaval etc.): use as datas do próximo feriado. Se o cliente der só a entrada e o número de noites, preencha noites e deixe checkout nulo. Se não houver data clara, deixe nulo: nunca invente.
-datas_exatas: true SOMENTE se o cliente disse o dia e o mês da entrada e também o dia da saída ou o número exato de noites (ex.: "de 17 a 20 de novembro", "dia 5/12, 3 noites"), ou se respondeu confirmando ("sim", "isso", "certo") as datas que o Robô perguntou. false quando usou expressões vagas: "fim de semana", "semana que vem", feriado pelo nome (Réveillon, Carnaval, Natal, Páscoa), só o mês, "umas X noites", "entre X e Y", "por volta de". Mesmo com datas_exatas false, preencha checkin/checkout com a sua melhor interpretação (o sistema consulta com essa interpretação e avisa o cliente do que considerou).
+datas_exatas: true SOMENTE se as datas que o cliente disse são precisas, com dia e mês (ex.: "de 17 a 20 de novembro", "dia 5/12, 3 noites", "chego dia 17/11" — mesmo que ainda falte a saída), ou se respondeu confirmando ("sim", "isso", "certo") as datas que o Robô perguntou. false quando usou expressões vagas: "fim de semana", "semana que vem", feriado pelo nome (Réveillon, Carnaval, Natal, Páscoa), só o mês, dia sem o mês ("dia 20"), "umas X noites", "entre X e Y", "por volta de". Mesmo com datas_exatas false, preencha checkin/checkout com a sua melhor interpretação (o sistema pergunta ao cliente se está certo). Se nesta mensagem o cliente só respondeu o que o Robô perguntou (ex.: "fico até dia 20", "somos 4"), junte com o que ele já tinha dito antes na conversa.
 casa: a casa citada pelo nome na última mensagem ou antes na conversa (se o cliente não mudou de ideia), ou "qualquer". hospedes: total de pessoas (adultos + crianças) considerando a conversa toda: se o cliente disse antes ("somos 6") e não mudou, repita; nulo só se nunca disse.
 resumo: até 8 palavras para o card, ex.: "Vaga 20-23/11, 6 pessoas, Casa Azul".
-resposta: só quando assunto = "duvida": a resposta para o cliente, em português do Brasil, curta e cordial, no tom de quem já está conversando (sem "Olá"), usando SOMENTE fatos das informações das casas, sem inventar nem prometer nada além delas. Nos outros assuntos, nulo.
+resposta: só quando assunto = "duvida": a resposta para o cliente, em português do Brasil, curta e cordial, no tom de quem já está conversando (sem "Olá"), usando SOMENTE fatos das informações das casas, sem inventar nem prometer nada além delas. Nunca escreva campos para preencher (colchetes, chaves, "XX", "nome do cliente"): o texto vai pronto para o cliente. Nos outros assuntos, nulo.
 
 <informacoes_das_casas>
 ${base || '(nenhuma informação cadastrada: nunca use "duvida")'}
@@ -334,15 +341,69 @@ ${base || '(nenhuma informação cadastrada: nunca use "duvida")'}
   return r.parsed_output;
 }
 
-function normalizarDatas(x: Extracao) {
-  const ok = (s: string | null) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s));
-  if (!ok(x.checkin)) return null;
-  // Só a entrada, sem saída nem noites: considera 2 noites (o robô avisa que supôs)
-  const suposto = !ok(x.checkout) && !(x.noites && x.noites > 0);
-  const checkout = ok(x.checkout) ? x.checkout! : x.noites && x.noites > 0 ? addDays(x.checkin!, x.noites) : addDays(x.checkin!, 2);
-  if (checkout <= x.checkin! || x.checkin! < hoje()) return null;
-  if (dias(x.checkin!, checkout) > 60) return null;
-  return { checkin: x.checkin!, checkout, suposto };
+// ---------- o que o cliente já disse (wa_contacts.pedido) e o que falta perguntar ----------
+type Pedido = { casa: string; checkin: string | null; checkout: string | null; noites: number | null; hospedes: number | null; datas_exatas: boolean; em: string };
+const isoOk = (s: string | null | undefined) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s));
+
+// O que veio agora tem prioridade; o que não veio continua o que o cliente disse antes (até 7 dias)
+function combinarPedido(antigo: Partial<Pedido> | null | undefined, x: Extracao): Pedido {
+  const v: Partial<Pedido> = antigo && Date.now() - Date.parse(antigo.em || '') < 7 * 864e5 ? antigo : {};
+  const p: Pedido = {
+    casa: x.casa !== 'qualquer' ? x.casa : v.casa || 'qualquer',
+    checkin: v.checkin ?? null, checkout: v.checkout ?? null, noites: v.noites ?? null,
+    hospedes: x.hospedes && x.hospedes > 0 ? x.hospedes : v.hospedes ?? null,
+    datas_exatas: !!v.datas_exatas, em: new Date().toISOString(),
+  };
+  if (isoOk(x.checkin)) {
+    // Nova entrada sem saída: a saída antiga não vale mais (pergunta de novo)
+    if (x.checkin !== v.checkin) { p.checkout = null; p.noites = null; }
+    p.checkin = x.checkin;
+    p.datas_exatas = x.datas_exatas;
+  }
+  if (isoOk(x.checkout)) { p.checkout = x.checkout; p.noites = null; }
+  else if (x.noites && x.noites > 0) { p.noites = x.noites; p.checkout = null; }
+  return p;
+}
+
+type Falta = { datas?: boolean; confirmar?: boolean; saida?: boolean; pessoas?: boolean };
+const fimDe = (p: Pedido) => (p.checkin ? (isoOk(p.checkout) ? p.checkout : p.noites ? addDays(p.checkin, p.noites) : null) : null);
+function oQueFalta(p: Pedido): Falta | null {
+  const f: Falta = {};
+  const fim = fimDe(p);
+  if (!isoOk(p.checkin) || p.checkin! < hoje() || (fim && (fim <= p.checkin! || dias(p.checkin!, fim) > 60))) f.datas = true;
+  else if (!p.datas_exatas) f.confirmar = true;
+  else if (!fim) f.saida = true;
+  if (!p.hospedes) f.pessoas = true;
+  return Object.keys(f).length ? f : null;
+}
+
+function normalizarDatas(p: Pedido) {
+  const fim = fimDe(p);
+  if (!isoOk(p.checkin) || !fim || fim <= p.checkin! || p.checkin! < hoje() || dias(p.checkin!, fim) > 60) return null;
+  return { checkin: p.checkin!, checkout: fim };
+}
+
+const PEDE_TUDO = 'Para eu verificar a disponibilidade e os valores, me diga a data de entrada, a data de saída e quantas pessoas vão se hospedar.';
+const SEMANA = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
+const diaDm = (iso: string) => `${SEMANA[new Date(iso + 'T12:00:00Z').getUTCDay()]}, ${dm(iso)}`;
+// "no sábado, 05/12" / "na terça, 17/11"
+const noDia = (iso: string) => `${new Date(iso + 'T12:00:00Z').getUTCDay() % 6 === 0 ? 'no' : 'na'} ${diaDm(iso)}`;
+
+// Pergunta natural só com o que falta (sem campos a preencher: tudo vem do que o cliente já disse)
+function pergunta(f: Falta, p: Pedido): string {
+  const extra = f.pessoas ? ' E quantas pessoas vão se hospedar?' : '';
+  if (f.datas) {
+    if (f.pessoas) return PEDE_TUDO;
+    return `Para eu verificar a disponibilidade e os valores para ${p.hospedes} ${p.hospedes === 1 ? 'pessoa' : 'pessoas'}, me diga a data de entrada e a data de saída.`;
+  }
+  const fim = fimDe(p);
+  if (f.confirmar) {
+    return fim
+      ? `Só para eu consultar certinho: seria de ${diaDm(p.checkin!)}, a ${diaDm(fim)}?${extra}`
+      : `Só para eu consultar certinho: a entrada seria ${noDia(p.checkin!)}? E até que dia vocês ficariam?${extra}`;
+  }
+  if (f.saida) return `Anotei a entrada ${noDia(p.checkin!)}. Até que dia vocês ficam (ou quantas noites)?${extra}`;
+  return `Para eu consultar de ${dm(p.checkin!)} a ${dm(fim!)}: quantas pessoas vão se hospedar?`;
 }
 
 // ---------- IA: escreve a resposta de disponibilidade e valores ----------
@@ -385,6 +446,7 @@ Regras:
 - Se nenhuma casa estiver livre, ofereça as alternativas de data que a consulta trouxer; se não houver, peça outras datas.
 - Se a mensagem do cliente também perguntar algo que as informações das casas respondem (pets, horários, capacidade, comodidades), responda junto. Se perguntar algo que não está nelas, diga que o Claudio confirma em seguida.
 - Nunca confirme reserva, não peça dados pessoais e não fale de Pix.
+- O texto vai direto para o cliente: nunca escreva campos para preencher (colchetes, chaves, "XX", "nome do cliente", "data"). Se não souber o nome, escreva sem nome.
 - Termine com o próximo passo, perguntando se quer reservar a casa livre${base.includes('Como funciona o pagamento') ? ' (pode dizer, em uma frase, como funciona o pagamento, conforme as informações)' : ''}.${aviso ? `\n- Diga também, com suas palavras: "${aviso}"` : ''}
 
 <consulta_airbnb>

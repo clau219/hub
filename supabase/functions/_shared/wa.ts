@@ -12,6 +12,13 @@ export async function enviarZapi(to: string, body: string, { digitando = 3 } = {
   return { wamid: (j.messageId || j.id) as string };
 }
 
+// Campo a preencher esquecido no texto ([nome], {data}, XX, ___, <valor>, (nome do cliente)): devolve o trecho
+// achado, ou null. Nada com isso é enviado ao cliente — nem pelo robô, nem pelo botão Enviar do Hub.
+export function campoAPreencher(texto: string): string | null {
+  const m = String(texto || '').match(/\[[^\]\n]{1,60}\]|\{\{?[^}\n]{0,60}\}?\}|\bX{2,}\b|_{3,}|<[^>\n]{1,40}>|\(\s*(?:nome|data|valor|n[uú]mero)\b[^)\n]{0,40}\)/i);
+  return m ? m[0] : null;
+}
+
 export type Base = {
   geral?: Record<string, string>;
   casas?: Record<string, Record<string, string>>;
