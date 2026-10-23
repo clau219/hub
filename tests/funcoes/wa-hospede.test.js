@@ -10,19 +10,21 @@ import { novoBanco, banco } from '../helpers/fake-supabase.js';
 import { simular, limparRede, chamadasPara } from '../helpers/rede.js';
 import { relogio } from '../helpers/ambiente.js';
 import { airbnbFalso, calendarSources } from '../helpers/airbnb-falso.js';
-import { ligarIA } from '../helpers/ia-robo.js';
+import { ligarIA, comprovante, fotoQualquer } from '../helpers/ia-robo.js';
 
 const ZAPI = { ZAPI_INSTANCE: 'INST1', ZAPI_TOKEN: 'tok1', ZAPI_CLIENT_TOKEN: 'cli1', ZAPI_WEBHOOK_KEY: 'chave-z', ANTHROPIC_API_KEY: 'sk-teste' };
 const SENHA_WIFI = 'SenhaSecreta2026', PIX = 'pix@casaspipa.com.br';
 const BASE = {
   geral: { endereco: 'Condomínio Pipa Natureza, Pipa/RN', checkin: '14h', checkout: '10h', pets: 'A Casa Frida e a Casa Terracota aceitam pets; a Casa Azul não aceita.',
-    regras: 'Proibido festas e som alto depois das 22h.', pix_chave: PIX, pix_nome: 'Claudio', sinal_pct: '30' },
+    regras: 'Proibido festas e som alto depois das 22h.', pix_chave: PIX, pix_nome: 'Claudio Roberto Braga', sinal_pct: '30' },
   casas: { QS40: { capacidade: '6 pessoas', wifi_rede: 'CasaAzul', wifi_senha: SENHA_WIFI, localizacao: 'https://maps.app.goo.gl/azul' } },
 };
 const DADOS = (x = {}) => comCron({
   properties: [{ id: 'QS39', nome: 'Casa Frida' }, { id: 'QS40', nome: 'Casa Azul' }, { id: 'QS50', nome: 'Casa Terracota' }],
   calendar_sources: calendarSources(),
   wa_settings: [{ id: 1, bot_ativo: true, horas_silencio: 12, max_respostas_dia: 4 }],
+  app_secrets: [{ key: 'cron_token', value: 'cron-teste' }, { key: 'vapid_public', value: 'pub' }, { key: 'vapid_private', value: 'priv' }],
+  push_subscriptions: [{ id: 's1', endpoint: 'https://push/celular-do-claudio', p256dh: 'p', auth: 'a' }],
   app_config: [{ key: 'wa_base', value: JSON.stringify(BASE) }],
   ...x,
 });
@@ -68,6 +70,14 @@ class Hospede {
     }
     return r;
   }
+  // Manda uma foto (ou PDF) pela Z-API; o robô baixa a URL e a IA "lê" o conteúdo
+  async manda(bytes, { pdf = false, legenda = '' } = {}) {
+    const url = `https://midia.z-api.io/${this.fone}/${++seq}.${pdf ? 'pdf' : 'jpg'}`;
+    const mime = pdf ? 'application/pdf' : 'image/jpeg';
+    simular(url, () => new Response(bytes, { headers: { 'content-type': mime } }));
+    return this.diz(undefined, pdf ? { text: undefined, document: { documentUrl: url, mimeType: mime, fileName: 'comprovante.pdf' } }
+      : { text: undefined, image: { imageUrl: url, mimeType: mime, caption: legenda } });
+  }
   get conversa() { return banco().t('wa_messages').filter(m => m.wa_id === this.fone).sort((a, b) => a.enviado_em.localeCompare(b.enviado_em)); }
   get card() { const c = banco().t('wa_contacts').find(x => x.wa_id === this.fone); return banco().t('deals').find(d => d.id === c?.deal_id); }
   get ultimaDecisao() { return this.conversa.filter(m => m.autor === 'cliente').at(-1)?.extracao?.robo; }
@@ -110,9 +120,13 @@ afterEach(() => {
     assert.doesNotMatch(message, /undefined|null|NaN|\[object/, `texto com lixo de programação: ${message}`);
     assert.doesNotMatch(message, /\[[^\]]{1,40}\]|\{\{?[^}]*\}|_{3,}|\bX{2,}\b/, `campo a preencher esquecido: ${message}`);
     assert.ok(!message.includes(SENHA_WIFI), 'nunca manda a senha do Wi-Fi');
-    assert.ok(!message.includes(PIX), 'nunca manda a chave Pix');
+    if (message.includes(PIX)) assert.match(message, /O sinal é de R\$ [\d.,]+ \(\d+%\), por Pix/, 'a chave Pix só vai na mensagem do sinal');
     assert.ok(!message.includes('maps.app.goo.gl'), 'nunca manda o link da localização exata');
-    assert.doesNotMatch(message, /reserva (est[aá] )?confirmada|confirmo (a|sua) reserva/i, 'nunca confirma reserva');
+    // só confirma reserva com comprovante aprovado e a reserva criada no Hub para esse hóspede
+    if (/reserva (est[aá] )?confirmada/i.test(message)) {
+      const cp = banco().t('wa_comprovantes').find(x => x.wa_id === phone && x.status === 'valido');
+      assert.ok(cp && banco().t('bookings').some(b => b.id === cp.booking_id), `confirmou reserva sem comprovante válido: ${message}`);
+    }
   }
   for (const p of ia.chamadas) assert.ok(!String(p.system).includes(SENHA_WIFI) && !String(p.system).includes(PIX), 'senha do Wi-Fi e Pix nunca vão para a IA do robô');
 });
@@ -236,13 +250,12 @@ describe('hóspede: situações difíceis', () => {
 });
 
 describe('hóspede: o que fica para o Claudio', () => {
-  test('quer reservar e pede o Pix: o robô não responde (nem manda Pix) e o card avisa', async () => {
+  test('pede desconto: negociação fica para o Claudio, sem Pix', async () => {
     const h = new Hospede('5584991110020', 'Helena');
     await h.ateValores('Quanto fica a Casa Azul de 5 a 8/12 para 4 pessoas?', { datas: 'de 5 a 8/12', pessoas: 4 });
     const n = h.recebidas.length;
-    assert.equal(await h.diz('Perfeito, quero reservar! Me passa o pix'), null);
+    assert.equal(await h.diz('Consegue um desconto se eu pagar à vista?'), null);
     assert.equal(h.recebidas.length, n);
-    assert.match(h.ultimaDecisao, /fica para você/);
     assert.match(h.card.proxima_acao, /^Responder WhatsApp/);
   });
   test('pede a senha do Wi-Fi: fica para o Claudio (a senha nunca vai para o robô)', async () => {
@@ -334,5 +347,142 @@ describe('hóspede: ritmo da conversa', () => {
     assert.equal(await h.diz('Tem vaga de 10 a 13/11?'), null);
     assert.equal(h.card.proxima_acao, 'Responder WhatsApp');
     assert.equal(h.conversa.length, 1);
+  });
+});
+
+// ---------- reserva direta: sinal por Pix e comprovante ----------
+// Hora "do comprovante": agora, em Brasília
+const horaPix = (desloc = 0) => new Date(Date.now() + desloc - 3 * 3600e3).toISOString().replace(/\.\d{3}Z$/, '-03:00');
+let e2eSeq = 0;
+const novoE2E = () => `E${String(18236120202610191455n + BigInt(++e2eSeq)).padStart(20, '0')}a${String(e2eSeq).padStart(10, '0')}`;
+const pixValido = (valor, x = {}) => comprovante({ valor, recebedor_nome: 'CLAUDIO ROBERTO BRAGA', recebedor_chave: PIX, pagador_nome: 'HOSPEDE', data_hora: horaPix(), e2e: novoE2E(), ...x });
+const sinalDe = total => Math.round(total * 0.3 * 100) / 100;
+const pushes = () => globalThis.__webpush.envios;
+// Da cotação ao Pix: hóspede pede valores da casa e diz que quer reservar
+async function ateOPix(h, casa = 'Casa Azul', datas = 'de 5 a 8/12', pessoas = 4) {
+  await h.ateValores(`Quanto fica a ${casa} ${datas} para ${pessoas} pessoas?`, { datas, pessoas });
+  return h.diz(`Perfeito, quero reservar a ${casa}! Me passa o pix`);
+}
+
+describe('hóspede: reserva com sinal por Pix e comprovante', () => {
+  beforeEach(() => { globalThis.__webpush = { envios: [], falhar: null }; });
+
+  test('jornada completa: valores → quero reservar → Pix do sinal → comprovante → reserva confirmada', async () => {
+    const h = new Hospede('5584991110050', 'Vitória Alves');
+    const pix = await ateOPix(h);
+    const total = ab.total('QS40', '2026-12-05', '2026-12-08'), sinal = sinalDe(total);
+    assert.match(pix, /Casa Azul/);
+    assert.ok(valores(pix).includes(total * 100), `diz o total do Airbnb (R$ ${total})`);
+    assert.ok(valores(pix).includes(Math.round(sinal * 100)), `e o sinal de 30% (R$ ${sinal})`);
+    assert.ok(pix.includes(PIX) && pix.includes('Claudio Roberto Braga'), 'chave Pix e nome do titular');
+    assert.match(pix, /comprovante/i, 'pede o comprovante');
+    assert.equal(h.card.etapa, 'negociacao');
+    assert.match(h.card.proxima_acao, /Aguardando sinal/);
+    assert.equal(banco().t('bookings').length, 0, 'as datas ainda NÃO são bloqueadas');
+
+    const consultasAntes = ab.consultas.length;
+    const ok = await h.manda(pixValido(sinal));
+    assert.match(ok, /Reserva confirmada/);
+    assert.match(ok, /Casa Azul/);
+    assert.ok(ab.consultas.length > consultasAntes, 'conferiu de novo no Airbnb antes de confirmar');
+    const bk = banco().t('bookings')[0];
+    assert.deepEqual([bk.property_id, bk.checkin, bk.checkout, bk.origem, bk.status, bk.valor, bk.hospede], ['QS40', '2026-12-05', '2026-12-08', 'direto', 'confirmada', total, 'Vitória Alves']);
+    assert.equal(h.card.etapa, 'fechado');
+    assert.deepEqual(h.card.pagamentos.map(p => [p.valor, p.forma]), [[sinal, 'Pix']]);
+    assert.equal(banco().t('wa_comprovantes')[0].status, 'valido');
+    assert.equal(pushes().length, 1);
+    assert.match(pushes()[0].title, /Reserva confirmada pelo robô/);
+    assert.match(pushes()[0].body, /Confira o sinal no banco/);
+  });
+  test('comprovante em PDF também vale', async () => {
+    const h = new Hospede('5584991110051', 'Wagner');
+    await ateOPix(h, 'Casa Frida', 'de 10 a 13/11', 2);
+    const r = await h.manda(pixValido(sinalDe(ab.total('QS39', '2026-11-10', '2026-11-13'))), { pdf: true });
+    assert.match(r, /Reserva confirmada/);
+  });
+  test('quer reservar sem dizer a casa: o robô lista as casas livres com o total', async () => {
+    const h = new Hospede('5584991110052', 'Xênia');
+    await h.ateValores('Quanto fica de 10 a 13/11 para 2 pessoas?', { datas: 'de 10 a 13/11', pessoas: 2 });
+    const r = await h.diz('Quero reservar! Como faço o pix?');
+    assert.match(r, /qual casa/i);
+    for (const c of ['Azul', 'Frida', 'Terracota']) assert.match(r, new RegExp(c));
+    assert.ok(!r.includes(PIX), 'ainda sem Pix: falta escolher a casa');
+    const pix = await h.diz('Quero reservar a Casa Terracota');
+    assert.ok(pix.includes(PIX));
+    assert.ok(valores(pix).includes(ab.total('QS50', '2026-11-10', '2026-11-13') * 100));
+  });
+  test('pede o Pix de novo: só lembra do comprovante', async () => {
+    const h = new Hospede('5584991110053', 'Yara');
+    await ateOPix(h);
+    const r = await h.diz('Me manda o pix de novo?');
+    assert.match(r, /comprovante/);
+    assert.ok(!r.includes(PIX) || /O sinal é de/.test(r));
+  });
+  test('Pix com valor menor que o sinal: não confirma, avisa que vai conferir e chama o Claudio', async () => {
+    const h = new Hospede('5584991110054', 'Zeca');
+    await ateOPix(h);
+    const r = await h.manda(pixValido(100));
+    assert.match(r, /Vou conferir/);
+    assert.doesNotMatch(r, /confirmada/i);
+    assert.equal(banco().t('bookings').length, 0);
+    assert.match(h.card.proxima_acao, /Conferir comprovante: valor/);
+    assert.equal(pushes().length, 1);
+  });
+  test('Pix para outra pessoa: não confirma', async () => {
+    const h = new Hospede('5584991110055', 'Alice');
+    await ateOPix(h);
+    const r = await h.manda(pixValido(sinalDe(ab.total('QS40', '2026-12-05', '2026-12-08')), { recebedor_nome: 'FULANO GOLPISTA', recebedor_chave: 'golpe@x.com' }));
+    assert.match(r, /Vou conferir/);
+    assert.match(h.card.proxima_acao, /recebedor não confere/);
+    assert.equal(banco().t('bookings').length, 0);
+  });
+  test('comprovante antigo (de antes do pedido): não confirma', async () => {
+    const h = new Hospede('5584991110056', 'Beto');
+    await ateOPix(h);
+    const r = await h.manda(pixValido(sinalDe(ab.total('QS40', '2026-12-05', '2026-12-08')), { data_hora: '2026-09-01T10:00:00-03:00' }));
+    assert.match(r, /Vou conferir/);
+    assert.match(h.card.proxima_acao, /data fora do período/);
+  });
+  test('o mesmo comprovante usado por dois hóspedes: o segundo não reserva', async () => {
+    const a = new Hospede('5584991110057', 'Carla'), b = new Hospede('5584991110058', 'Diego');
+    const total = ab.total('QS40', '2026-12-05', '2026-12-08');
+    await ateOPix(a);
+    const arquivo = pixValido(sinalDe(total));
+    assert.match(await a.manda(arquivo), /Reserva confirmada/);
+    await ateOPix(b, 'Casa Frida', 'de 5 a 8/12', 4);
+    const r = await b.manda(Buffer.from(arquivo));
+    assert.match(r, /Vou conferir/);
+    assert.match(b.card.proxima_acao, /já usado|não confere|valor/);
+    assert.equal(banco().t('bookings').length, 1);
+  });
+  test('foto que não é comprovante: não confirma', async () => {
+    const h = new Hospede('5584991110059', 'Elisa');
+    await ateOPix(h);
+    const r = await h.manda(fotoQualquer());
+    assert.match(r, /Vou conferir/);
+    assert.match(h.card.proxima_acao, /não parece um comprovante/);
+  });
+  test('a casa foi reservada no Airbnb entre o Pix e o comprovante: não confirma (nada de reserva dupla)', async () => {
+    const h = new Hospede('5584991110060', 'Fernando');
+    await ateOPix(h);
+    ab = airbnbFalso({ casas: { ...CASAS, QS40: { ...CASAS.QS40, ocupados: ['2026-12-06'] } } });
+    const r = await h.manda(pixValido(sinalDe(ab.total('QS40', '2026-12-05', '2026-12-08'))));
+    assert.match(r, /Vou conferir/);
+    assert.match(h.card.proxima_acao, /não está mais livre/);
+    assert.equal(banco().t('bookings').length, 0);
+  });
+  test('comprovante sem ter pedido o Pix: fica para o Claudio', async () => {
+    const h = new Hospede('5584991110061', 'Gustavo');
+    assert.equal(await h.manda(pixValido(500)), null);
+    assert.match(h.ultimaDecisao, /fica para você/);
+    assert.equal(banco().t('bookings').length, 0);
+  });
+  test('sem a chave Pix cadastrada: "vou confirmar" e o card destaca o pedido', async () => {
+    const base = { ...BASE, geral: { ...BASE.geral, pix_chave: '', pix_nome: '' } };
+    novoBanco(DADOS({ app_config: [{ key: 'wa_base', value: JSON.stringify(base) }] }));
+    const h = new Hospede('5584991110062', 'Heitor');
+    const r = await ateOPix(h);
+    assert.match(r, /Vou confirmar isso e já te retorno/);
+    assert.match(h.card.proxima_acao, /Quer reservar a Casa Azul/);
   });
 });

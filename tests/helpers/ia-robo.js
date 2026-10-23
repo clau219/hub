@@ -67,9 +67,11 @@ export const pessoasDe = frase => {
 };
 
 const AFIRMA = /^(sim|isso|certo|exato|correto|pode ser|ok|confirmo|perfeito)\b/;
-const RESERVA = /\b(reservar|reserva|fechar|fechado|pix|comprovante|sinal|desconto|pagar|pagamento|transferencia)\b/;
+// "reservar": quer reservar/fechar, pede o Pix ou diz que pagou. "confirmar_reserva": negociar desconto/condição/outra forma de pagamento.
+const RESERVA = /\b(reservar|reserva|fechar|fechado|pix|comprovante|sinal|pagar|paguei|transferencia)\b/;
+const NEGOCIA = /\b(desconto|parcel\w*|cartao|abatimento|condicao especial|mais barato)\b/;
 const SAUDA = /^(?:(?:oi+|ola|opa|bom dia|boa tarde|boa noite|tudo bem|tudo bom|e ai|\?+|alguem ai|queria (?:mais )?informacoes(?: sobre as casas)?)[!.?,\s]*)+$/;
-const PRECO = /(vaga|dispon|valor|preco|quanto|diaria|livre|tem para|orcamento|cota)/;
+const PRECO = /\b(vaga|dispon\w*|valor\w*|preco\w*|quanto|diaria\w*|livre|tem para|orcamento|cotar|cotacao)\b/; // palavras inteiras ("Terracota" não é "cota")
 const DUVIDAS = [
   [/(pet|cachorro|cao|gato|animal)/, ['Pets']],
   [/(check-?in|que horas|horario de entrada|horario)/, ['Horário de check-in', 'Horário de check-out']],
@@ -103,7 +105,8 @@ function extrair(system, conteudo) {
   }
   let assunto = 'outro', resposta = null;
   const duvida = DUVIDAS.find(([re]) => re.test(u));
-  if (RESERVA.test(u) && !PRECO.test(u.replace(/reserva\w*/g, ''))) assunto = 'confirmar_reserva';
+  if (NEGOCIA.test(u)) assunto = 'confirmar_reserva';
+  else if (RESERVA.test(u) && !PRECO.test(u.replace(/reserva\w*/g, ''))) assunto = 'reservar';
   else if (SAUDA.test(u)) assunto = 'saudacao';
   else if (d || PRECO.test(u) || (pessoasDe(ult) != null && cli.length > 1)) assunto = 'disponibilidade_preco';
   else if (duvida && temBase) {
@@ -113,7 +116,7 @@ function extrair(system, conteudo) {
   if (/wi-?fi|senha/.test(u) && assunto === 'duvida') { assunto = 'outro'; resposta = null; }
   const resumo = assunto === 'disponibilidade_preco'
     ? ['Vaga', d ? `${d.checkin.slice(8)}/${d.checkin.slice(5, 7)}` : '', hospedes ? `${hospedes} pessoas` : ''].filter(Boolean).join(' ')
-    : assunto === 'confirmar_reserva' ? 'Quer reservar' : assunto === 'saudacao' ? 'Cumprimento' : assunto === 'duvida' ? 'Dúvida sobre a casa' : 'Assunto para o Claudio';
+    : assunto === 'reservar' ? 'Quer reservar' : assunto === 'confirmar_reserva' ? 'Quer negociar' : assunto === 'saudacao' ? 'Cumprimento' : assunto === 'duvida' ? 'Dúvida sobre a casa' : 'Assunto para o Claudio';
   return { assunto, casa, checkin: d?.checkin ?? null, checkout: d?.checkout ?? null, noites: d?.noites ?? null, hospedes, datas_exatas: !!d?.exatas, resumo, resposta };
 }
 
@@ -143,12 +146,26 @@ function redigir(system, conteudo, { mentir = false } = {}) {
   return { texto: out.join('\n') };
 }
 
+// Comprovante falso: o "arquivo" é um JSON com o que estaria escrito nele (a leitura simulada só decodifica).
+// Ex.: comprovante({ valor: 825, recebedor_nome: 'CLAUDIO BRAGA', e2e: 'E…', data_hora: '…-03:00' }); outra coisa → foto qualquer.
+export const comprovante = dados => Buffer.from(JSON.stringify({ comprovante: true, ...dados }));
+export const fotoQualquer = () => Buffer.from('foto da praia ao pôr do sol');
+function lerComprovante(content) {
+  const bloco = (Array.isArray(content) ? content : []).find(b => b.type === 'image' || b.type === 'document');
+  let d = null;
+  try { d = JSON.parse(Buffer.from(bloco?.source?.data || '', 'base64').toString()); } catch { /* não é comprovante */ }
+  if (!d?.comprovante) return { e_comprovante_pix: false, valor: null, recebedor_nome: null, recebedor_chave: null, pagador_nome: null, data_hora: null, e2e: null };
+  return { e_comprovante_pix: true, valor: d.valor ?? null, recebedor_nome: d.recebedor_nome ?? null, recebedor_chave: d.recebedor_chave ?? null,
+    pagador_nome: d.pagador_nome ?? null, data_hora: d.data_hora ?? null, e2e: d.e2e ?? null };
+}
+
 export function ligarIA(opcoes = {}) {
   const ia = { chamadas: [], tipos: [], ...opcoes };
   globalThis.__anthropic = ia;
   ia.responder = params => {
     const system = String(params.system || ''), conteudo = params.messages?.[0]?.content || '';
     if (ia.foraDoAr) throw new Error('overloaded');
+    if (/comprovantes de Pix/.test(system)) { ia.tipos.push('comprovante'); return lerComprovante(params.messages?.[0]?.content); }
     if (/<consulta_airbnb>/.test(system)) { ia.tipos.push('redigir'); return redigir(system, conteudo, ia); }
     if (/Classifique a ÚLTIMA mensagem/.test(system)) { ia.tipos.push('extrair'); return extrair(system, conteudo); }
     ia.tipos.push('desconhecida');
