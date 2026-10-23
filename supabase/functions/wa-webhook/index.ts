@@ -17,6 +17,7 @@
 // cumprimenta pelo horário e pelo nome; responde "obrigado" sem puxar assunto (uma vez só); pede por escrito quando
 // chega áudio; não repete a mesma frase nem reenvia a mesma cotação; "digitando..." proporcional ao tamanho do texto.
 // O robô só informa disponibilidade e valor: nunca confirma reserva, não negocia e não responde o que não entendeu.
+// Mensagem do seu número pessoal (Ajustes > Canal do dono) não é cliente: vai para _shared/dono.ts (comandos do Hub).
 //
 // Segredos (supabase secrets set): ANTHROPIC_API_KEY e
 //   Z-API: ZAPI_INSTANCE, ZAPI_TOKEN, ZAPI_CLIENT_TOKEN, ZAPI_WEBHOOK_KEY (a Z-API não assina o webhook: a URL
@@ -29,6 +30,7 @@ import Anthropic from 'npm:@anthropic-ai/sdk@0.134.0';
 import { zodOutputFormat } from 'npm:@anthropic-ai/sdk@0.134.0/helpers/zod';
 import { z } from 'npm:zod@4.6.7';
 import { enviarZapi, lerBase, baseTexto, campoAPreencher, avisarPush } from '../_shared/wa.ts';
+import { ehDono, processarDono } from '../_shared/dono.ts';
 
 const SB_URL = Deno.env.get('SUPABASE_URL')!;
 const SB_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -62,6 +64,7 @@ Deno.serve(async req => {
     // teste.midia = {mime, base64}: simula um comprovante (foto/PDF) sem a Z-API
     const midia = t.midia?.base64 && t.midia?.mime ? { mime: String(t.midia.mime), base64: String(t.midia.base64) } : null;
     const e: Entrada = { wa_id: String(t.wa_id).replace(/\D/g, ''), nome: t.nome, wamid: `teste-${crypto.randomUUID()}`, tipo: midia ? (midia.mime === 'application/pdf' ? 'document' : 'image') : 'text', texto: t.texto, ts: new Date(), midia };
+    if (!t.eco && await ehDono(sb, e.wa_id)) return json(await processarDono(sb, e, { teste: true, enviar: enviarDono }));
     return json(t.eco ? await processarEco(sb, e) : await processarEntrada(sb, e, { teste: true }));
   }
 
@@ -87,11 +90,14 @@ async function processarWebhook(sb: SB, body: any) {
     if (ch.field === 'messages') {
       const nomes = Object.fromEntries((v.contacts || []).map((c: any) => [c.wa_id, c.profile?.name]));
       for (const m of v.messages || []) {
-        await processarEntrada(sb, { wa_id: m.from, nome: nomes[m.from], wamid: m.id, tipo: m.type, texto: textoDe(m), ts: new Date(+m.timestamp * 1000), phoneId }, {});
+        const e: Entrada = { wa_id: m.from, nome: nomes[m.from], wamid: m.id, tipo: m.type, texto: textoDe(m), ts: new Date(+m.timestamp * 1000), phoneId };
+        if (await ehDono(sb, e.wa_id)) await processarDono(sb, e, { enviar: (to, t) => enviar(to, t, phoneId) });
+        else await processarEntrada(sb, e, {});
       }
     } else if (ch.field === 'smb_message_echoes') {
       // Mensagens que você enviou pelo app WhatsApp Business (coexistência)
       for (const m of v.message_echoes || []) {
+        if (await ehDono(sb, m.to)) continue;
         await processarEco(sb, { wa_id: m.to, wamid: m.id, tipo: m.type, texto: textoDe(m), ts: new Date(+m.timestamp * 1000) });
       }
     }
@@ -113,6 +119,9 @@ async function processarZapi(sb: SB, m: any) {
   const wa_id = phone.includes('@') ? phone : phone.replace(/\D/g, '');
   const { tipo, texto, midia } = conteudoZapi(m);
   const e: Entrada = { wa_id, nome: m.fromMe ? null : m.senderName || m.chatName, wamid: m.messageId, tipo, texto, ts: new Date(m.momment || Date.now()), midia };
+  // Seu número pessoal: comando para o Hub (canal do dono), nunca cliente. O que você digita para ele no app das
+  // casas não vira conversa de cliente
+  if (await ehDono(sb, wa_id)) { if (!m.fromMe) await processarDono(sb, e, { enviar: enviarDono }); return; }
   if (m.fromMe) await processarEco(sb, e); else await processarEntrada(sb, e, {});
 }
 
@@ -864,6 +873,8 @@ async function cotar(checkin: string, checkout: string, adultos: number, pets?: 
 }
 
 // ---------- envio: Z-API (se configurada) ou WhatsApp Cloud API ----------
+// Para o dono: sem "digitando..." de gente (é recibo, não conversa)
+const enviarDono = (to: string, body: string) => Deno.env.get('ZAPI_INSTANCE') ? enviarZapi(to, body, { digitando: 1 }) : enviar(to, body);
 // "digitando..." do tamanho do texto, como uma pessoa: 2 s numa frase curta, até 8 s numa resposta longa
 const tempoDigitando = (t: string) => Math.min(8, Math.max(2, Math.round(t.length / 40)));
 

@@ -135,6 +135,20 @@ describe('fin-sync: contas e lançamentos', () => {
     assert.equal((await sync()).corpo.apagados, 1);
     assert.ok(!banco().t('fin_tx').some(x => x.id === 'velha-pendente'));
   });
+  test('gasto anotado pelo WhatsApp (wa-…): o lançamento do banco com o mesmo valor herda a classificação e o provisório sai', async () => {
+    novoBanco(DADOS({ fin_tx: [
+      { id: 'wa-1', conta_id: null, data: '2026-10-08', descricao: 'Faxina', valor: -120, categoria: 'Faxina e limpeza', negocio: 'alugueis', casa: 'QS39', manual: true },
+      { id: 'wa-2', conta_id: null, data: '2026-09-20', descricao: 'Gás', valor: -55, categoria: 'Contas da casa', manual: true },
+    ] }));
+    pluggy({ txs: { acc1: [tx('b1', { amount: 120, description: 'PIX MARIA' }), tx('b2', { amount: 55 }), tx('b3', { amount: 120, type: 'CREDIT' })] } });
+    await sync();
+    const t = Object.fromEntries(banco().t('fin_tx').map(x => [x.id, x]));
+    assert.deepEqual([t.b1.categoria, t.b1.negocio, t.b1.casa, t.b1.manual, t.b1.descricao], ['Faxina e limpeza', 'alugueis', 'QS39', true, 'Faxina · PIX MARIA']);
+    assert.ok(!t['wa-1'], 'o provisório casado sai');
+    assert.ok(t['wa-2'], 'mais de 5 dias de diferença: continua provisório');
+    assert.equal(t.b2.categoria ?? null, null);
+    assert.equal(t.b3.categoria ?? null, null, 'entrada não casa com gasto');
+  });
   test('desde quando: 1 ano na primeira vez; depois 10 dias antes do último; ou N dias pedidos', async () => {
     novoBanco(DADOS());
     pluggy({ txs: TXS });

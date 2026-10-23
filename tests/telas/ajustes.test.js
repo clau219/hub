@@ -97,6 +97,44 @@ describe('Ajustes', () => {
     await abrir();
     assert.match(texto('#waCfg'), /2026-10-15_whatsapp\.sql/);
   });
+  test('canal do dono: sem a coluna avisa o SQL; número salvo com 55, inválido recusado, vazio desliga', async () => {
+    assert.match(texto('#waCfg'), /2026-10-23_dono\.sql/);
+    await trocarDados({ ...DADOS(), wa_settings: [{ id: 1, bot_ativo: true, horas_silencio: 12, max_respostas_dia: 4, dono_wa: null, dono_resumo: true }] }, { supabase: true });
+    await abrir();
+    assert.equal($('#donoResumo').disabled, true);
+    const n = $('#waCfg [name=dono_wa]');
+    n.value = '(84) 99601-1991'; n.dispatchEvent(new Event('change'));
+    await esperar(5);
+    assert.equal(banco().t('wa_settings')[0].dono_wa, '5584996011991');
+    assert.equal(n.value, '(84) 99601-1991');
+    assert.match(texto('#toast'), /Canal do dono ligado/);
+    assert.equal($('#donoResumo').disabled, false);
+    n.value = '9960'; n.dispatchEvent(new Event('change'));
+    await esperar(5);
+    assert.equal(banco().t('wa_settings')[0].dono_wa, '5584996011991');
+    assert.match(texto('#toast'), /Número incompleto/);
+    n.value = ''; n.dispatchEvent(new Event('change'));
+    await esperar(5);
+    assert.equal(banco().t('wa_settings')[0].dono_wa, null);
+    assert.equal(texto('#toast'), 'Canal do dono desligado');
+  });
+  test('canal do dono: resumo liga/desliga e "Mandar resumo agora" chama a wa-dono', async () => {
+    await trocarDados({ ...DADOS(), wa_settings: [{ id: 1, bot_ativo: true, horas_silencio: 12, max_respostas_dia: 4, dono_wa: '5584996011991', dono_resumo: true }] }, { supabase: true });
+    await abrir();
+    assert.equal($('#waCfg [name=dono_wa]').value, '(84) 99601-1991');
+    const r = $('#waCfg [name=dono_resumo]');
+    r.checked = false; r.dispatchEvent(new Event('change'));
+    await esperar(5);
+    assert.equal(banco().t('wa_settings')[0].dono_resumo, false);
+    let corpo;
+    banco().funcoes['wa-dono'] = b => { corpo = b; return { enviado: true }; };
+    await clicar('#donoResumo', 10);
+    assert.deepEqual(corpo, { resumo: 'manha' });
+    assert.equal(texto('#toast'), 'Resumo enviado no seu WhatsApp');
+    banco().funcoes['wa-dono'] = () => ({ enviado: false, motivo: 'Z-API não configurada' });
+    await clicar('#donoResumo', 10);
+    assert.equal(texto('#toast'), 'Não foi possível mandar: Z-API não configurada');
+  });
   test('notificações: mostra o estado mesmo sem service worker', () => {
     const b = $$('#view section.block').find(s => /Notificações/.test(s.textContent));
     assert.match(texto(b), /Este navegador não aceita notificações push\.|Desativadas neste aparelho\.|Ativas neste aparelho\./);

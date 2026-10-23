@@ -140,10 +140,34 @@ async function waConfig(el) {
       <label>Silêncio depois que você responde (horas)<input type="number" name="horas_silencio" min="0" max="168" value="${c.horas_silencio}"></label>
       <label>Máximo de respostas automáticas por conversa em 24 h<input type="number" name="max_respostas_dia" min="1" max="20" value="${c.max_respostas_dia}"></label>
     </div>
-    <p class="muted small">${ult ? `Última mensagem recebida: ${fmtDate(localDate(ult.enviado_em))}.` : 'Nenhuma mensagem recebida ainda.'}</p>`;
+    <p class="muted small">${ult ? `Última mensagem recebida: ${fmtDate(localDate(ult.enviado_em))}.` : 'Nenhuma mensagem recebida ainda.'}</p>
+    ${'dono_wa' in c ? `<div class="wa-dono">
+      <h3>Canal do dono</h3>
+      <p class="muted small">Mande mensagem do seu WhatsApp pessoal para o número das casas e o Hub registra: “+dj Anabela 15/11 3500”, “recebi 1750 da Anabela”, “gastei 120 de faxina na Frida”, “me lembra de ligar pro contador amanhã”, “o que tenho hoje?”. Cada registro volta com um recibo; “desfaz” ou “o valor é 3800” corrigem.</p>
+      <label>Seu número pessoal<input type="tel" name="dono_wa" inputmode="tel" placeholder="(84) 99999-0000" value="${h(foneBonito(c.dono_wa))}"></label>
+      <label class="wa-switch"><input type="checkbox" name="dono_resumo" ${c.dono_resumo !== false ? 'checked' : ''}> <b>Resumo do dia no WhatsApp (7h30 e 18h)</b></label>
+      <div class="row-btns"><button class="btn" type="button" id="donoResumo" ${c.dono_wa ? '' : 'disabled'}>Mandar resumo agora</button></div>
+    </div>` : '<p class="muted small">Canal do dono: rode supabase/2026-10-23_dono.sql para ligar.</p>'}`;
   el.querySelectorAll('input').forEach(i => i.onchange = async () => {
-    const v = i.type === 'checkbox' ? i.checked : Math.max(+i.min, Math.min(+i.max, Math.round(+i.value || 0)));
+    let v;
+    if (i.name === 'dono_wa') {
+      // Só dígitos, com o 55 do Brasil; vazio desliga o canal
+      const d = i.value.replace(/\D/g, '');
+      v = !d ? null : d.length === 10 || d.length === 11 ? '55' + d : d;
+      if (v && !/^\d{12,13}$/.test(v)) return toast('Número incompleto: use DDD + número');
+      i.value = foneBonito(v);
+      el.querySelector('#donoResumo').disabled = !v;
+    } else v = i.type === 'checkbox' ? i.checked : Math.max(+i.min, Math.min(+i.max, Math.round(+i.value || 0)));
     const { error: er } = await sb.from('wa_settings').update({ [i.name]: v, updated_at: new Date().toISOString() }).eq('id', 1);
-    toast(er ? 'Não foi possível salvar' : i.name === 'bot_ativo' ? (v ? 'Robô ligado' : 'Robô desligado') : 'Salvo');
+    toast(er ? 'Não foi possível salvar' : i.name === 'bot_ativo' ? (v ? 'Robô ligado' : 'Robô desligado')
+      : i.name === 'dono_wa' ? (v ? 'Canal do dono ligado: mande "oi" do seu WhatsApp para o número das casas' : 'Canal do dono desligado') : 'Salvo', 6000);
+  });
+  el.querySelector('#donoResumo')?.addEventListener('click', async ev => {
+    ev.target.disabled = true;
+    const { data, error } = await sb.functions.invoke('wa-dono', { body: { resumo: 'manha' } });
+    toast(error || !data?.enviado ? 'Não foi possível mandar: ' + (data?.motivo || error?.message || 'erro') : 'Resumo enviado no seu WhatsApp', 6000);
+    ev.target.disabled = false;
   });
 }
+
+const foneBonito = n => { const m = String(n || '').match(/^55(\d{2})(\d{4,5})(\d{4})$/); return m ? `(${m[1]}) ${m[2]}-${m[3]}` : n || ''; };

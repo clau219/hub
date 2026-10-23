@@ -3,6 +3,8 @@
 //   - Lançamento novo recebe categoria/negócio/casa pelas regras (fin_regras); os já existentes só têm valor,
 //     descrição e status atualizados, então o que foi ajustado no Hub não se perde.
 //   - Pendentes que sumiram na Pluggy (viraram outro lançamento ao compensar) são apagados.
+//   - Gasto lançado pelo WhatsApp (id "wa-…", canal do dono) é provisório: o lançamento do banco com o mesmo valor,
+//     até 5 dias de diferença, herda categoria/negócio/casa e a descrição dele, e o provisório sai.
 //   - Investimentos: saldo, quantidade e preço de cada aplicação + compras/vendas/impostos (fin_inv_mov).
 //   - No fim, foto do dia: contas/faturas (fin_snap) e valor de cada investimento, inclusive os manuais (fin_invest_hist).
 // Corpo: {} sincroniza tudo · {item: "<id>", nome?} cadastra uma conexão e sincroniza · {dias: N} relê N dias
@@ -190,6 +192,7 @@ async function gravar(sb: any, conta: any, txs: any[], desde: string, regras: an
     };
   };
   const novos = txs.filter(t => !existentes.has(t.id)).map(t => { const b = base(t); return { ...b, ...classificar(b, regras) }; });
+  const casados = await casarProvisorios(sb, novos);
   const velhos = txs.filter(t => existentes.has(t.id)).map(base);
   for (const lote of [novos, velhos]) {
     for (let i = 0; i < lote.length; i += 500) {
@@ -201,7 +204,25 @@ async function gravar(sb: any, conta: any, txs: any[], desde: string, regras: an
   const { data: pend } = await sb.from('fin_tx').select('id').eq('conta_id', conta.id).eq('status', 'PENDING').gte('data', desde);
   const sumiram = (pend || []).map((p: any) => p.id).filter((id: string) => !ids.includes(id));
   if (sumiram.length) await sb.from('fin_tx').delete().in('id', sumiram);
-  return { novos: novos.length, atualizados: velhos.length, apagados: sumiram.length };
+  if (casados.length) await sb.from('fin_tx').delete().in('id', casados);
+  return { novos: novos.length, atualizados: velhos.length, apagados: sumiram.length, ...(casados.length ? { do_whatsapp: casados.length } : {}) };
+}
+
+// Gasto anotado pelo WhatsApp ↔ lançamento novo do banco: mesmo valor, data mais próxima (até 5 dias).
+// O do banco fica com a classificação do provisório (manual: o sync não mexe mais) e devolve os ids a apagar.
+async function casarProvisorios(sb: any, novos: any[]) {
+  const { data: prov } = await sb.from('fin_tx').select('*').like('id', 'wa-%');
+  const livres = [...(prov || [])];
+  const casados: string[] = [];
+  for (const n of novos.filter(t => t.valor < 0).sort((a, b) => a.data.localeCompare(b.data))) {
+    const dist = (p: any) => Math.abs(Date.parse(p.data) - Date.parse(n.data)) / 864e5;
+    const p = livres.filter(p => Math.round(p.valor * 100) === Math.round(n.valor * 100) && dist(p) <= 5).sort((a, b) => dist(a) - dist(b))[0];
+    if (!p) continue;
+    Object.assign(n, { categoria: p.categoria, negocio: p.negocio, casa: p.casa, manual: true, descricao: p.descricao && p.descricao !== n.descricao ? `${p.descricao} · ${n.descricao}` : n.descricao });
+    livres.splice(livres.indexOf(p), 1);
+    casados.push(p.id);
+  }
+  return casados;
 }
 
 // Regras do usuário primeiro (a mais longa ganha); depois o padrão do Airbnb

@@ -23,7 +23,7 @@ Para ver os `console.warn/error` do Hub: `HUB_TESTE_LOG=1 npm test`.
 |---|---|
 | `unit/` | util (datas, WhatsApp, captura rápida), hospedagem, fin-calc, cripto, moeda, saude-insights, db (local e Supabase), store (local e Supabase), sw |
 | `telas/` | app (abertura, login, offline), ui (formulários), Hoje, Pipeline (computador e celular), Agenda, Aluguéis, Tarefas/Contatos, paleta e hábitos, Cripto, Saúde, Finanças (com o Painel), Ajustes |
-| `funcoes/` | airbnb-quote, cripto-carteiras, fin-sync, garmin-sync, gcal-sync, ical-feed, ical-sync, wa-webhook |
+| `funcoes/` | airbnb-quote, cripto-carteiras, fin-sync, garmin-sync, gcal-sync, ical-feed, ical-sync, wa-webhook, wa-dono (resumo do dia) e wa-dono-canal (comandos do dono pelo WhatsApp) |
 
 ## Robô do WhatsApp testado como hóspede (`funcoes/wa-hospede.test.js`)
 
