@@ -11,7 +11,7 @@ function safeGet(k) { try { return localStorage.getItem(k); } catch { return nul
 function safeSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
 
 const CALS = [['dj', 'DJ', 'dj'], ['alugueis', 'Aluguéis', 'alug'], ['pessoal', 'Pessoal', 'casa']];
-const cv = a => ({ dj: 'dj', alugueis: 'alug', aluguel: 'alug', consultoria: 'eng', flores: 'flores' }[a] || 'casa');
+const cv = a => ({ dj: 'dj', alugueis: 'alug', aluguel: 'alug', consultoria: 'eng', argila: 'argila' }[a] || 'casa');
 const ICON = { gig: '♪', checkin: '↘', checkout: '↗', evento: '▪', acao: '●', tarefa: '○', etapa: '✓' };
 const segunda = d => addDays(d, -((dow(d) + 6) % 7));
 const cap = s => s[0].toUpperCase() + s.slice(1);

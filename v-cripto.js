@@ -670,7 +670,7 @@ function vendasMes(vendas) {
           <td class="num ${v.resultado >= 0 ? 'up' : 'down'}">${brl(v.resultado)}</td>
           <td class="small">${Object.entries(v.porCorretora).map(([c, x]) => `${h(c)}: ${compacto(x)}`).join(' · ')}</td>
           <td>${acima ? `<span class="tag" style="--c:var(--late)">Acima de ${compacto(LIMITE_ISENCAO)}</span>${v.resultado > 0 ? ' <span class="small">ganho tributável, DARF até o fim do mês seguinte</span>' : ''}`
-            : v.total > LIMITE_DECLARACAO ? `<span class="tag" style="--c:var(--flores)">Acima de ${compacto(LIMITE_DECLARACAO)}</span> <span class="small">verifique a declaração mensal</span>`
+            : v.total > LIMITE_DECLARACAO ? `<span class="tag" style="--c:var(--argila)">Acima de ${compacto(LIMITE_DECLARACAO)}</span> <span class="small">verifique a declaração mensal</span>`
             : '<span class="tag" style="--c:var(--alug)">Dentro da isenção</span>'}</td></tr>`;
       }).join('')}</tbody></table></div>
     <p class="muted small">Referência (sempre em reais): vendas de até ${brl(LIMITE_ISENCAO)} no mês têm o ganho isento de IR; acima disso, o ganho é tributado e o DARF vence no último dia útil do mês seguinte. Operações em corretoras estrangeiras ou entre carteiras próprias acima de ${brl(LIMITE_DECLARACAO)} no mês podem exigir declaração mensal à Receita. As regras mudam: confirme com seu contador.</p>

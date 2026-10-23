@@ -18,7 +18,7 @@
   --dj: #6d3fd1;
   --alug: #0e7c72;
   --eng: #2457c5;
-  --flores: #b4600a;
+  --argila: #b4600a;
   --casa: #6b7a7d;
   --late: #d1362f;
   --late-bg: #fdf1f0;
@@ -42,7 +42,7 @@
   :root:not([data-theme="light"]) {
     --bg: #0a1113; --surface: #111a1d; --raised: #162226; --sunk: #0d1517; --hover: #18262a; --ink: #e6efee; --ink-2: #c3d1d0; --muted: #8b9fa1;
     --line: #1f2d31; --line-2: #2c3e42; --brand: #4fc7b8; --brand-2: #7fdccf; --brand-soft: #12302d; --on-brand: #04201d;
-    --dj: #a688f0; --alug: #3cc0b0; --eng: #7aa2f0; --flores: #e59a4b; --casa: #93a3a5;
+    --dj: #a688f0; --alug: #3cc0b0; --eng: #7aa2f0; --argila: #e59a4b; --casa: #93a3a5;
     --late: #ff7d73; --late-bg: #2a1517; --warn-ink: #f5c45e; --air: #f07a88; --dir: #2fa898; --blk: #45585b; --wa: #4ad98a;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3); --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px -10px rgba(0, 0, 0, .5);
     --shadow-lg: 0 30px 80px -20px rgba(0, 0, 0, .7); color-scheme: dark;
@@ -51,7 +51,7 @@
 :root[data-theme="dark"] {
   --bg: #0a1113; --surface: #111a1d; --raised: #162226; --sunk: #0d1517; --hover: #18262a; --ink: #e6efee; --ink-2: #c3d1d0; --muted: #8b9fa1;
   --line: #1f2d31; --line-2: #2c3e42; --brand: #4fc7b8; --brand-2: #7fdccf; --brand-soft: #12302d; --on-brand: #04201d;
-  --dj: #a688f0; --alug: #3cc0b0; --eng: #7aa2f0; --flores: #e59a4b; --casa: #93a3a5;
+  --dj: #a688f0; --alug: #3cc0b0; --eng: #7aa2f0; --argila: #e59a4b; --casa: #93a3a5;
   --late: #ff7d73; --late-bg: #2a1517; --warn-ink: #f5c45e; --air: #f07a88; --dir: #2fa898; --blk: #45585b; --wa: #4ad98a;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3); --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px -10px rgba(0, 0, 0, .5);
   --shadow-lg: 0 30px 80px -20px rgba(0, 0, 0, .7); color-scheme: dark;
@@ -592,7 +592,7 @@ svg.ico { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColo
 .sg-list li span { display: block; color: var(--muted); font-size: 13px; }
 .sg-list li::before, .sg-dot { content: ''; position: absolute; left: 1px; top: .4em; width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
 .sg-desc::before, .sg-dot.sg-desc { background: var(--brand); }
-.sg-alta::before, .sg-dot.sg-alta { background: var(--flores); }
+.sg-alta::before, .sg-dot.sg-alta { background: var(--argila); }
 .sg-resumo { margin: 8px 0 0; }
 .sg-help { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-m); padding: 10px 14px; margin-bottom: 12px; font-size: 14px; }
 .sg-help summary { cursor: pointer; font-weight: 600; }

@@ -102,7 +102,7 @@ export function render(el) {
     ${grafico('fc', 'FC de repouso', linhas, { campo: 'fc_repouso', tipo: 'linha', cor: 'var(--late)', fmt: v => n0(v) + ' bpm', unidade: 'bpm' })}
     ${grafico('hrv', 'VFC à noite', linhas, { campo: 'hrv_noite', tipo: 'linha', cor: 'var(--eng)', fmt: v => n0(v) + ' ms', unidade: 'ms' })}
     ${grafico('bb', 'Body Battery', linhas, { tipo: 'faixa', cor: 'var(--warn-ink)', unidade: 'mín. e máx. do dia' })}
-    ${grafico('estresse', 'Estresse médio', linhas, { campo: 'estresse_medio', tipo: 'linha', cor: 'var(--flores)', fmt: n0, unidade: '0 a 100' })}
+    ${grafico('estresse', 'Estresse médio', linhas, { campo: 'estresse_medio', tipo: 'linha', cor: 'var(--argila)', fmt: n0, unidade: '0 a 100' })}
   </div>
   ${atividades(dias)}`}`;
 

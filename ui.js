@@ -86,7 +86,7 @@ export function dealForm(d = {}, preset = {}) {
     <div class="grid2">
       <label class="span2">Cliente / contratante<input name="contato" list="dlContatos" value="${h(contactName(d.contato_id) || d._contato)}" required autofocus></label>
       <label>Telefone / WhatsApp<input name="telefone" type="tel" inputmode="tel" value="${h(byId('contacts', d.contato_id)?.telefone)}" placeholder="(84) 99999-0000"></label>
-      <label>Negócio<select name="negocio">${['dj', 'consultoria', 'flores', 'aluguel'].map(n => opt(n, AREAS[n].nome, d.negocio)).join('')}</select></label>
+      <label>Negócio<select name="negocio">${['dj', 'consultoria', 'argila', 'aluguel'].map(n => opt(n, AREAS[n].nome, d.negocio)).join('')}</select></label>
       <label>Etapa<select name="etapa" id="fEtapa">${etapaOpts(d.negocio, d.etapa)}</select></label>
       <label>Valor (R$)<input name="valor" type="number" step="0.01" value="${h(d.valor)}"></label>
       <label>Data do evento<input name="data_evento" type="date" value="${h(d.data_evento)}"></label>
@@ -304,7 +304,7 @@ export function taskForm(t = {}) {
   m.querySelector('#toDeal')?.addEventListener('click', async () => {
     closeModal();
     await del('tasks', t.id);
-    dealForm({}, { negocio: ['dj', 'consultoria', 'flores'].includes(t.area) ? t.area : 'dj', notas: t.titulo });
+    dealForm({}, { negocio: ['dj', 'consultoria', 'argila'].includes(t.area) ? t.area : 'dj', notas: t.titulo });
   });
 }
 

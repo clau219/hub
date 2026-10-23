@@ -53,7 +53,7 @@ export const AREAS = {
   alugueis: { nome: 'Aluguéis', cor: 'var(--alug)' },
   aluguel: { nome: 'Aluguéis', cor: 'var(--alug)' },
   consultoria: { nome: 'Engenharia', cor: 'var(--eng)' },
-  flores: { nome: 'Flores do Sol', cor: 'var(--flores)' },
+  argila: { nome: 'Argila Lab', cor: 'var(--argila)' },
   casa: { nome: 'Casa', cor: 'var(--casa)' },
   pessoal: { nome: 'Pessoal', cor: 'var(--casa)' },
   inbox: { nome: 'Caixa de entrada', cor: 'var(--muted)' },
@@ -83,10 +83,10 @@ export const FLUXOS = {
     { id: 'orcamento', nome: 'Orçamento enviado', sug: 'Follow-up do orçamento', dias: 1 },
     { id: 'fechado', nome: 'Reservado', sug: 'Receber o saldo', dias: 7 },
   ],
-  flores: SERVICO,
+  argila: SERVICO,
 };
 // Ordem das faixas no Pipeline
-export const NEGOCIOS_PIPE = ['dj', 'consultoria', 'aluguel', 'flores'];
+export const NEGOCIOS_PIPE = ['dj', 'consultoria', 'aluguel', 'argila'];
 const fluxoAberto = negocio => FLUXOS[negocio === 'alugueis' ? 'aluguel' : negocio] || FLUXOS.dj;
 export const fluxo = negocio => [...fluxoAberto(negocio), ...ENCERRADAS];
 export const abertasDe = negocio => fluxoAberto(negocio).map(e => e.id);
@@ -143,10 +143,10 @@ const dataValida = iso => { const d = new Date(iso + 'T12:00:00Z'); return !isNa
 
 export function parseCapture(txt) {
   const deal = /^\s*\+/.test(txt);
-  if (deal) txt = txt.replace(/^\s*\+\s*/, '').replace(/^(dj|eng|obra|consultoria|flores|aluguel|alugueis)(?=\s|$)/i, '#$1');
+  if (deal) txt = txt.replace(/^\s*\+\s*/, '').replace(/^(dj|eng|obra|consultoria|argila|aluguel|alugueis)(?=\s|$)/i, '#$1');
   let t = ' ' + txt.trim() + ' ';
   let area = deal ? 'dj' : 'inbox', prazo = null, prioridade = 2;
-  const tags = { dj: 'dj', aluguel: 'alugueis', alugueis: 'alugueis', casa: 'casa', eng: 'consultoria', obra: 'consultoria', consultoria: 'consultoria', flores: 'flores', pessoal: 'pessoal' };
+  const tags = { dj: 'dj', aluguel: 'alugueis', alugueis: 'alugueis', casa: 'casa', eng: 'consultoria', obra: 'consultoria', consultoria: 'consultoria', argila: 'argila', pessoal: 'pessoal' };
   t = t.replace(/\s#(\w+)/g, (m, k) => { if (tags[k.toLowerCase()]) area = tags[k.toLowerCase()]; return ' '; });
   t = t.replace(/\s!(?=\s)/g, () => { prioridade = 1; return ' '; });
   const hoje = today();
@@ -179,6 +179,6 @@ export function parseCapture(txt) {
     prazo = addDays(hoje, n); return ' ';
   });
   const titulo = t.replace(/\s+/g, ' ').trim();
-  if (deal) return { tipo: 'deal', texto: titulo, negocio: area === 'alugueis' ? 'aluguel' : ['dj', 'consultoria', 'flores'].includes(area) ? area : 'dj', data_evento: prazo };
+  if (deal) return { tipo: 'deal', texto: titulo, negocio: area === 'alugueis' ? 'aluguel' : ['dj', 'consultoria', 'argila'].includes(area) ? area : 'dj', data_evento: prazo };
   return { titulo, area, prazo, prioridade };
 }

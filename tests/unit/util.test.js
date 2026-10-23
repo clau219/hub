@@ -78,7 +78,7 @@ describe('formatação e áreas', () => {
   });
   test('etapas por negócio: mesmos ids, nomes e sugestões de cada um', () => {
     assert.deepEqual(U.abertasDe('consultoria'), ['lead', 'orcamento', 'fechado', 'realizado']);
-    assert.deepEqual(U.abertasDe('flores'), U.abertasDe('consultoria'));
+    assert.deepEqual(U.abertasDe('argila'), U.abertasDe('consultoria'));
     assert.deepEqual(U.abertasDe('aluguel'), ['lead', 'orcamento', 'fechado']);
     assert.deepEqual(U.abertasDe('alugueis'), U.abertasDe('aluguel'));
     assert.deepEqual(U.abertasDe(undefined), U.abertasDe('dj'));
@@ -122,7 +122,7 @@ describe('WhatsApp', () => {
     assert.match(eng, /^Oi! Tudo bem\? Conseguiu ver a proposta\?/);
     assert.match(U.msgDeal({ etapa: 'lead', negocio: 'consultoria' }), /Aqui é o Claudio\. Me conta/);
     assert.match(U.msgDeal({ etapa: 'fechado', negocio: 'consultoria' }), /andamento do serviço/);
-    assert.match(U.msgDeal({ etapa: 'realizado', negocio: 'flores' }), /Serviço entregue!.*PIX/);
+    assert.match(U.msgDeal({ etapa: 'realizado', negocio: 'argila' }), /Serviço entregue!.*PIX/);
   });
   test('msgDeal de aluguel: datas e pessoas, valor, reserva garantida com PIX', () => {
     const al = e => U.msgDeal({ etapa: e, negocio: 'aluguel', data_evento: '2026-12-28' }, 'Pedro Alves');
@@ -147,7 +147,7 @@ describe('captura rápida: tarefas', () => {
     assert.equal(c('x #eng').area, 'consultoria');
     assert.equal(c('x #casa').area, 'casa');
     assert.equal(c('x #pessoal').area, 'pessoal');
-    assert.equal(c('x #flores').area, 'flores');
+    assert.equal(c('x #argila').area, 'argila');
     const d = c('x #qualquer');
     assert.equal(d.area, 'inbox');
     assert.equal(d.titulo, 'x');
@@ -224,13 +224,13 @@ describe('captura rápida: oportunidades (+)', () => {
   test('"+dj Ana Souza casamento 12/12" vira deal com data do evento', () => {
     assert.deepEqual(c('+dj Ana Souza casamento 12/12'), { tipo: 'deal', texto: 'Ana Souza casamento', negocio: 'dj', data_evento: '2026-12-12' });
   });
-  test('sem negócio é DJ; aluguel, eng/obra e flores mapeiam', () => {
+  test('sem negócio é DJ; aluguel, eng/obra e argila mapeiam', () => {
     assert.equal(c('+ João festa').negocio, 'dj');
     assert.equal(c('+aluguel Maria réveillon').negocio, 'aluguel');
     assert.equal(c('+alugueis Maria').negocio, 'aluguel');
     assert.equal(c('+eng reforma Pedro').negocio, 'consultoria');
     assert.equal(c('+obra Pedro').negocio, 'consultoria');
-    assert.equal(c('+flores buquê').negocio, 'flores');
+    assert.equal(c('+argila torno').negocio, 'argila');
   });
   test('"+djalma" não é o negócio dj: é nome', () => {
     const r = c('+Djalma aniversário');

@@ -43,7 +43,7 @@ function row(it, { late } = {}) {
     ${canSnooze || wa ? `<span class="row-act">${wa ? `<a class="mini wa" href="${h(wa)}" target="_blank" rel="noopener" data-wa="${idx}" aria-label="WhatsApp: ${h(it.sub || it.title)}">WhatsApp</a>` : ''}${canSnooze ? `<button class="mini" data-snz="${idx}:1" aria-label="Adiar para amanhã: ${h(it.title)}">amanhã</button><button class="mini" data-snz="${idx}:3" aria-label="Adiar 3 dias: ${h(it.title)}">+3d</button>` : ''}</span>` : ''}
   </li>`;
 }
-const areaVar = a => ({ dj: 'dj', alugueis: 'alug', aluguel: 'alug', consultoria: 'eng', flores: 'flores' }[a] || 'casa');
+const areaVar = a => ({ dj: 'dj', alugueis: 'alug', aluguel: 'alug', consultoria: 'eng', argila: 'argila' }[a] || 'casa');
 
 function ribbon(list) {
   const H0 = 7, H1 = 25;
