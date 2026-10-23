@@ -13,6 +13,9 @@
 //   e casa ainda livre), o robô cria a reserva direta, registra o sinal e confirma; senão, manda conferir.
 //   Um comprovante bem falsificado ainda passa: o push "confira o sinal no banco" existe para isso.
 // - mensagens que você manda pelo app (ecos) ficam registradas e silenciam o robô naquela conversa.
+// Jeito de gente: espera uns segundos e responde a rajada ("oi" / "tudo bem?" / "tem vaga dia 20?") de uma vez só;
+// cumprimenta pelo horário e pelo nome; responde "obrigado" sem puxar assunto (uma vez só); pede por escrito quando
+// chega áudio; não repete a mesma frase nem reenvia a mesma cotação; "digitando..." proporcional ao tamanho do texto.
 // O robô só informa disponibilidade e valor: nunca confirma reserva, não negocia e não responde o que não entendeu.
 //
 // Segredos (supabase secrets set): ANTHROPIC_API_KEY e
@@ -151,6 +154,17 @@ async function processarEntrada(sb: SB, e: Entrada, { teste = false }) {
   }).select('id').single();
   await sb.from('deals').update({ proxima_acao: ACAO_RESPONDER, data_proxima_acao: hoje(), updated_at: new Date().toISOString() }).eq('id', deal_id);
 
+  // Rajada: quem escreve "oi", "tudo bem?" e "tem vaga dia 20?" em sequência recebe uma resposta só. Espera uns
+  // segundos; se chegou outra mensagem do cliente nesse tempo, quem responde é ela (com a conversa toda)
+  if (!teste) {
+    const espera = Number(Deno.env.get('WA_AGRUPAR_S') ?? 6);
+    if (espera > 0) await new Promise(r => setTimeout(r, espera * 1000));
+    if (await chegouOutra(sb, e)) {
+      await sb.from('wa_messages').update({ extracao: { robo: 'juntou com a mensagem seguinte' } }).eq('id', msg!.id);
+      return { deal_id, respondeu: false, motivo: 'juntou com a mensagem seguinte' };
+    }
+  }
+
   // O que o robô decidiu fica gravado na mensagem (a aba WhatsApp mostra "por que não respondeu")
   const r: Record<string, any> = await decidir(sb, e, conversa, deal_id, msg!.id, teste);
   await sb.from('wa_messages').update({ extracao: { ...(r.extracao || {}), robo: r.respondeu ? 'respondeu' : r.motivo } }).eq('id', msg!.id);
@@ -165,6 +179,12 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
   const historico = await historicoConversa(sb, e.wa_id);
   // Foto/PDF com o sinal pendente: é o comprovante
   if (comprovanteEsperado(conversa, e)) return await conferirComprovante(sb, e, conversa, deal_id, historico, teste);
+  // Áudio: o robô não ouve; pede por escrito (uma vez por dia) e o áudio fica para você ouvir
+  if (e.tipo === 'audio') {
+    if (historico.some(m => m.autor === 'robo' && m.texto.includes(PEDE_ESCRITO) && Date.now() - Date.parse(m.enviado_em) < 864e5))
+      return { deal_id, respondeu: false, motivo: 'áudio: fica para você (o robô já pediu por escrito hoje)' };
+    return responderRobo(sb, e, deal_id, saudar(`${PEDE_ESCRITO} Se for sobre vaga, me conta a data de entrada, a de saída e quantas pessoas, que eu já te passo os valores.`, historico, e.nome), teste);
+  }
   const { data: casas } = await sb.from('properties').select('id,nome').order('nome');
   const base = baseTexto(await lerBase(sb), casas || [], { paraRobo: true });
   let x: Extracao;
@@ -182,6 +202,9 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
   const disponibilidade = x.assunto === 'disponibilidade_preco' || (!!paraClaudio && trouxeDados && !!conversa.pedido);
   if (paraClaudio && !disponibilidade) return await encaminhar(sb, e, deal_id, x, paraClaudio, historico, teste);
 
+  // "Obrigado", "ok", "vou ver com minha esposa": resposta curta, sem puxar assunto, e o card sai do "Responder"
+  if (x.assunto === 'agradecimento') return await agradecer(sb, e, conversa, deal_id, x, historico, teste);
+
   // Quer reservar: confere de novo no Airbnb e manda total, sinal e Pix (ou pergunta o que falta)
   if (x.assunto === 'reservar') return await reservar(sb, e, conversa, deal_id, x, historico, casas || [], teste);
 
@@ -192,7 +215,12 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
 
   // Disponibilidade/valor: soma o que o cliente disse agora ao que já tinha dito (estado por contato)
   const pedido = duvida || saudacao ? null : combinarPedido(conversa.pedido, x);
+  // A mesma consulta (casa, datas, pessoas, pets) que o robô já mandou: não reenvia os valores ("ok obrigada", "?")
+  const chave = pedido && !oQueFalta(pedido) ? chaveCotacao(pedido) : null;
+  if (pedido) pedido.cotado = conversa.pedido?.cotado ?? null;
   if (pedido) await sb.from('wa_contacts').update({ pedido }).eq('wa_id', e.wa_id);
+  if (chave && chave === pedido!.cotado && !paraClaudio && conversando(historico))
+    return { deal_id, respondeu: false, motivo: 'mesma consulta que o robô já enviou: fica para você', extracao: x };
   const falta = pedido ? oQueFalta(pedido) : null;
   const datas = pedido && !falta ? normalizarDatas(pedido)! : null;
   let texto: string, cot: any = null, redigido: string | null = null;
@@ -201,10 +229,14 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
   } else if (saudacao && !conversando(historico)) {
     const nomes = (casas || []).map((c: any) => String(c.nome).replace(/^Casa\s+/i, ''));
     const lista = nomes.length > 1 ? `${nomes.slice(0, -1).join(', ')} e ${nomes.at(-1)}` : nomes[0] || '';
-    texto = `Tudo bem? Aqui é o atendimento das casas ${lista}, no Condomínio Pipa Natureza, em Pipa. Me diga a data de entrada, a data de saída e quantas pessoas vão se hospedar, que eu já verifico a disponibilidade e os valores.`;
+    // "tudo bem?" do cliente pede resposta, não outra pergunta igual
+    const perguntouTudoBem = /tudo (bem|bom|certo|tranquilo|joia)/i.test(semAcento(ultimasDoCliente(historico)));
+    texto = `${perguntouTudoBem ? 'Tudo ótimo por aqui, e com você?' : 'Tudo bem?'} Aqui é do atendimento das casas ${lista}, no Condomínio Pipa Natureza, em Pipa 🌴\n${PEDE_TUDO}`;
   } else if (saudacao || falta) {
     // Falta algo para consultar: pergunta só isso, de forma específica (não chuta data nem número de pessoas)
     texto = falta ? pergunta(falta, pedido!) : PEDE_TUDO;
+    // O cliente perguntou de novo sem dar as datas: explica por que precisa, em vez de repetir a mesma frase
+    if (texto === PEDE_TUDO && ultimaDoRobo(historico)?.texto.endsWith(PEDE_TUDO)) texto = PEDE_TUDO_DE_NOVO;
   } else {
     cot = await cotar(datas!.checkin, datas!.checkout, pedido!.hospedes!, pedido!.pets);
     const casasOk = (cot?.casas || []).filter((c: any) => c.status !== 'erro');
@@ -215,16 +247,19 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
     if (redigido && campoAPreencher(redigido)) { console.warn('redigir: campo a preencher; vai a mensagem padrão'); redigido = null; }
     texto = redigido || cot.mensagem;
   }
-  if (!redigido) texto = saudar(texto, historico);
-  if (paraClaudio && !redigido) texto += `\n\n${AVISO_CONFIRMAR_OUTRA}`;
+  if (!redigido) texto = saudar(texto, historico, e.nome);
+  if (paraClaudio && !redigido) texto += `\n\n${avisoConfirmar(true)}`;
 
   // Última barreira: nada com [campo], {campo}, XX... sai para o cliente
   const campo = campoAPreencher(texto);
   if (campo) return { deal_id, respondeu: false, motivo: `texto com campo a preencher (${campo}): fica para você`, extracao: x };
+  // Gente não manda a mesma frase duas vezes seguidas
+  if (texto === ultimaDoRobo(historico)?.texto) return { deal_id, respondeu: false, motivo: 'seria a mesma mensagem que o robô acabou de mandar: fica para você', extracao: x };
 
   const enviado = teste ? { wamid: `teste-out-${crypto.randomUUID()}` } : await enviar(e.wa_id, texto, e.phoneId);
   if (!enviado) return { deal_id, respondeu: false, motivo: 'falha ao enviar pelo WhatsApp', extracao: x };
   await sb.from('wa_messages').insert({ wamid: enviado.wamid, wa_id: e.wa_id, deal_id, direcao: 'out', autor: 'robo', texto, cotacao: cot });
+  if (cot && pedido) await sb.from('wa_contacts').update({ pedido: { ...pedido, cotado: chaveCotacao(pedido) } }).eq('wa_id', e.wa_id);
 
   // Card: orçamento enviado, com data e valor quando a casa pedida está livre
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
@@ -251,17 +286,21 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
 }
 
 // ---------- pergunta que só o Claudio responde ----------
-const AVISO_CONFIRMAR = 'Vou confirmar isso e já te retorno.';
-const AVISO_CONFIRMAR_OUTRA = 'Sobre a sua outra pergunta, vou confirmar e já te retorno.';
+// De madrugada "já te retorno" é promessa que não se cumpre: entre 22h e 7h o retorno é "logo cedo"
+const madrugada = () => { const h = horaPipa(); return h >= 22 || h < 7; };
+const avisoConfirmar = (outra = false) => outra
+  ? `Sobre a sua outra pergunta, vou confirmar e ${madrugada() ? 'te retorno logo cedo' : 'já te retorno'}.`
+  : `Vou confirmar isso e ${madrugada() ? 'te retorno logo cedo, tá?' : 'já te retorno.'}`;
+const AVISOS_CONFIRMAR = /vou confirmar (isso )?e (já te retorno|te retorno logo cedo)/i;
 const destaque = (q: string) => `❓ Cliente pergunta: ${q}`.slice(0, 140);
 
 async function encaminhar(sb: SB, e: Entrada, deal_id: string, x: Extracao, q: string, historico: any[], teste: boolean) {
   await sb.from('deals').update({ proxima_acao: destaque(q), data_proxima_acao: hoje(), updated_at: new Date().toISOString() }).eq('id', deal_id);
   // Já avisou o cliente e o Claudio ainda não respondeu: não repete o aviso nem o push (o card já mostra a pergunta nova)
   const ultimaResposta = [...historico].reverse().find(m => m.autor !== 'cliente');
-  if (ultimaResposta?.autor === 'robo' && [AVISO_CONFIRMAR, AVISO_CONFIRMAR_OUTRA].some(a => String(ultimaResposta.texto).includes(a)))
+  if (ultimaResposta?.autor === 'robo' && AVISOS_CONFIRMAR.test(String(ultimaResposta.texto)))
     return { deal_id, respondeu: false, motivo: 'pergunta para você: o cliente já sabe que você vai confirmar', extracao: x, para_claudio: q };
-  const texto = saudar(AVISO_CONFIRMAR, historico);
+  const texto = saudar(avisoConfirmar(), historico, e.nome);
   const enviado = teste ? { wamid: `teste-out-${crypto.randomUUID()}` } : await enviar(e.wa_id, texto, e.phoneId);
   if (!enviado) return { deal_id, respondeu: false, motivo: 'falha ao enviar pelo WhatsApp', extracao: x, para_claudio: q };
   await sb.from('wa_messages').insert({ wamid: enviado.wamid, wa_id: e.wa_id, deal_id, direcao: 'out', autor: 'robo', texto });
@@ -274,6 +313,23 @@ async function avisar(sb: SB, e: Entrada, q: string) {
   const nome = String(c?.nome || e.nome || telefoneBonito(e.wa_id)).split(' ')[0];
   await avisarPush(sb, { title: `${nome} perguntou algo que só você responde`, body: q, tag: 'wa-pergunta', url: `./#/whatsapp?c=${encodeURIComponent(e.wa_id)}` })
     .catch(err => console.error('push', err));
+}
+
+// ---------- agradecimento, "ok", "vou pensar" ----------
+async function agradecer(sb: SB, e: Entrada, conversa: any, deal_id: string, x: Extracao, historico: any[], teste: boolean) {
+  await sb.from('deals').update({ proxima_acao: `Acompanhar: ${x.resumo || 'o cliente agradeceu'}`.slice(0, 140), data_proxima_acao: addDays(hoje(), 2), updated_at: new Date().toISOString() }).eq('id', deal_id);
+  // Sem pingue-pongue de "obrigado" / "imagina" / "👍": se o robô já respondeu um agradecimento, fica quieto
+  const iUlt = historico.findLastIndex(m => m.autor !== 'cliente');
+  const antes = iUlt > 0 ? historico.slice(0, iUlt).findLast(m => m.autor === 'cliente') : null;
+  if (iUlt < 0 || historico[iUlt].autor !== 'robo' || antes?.extracao?.assunto === 'agradecimento')
+    return { deal_id, respondeu: false, motivo: 'agradecimento: nada a responder', extracao: x };
+  // A IA escreve uma frase curta; com número, valor ou promessa, vai a frase padrão
+  const ia = x.resposta?.trim() || '';
+  const ok = ia && ia.length <= 160 && !/\d|R\$|reserv|pix|confirm|garant/i.test(ia) && !campoAPreencher(ia);
+  const texto = ok ? ia : conversa.pedido?.cotado
+    ? 'Imagina! Se decidirem, é só me chamar que eu confiro de novo a disponibilidade 😊'
+    : 'Imagina! Qualquer coisa, é só chamar 😊';
+  return responderRobo(sb, e, deal_id, texto, teste, { extracao: x });
 }
 
 // ---------- mensagem sua, enviada pelo app Business ----------
@@ -326,7 +382,7 @@ async function motivoSilencio(sb: SB, c: any, e: Entrada) {
   const { data: cfg } = await sb.from('wa_settings').select('*').eq('id', 1).single();
   if (!cfg?.bot_ativo) return 'robô desligado em Ajustes';
   if (c.bot_pausado) return 'robô pausado para esta pessoa';
-  if (!comprovanteEsperado(c, e) && (e.tipo !== 'text' || !e.texto?.trim())) return `mensagem do tipo ${e.tipo}: fica para você`;
+  if (!comprovanteEsperado(c, e) && e.tipo !== 'audio' && (e.tipo !== 'text' || !e.texto?.trim())) return `mensagem do tipo ${e.tipo}: fica para você`;
   if (c.ultima_manual && Date.now() - Date.parse(c.ultima_manual) < cfg.horas_silencio * 3600e3) return `você respondeu à mão nas últimas ${cfg.horas_silencio} h`;
   const { count } = await sb.from('wa_messages').select('id', { count: 'exact', head: true })
     .eq('wa_id', c.wa_id).eq('autor', 'robo').gte('enviado_em', new Date(Date.now() - 864e5).toISOString());
@@ -334,17 +390,33 @@ async function motivoSilencio(sb: SB, c: any, e: Entrada) {
   return null;
 }
 
-// "Olá!" só quando o robô abre a conversa: se você ou ele já responderam nas últimas 24 h, segue o papo sem cumprimentar
+// Cumprimento só quando o robô abre a conversa: se você ou ele já responderam nas últimas 24 h, segue o papo sem
+// cumprimentar. É pelo horário de Pipa e com o primeiro nome do perfil, quando parece um nome ("Boa tarde, Ana!")
 // (a mensagem da airbnb-quote vem com "Olá!" porque também é usada no botão de Aluguéis)
-function saudar(texto: string, historico: any[]) {
+function saudar(texto: string, historico: any[], nome?: string | null) {
   const corpo = texto.replace(/^Olá!\s*/, '');
-  return conversando(historico) ? corpo : `Olá! ${corpo}`;
+  return conversando(historico) ? corpo : `${cumprimento(nome)} ${corpo}`;
 }
+const horaPipa = () => +new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: 'America/Sao_Paulo' }).format(new Date());
+const periodo = () => { const h = horaPipa(); return h >= 5 && h < 12 ? 'Bom dia' : h >= 12 && h < 18 ? 'Boa tarde' : 'Boa noite'; };
+const primeiroNome = (nome?: string | null) => { const n = String(nome || '').trim().split(/\s+/)[0]; return /^\p{L}{2,}$/u.test(n) ? n[0].toUpperCase() + n.slice(1).toLowerCase() : ''; };
+const cumprimento = (nome?: string | null) => { const n = primeiroNome(nome); return `${periodo()}${n ? `, ${n}` : ''}!`; };
 const conversando = (historico: any[]) => historico.some(m => m.autor !== 'cliente' && Date.now() - Date.parse(m.enviado_em) < 864e5);
+const ultimaDoRobo = (historico: any[]) => historico.findLast(m => m.autor !== 'cliente' && Date.now() - Date.parse(m.enviado_em) < 864e5);
+// O que o cliente escreveu desde a última resposta (a rajada inteira)
+const ultimasDoCliente = (historico: any[]) => historico.slice(historico.findLastIndex(m => m.autor !== 'cliente') + 1).map(m => m.texto).join('\n');
 
 async function historicoConversa(sb: SB, wa_id: string) {
-  const { data } = await sb.from('wa_messages').select('autor,texto,enviado_em').eq('wa_id', wa_id).order('enviado_em', { ascending: false }).limit(12);
+  const { data } = await sb.from('wa_messages').select('autor,texto,enviado_em,extracao').eq('wa_id', wa_id).order('enviado_em', { ascending: false }).limit(12);
   return (data || []).reverse().filter((m: any) => m.texto);
+}
+
+// Outra mensagem do cliente, ainda sem resposta decidida, chegou depois desta (mesmo segundo: desempata pelo id)
+async function chegouOutra(sb: SB, e: Entrada) {
+  const { data } = await sb.from('wa_messages').select('wamid,enviado_em,extracao').eq('wa_id', e.wa_id).eq('autor', 'cliente')
+    .gte('enviado_em', new Date(e.ts.getTime() - 1000).toISOString());
+  const t = e.ts.getTime();
+  return (data || []).some((m: any) => m.wamid !== e.wamid && !m.extracao && (Date.parse(m.enviado_em) > t || (Date.parse(m.enviado_em) === t && m.wamid > e.wamid)));
 }
 
 // ---------- reserva direta: sinal por Pix e comprovante lido pela IA ----------
@@ -368,13 +440,13 @@ async function reservar(sb: SB, e: Entrada, conversa: any, deal_id: string, x: E
   // Já mandou o Pix desta mesma reserva: só lembra de mandar o comprovante
   if (sinalAntes && (!isoOk(x.checkin) || x.checkin === sinalAntes.checkin) && (x.casa === 'qualquer' || x.casa === sinalAntes.casa)) {
     await sb.from('wa_contacts').update({ pedido: { ...pedido, sinal: sinalAntes } }).eq('wa_id', e.wa_id);
-    return responderRobo(sb, e, deal_id, saudar(`Assim que fizer o Pix de ${moeda(sinalAntes.valor)}, me manda o comprovante aqui (foto ou PDF) que eu confirmo a reserva da ${sinalAntes.nome}.`, historico), teste, { extracao: x });
+    return responderRobo(sb, e, deal_id, saudar(`Assim que fizer o Pix de ${moeda(sinalAntes.valor)}, me manda o comprovante aqui (foto ou PDF) que eu confirmo a reserva da ${sinalAntes.nome}.`, historico, e.nome), teste, { extracao: x });
   }
   await sb.from('wa_contacts').update({ pedido }).eq('wa_id', e.wa_id);
   const falta = oQueFalta(pedido);
   if (falta) {
     await sb.from('deals').update({ proxima_acao: 'Acompanhar: o robô pediu os dados para reservar', data_proxima_acao: addDays(hoje(), 1) }).eq('id', deal_id);
-    return responderRobo(sb, e, deal_id, saudar(pergunta(falta, pedido), historico), teste, { extracao: x });
+    return responderRobo(sb, e, deal_id, saudar(pergunta(falta, pedido), historico, e.nome), teste, { extracao: x });
   }
   if (!g.pix_chave?.trim() || !g.pix_nome?.trim()) {
     const nomeCasa = casas.find(c => c.id === pedido.casa)?.nome;
@@ -391,25 +463,25 @@ async function reservar(sb: SB, e: Entrada, conversa: any, deal_id: string, x: E
     const texto = livres.length
       ? `Para reservar ${periodo}, qual casa vocês preferem?\n${livres.map(c => `• ${c.nome}: ${moeda(c.total)} no total`).join('\n')}`
       : String(cot.mensagem).replace(/^Olá!\s*/, '');
-    return responderRobo(sb, e, deal_id, saudar(texto, historico), teste, { extracao: x });
+    return responderRobo(sb, e, deal_id, saudar(texto, historico, e.nome), teste, { extracao: x });
   }
   const c = lista.find(k => k.id === pedido.casa);
   const nomeCasa = c?.nome || casas.find(k => k.id === pedido.casa)?.nome || pedido.casa;
   if (c?.status === 'nao_aceita_pet') {
     const outras = livres.length ? `\nAceitam pets e estão livres ${periodo}:\n${livres.map(k => `• ${k.nome}: ${moeda(k.total)} no total`).join('\n')}` : '';
-    return responderRobo(sb, e, deal_id, saudar(`A ${nomeCasa} não aceita pets.${outras}`, historico), teste, { extracao: x });
+    return responderRobo(sb, e, deal_id, saudar(`A ${nomeCasa} não aceita pets.${outras}`, historico, e.nome), teste, { extracao: x });
   }
   if (!c || c.status !== 'livre') {
     const outras = livres.length ? `\nLivres ${periodo}:\n${livres.map(k => `• ${k.nome}: ${moeda(k.total)} no total`).join('\n')}` : '';
     const alt = c?.alternativa ? `\nA ${nomeCasa} fica livre de ${dm(c.alternativa.checkin)} a ${dm(c.alternativa.checkout)}, por ${moeda(c.alternativa.total)}.` : '';
-    return responderRobo(sb, e, deal_id, saudar(`A ${nomeCasa} não está mais livre ${periodo}.${alt}${outras}${alt || outras ? '' : '\nSe tiver outras datas, me diga que eu verifico.'}`, historico), teste, { extracao: x });
+    return responderRobo(sb, e, deal_id, saudar(`A ${nomeCasa} não está mais livre ${periodo}.${alt}${outras}${alt || outras ? '' : '\nSe tiver outras datas, me diga que eu verifico.'}`, historico, e.nome), teste, { extracao: x });
   }
   const pct = Math.min(100, Math.max(1, +g.sinal_pct || 50));
   const sinal: Sinal = { casa: pedido.casa, nome: nomeCasa, checkin: datas.checkin, checkout: datas.checkout, hospedes: pedido.hospedes!, ...(pedido.pets ? { pets: pedido.pets } : {}), total: c.total, valor: centavos(c.total * pct / 100), pct, desde: new Date().toISOString() };
   await sb.from('wa_contacts').update({ pedido: { ...pedido, sinal } }).eq('wa_id', e.wa_id);
   const texto = saudar(`Ótimo! Para reservar a ${nomeCasa} de ${diaDm(datas.checkin)}, a ${diaDm(datas.checkout)}, para ${quem(sinal.hospedes, sinal.pets)}, o total é ${moeda(sinal.total)}.\n` +
     `O sinal é de ${moeda(sinal.valor)} (${pct}%), por Pix:\nChave: ${g.pix_chave.trim()}\nNome: ${g.pix_nome.trim()}\n` +
-    `Depois é só me mandar o comprovante aqui (foto ou PDF) que eu confirmo a reserva.`, historico);
+    `Depois é só me mandar o comprovante aqui (foto ou PDF) que eu confirmo a reserva.`, historico, e.nome);
   const r = await responderRobo(sb, e, deal_id, texto, teste, { extracao: x, sinal });
   if (r.respondeu) await sb.from('deals').update({ etapa: 'negociacao', valor: sinal.total, local: nomeCasa, data_evento: sinal.checkin,
     proxima_acao: `Aguardando sinal de ${moeda(sinal.valor)}`, data_proxima_acao: addDays(hoje(), 1), updated_at: new Date().toISOString() }).eq('id', deal_id);
@@ -511,7 +583,7 @@ async function conferirComprovante(sb: SB, e: Entrada, conversa: any, deal_id: s
     const motivo = problemas.join('; ');
     await sb.from('wa_comprovantes').insert({ ...registro, status: 'invalido', motivo });
     await sb.from('deals').update({ proxima_acao: `❓ Conferir comprovante: ${motivo}`.slice(0, 140), data_proxima_acao: hoje(), updated_at: new Date().toISOString() }).eq('id', deal_id);
-    const r = await responderRobo(sb, e, deal_id, saudar('Recebi o comprovante! Vou conferir e já te retorno.', historico), teste, { comprovante: 'conferir', motivo_comprovante: motivo });
+    const r = await responderRobo(sb, e, deal_id, saudar('Recebi o comprovante! Vou conferir e já te retorno.', historico, e.nome), teste, { comprovante: 'conferir', motivo_comprovante: motivo });
     if (!teste) await avisarComprovante(sb, e, `Comprovante para conferir (${s.nome}, ${moeda(s.valor)})`, motivo);
     return r;
   }
@@ -531,7 +603,7 @@ async function conferirComprovante(sb: SB, e: Entrada, conversa: any, deal_id: s
   await sb.from('wa_contacts').update({ pedido: { ...conversa.pedido, sinal: null, reservado: { booking_id: bk?.id, em: new Date().toISOString() } } }).eq('wa_id', e.wa_id);
   const falta = centavos(s.total - leitura!.valor!);
   const texto = saudar(`Reserva confirmada! ✅\n${s.nome}, de ${diaDm(s.checkin)}, a ${diaDm(s.checkout)}, para ${quem(s.hospedes, s.pets)}.\n` +
-    `Recebi o sinal de ${moeda(leitura!.valor!)}${falta > 0 ? `; faltam ${moeda(falta)} do total de ${moeda(s.total)}` : ''}.\nQualquer dúvida, é só chamar por aqui.`, historico);
+    `Recebi o sinal de ${moeda(leitura!.valor!)}${falta > 0 ? `; faltam ${moeda(falta)} do total de ${moeda(s.total)}` : ''}.\nQualquer dúvida, é só chamar por aqui.`, historico, e.nome);
   const r = await responderRobo(sb, e, deal_id, texto, teste, { comprovante: 'confirmada', booking_id: bk?.id });
   if (!teste) await avisarComprovante(sb, e, `Reserva confirmada pelo robô: ${s.nome}, ${dm(s.checkin)} a ${dm(s.checkout)}`, `Sinal de ${moeda(leitura!.valor!)} (E2E ${e2e}). Confira o sinal no banco.`);
   return r;
@@ -543,7 +615,7 @@ async function avisarComprovante(sb: SB, e: Entrada, title: string, body: string
 
 // ---------- IA: o que o cliente quer ----------
 const ExtracaoSchema = z.object({
-  assunto: z.enum(['disponibilidade_preco', 'reservar', 'confirmar_reserva', 'duvida', 'saudacao', 'outro']),
+  assunto: z.enum(['disponibilidade_preco', 'reservar', 'confirmar_reserva', 'duvida', 'saudacao', 'agradecimento', 'outro']),
   casa: z.enum(['QS39', 'QS40', 'QS50', 'qualquer']),
   checkin: z.string().nullable(),
   checkout: z.string().nullable(),
@@ -563,12 +635,13 @@ async function extrair(historico: any[], casas: { id: string; nome: string }[], 
   const system = `Você lê conversas do WhatsApp de atendimento de 3 casas de temporada no Condomínio Pipa Natureza (Pipa/RN) e extrai dados para um sistema. Hoje é ${dia}, ${d}.
 Casas: ${casas.map(c => `${c.id} = ${c.nome}`).join('; ')}.
 
-Classifique a ÚLTIMA mensagem do cliente, usando as anteriores como contexto:
+Classifique a ÚLTIMA mensagem do cliente, usando as anteriores como contexto. O cliente às vezes escreve em várias mensagens seguidas ("oi" / "tudo bem?" / "tem vaga dia 20?"): as mensagens dele depois da última resposta do Robô ou do Claudio contam como UMA só; classifique pelo pedido mais concreto entre elas.
 - "disponibilidade_preco": pergunta se há vaga, quanto custa, valores ou diária para um período (mesmo que ainda sem datas).
 - "reservar": quer reservar ou fechar uma casa ("quero reservar", "vamos fechar a azul", "como faço para reservar?"), pede o Pix ou os dados para pagar o sinal, ou diz que já pagou ou vai mandar o comprovante. Escolher uma casa ou dizer novas datas depois de receber valores SEM dizer que quer reservar ("a azul, dia 05/11", "e para o feriado?") NÃO é reservar: é "disponibilidade_preco".
 - "confirmar_reserva": quer negociar desconto, condição especial ou forma de pagamento diferente do Pix do sinal (cartão, parcelado).
 - "saudacao": só cumprimenta ou chama ("oi", "olá", "bom dia", "tudo bem?", "?", "alguém aí?") ou pede informações de forma genérica ("queria informações sobre as casas"), sem pergunta concreta.
 - "duvida": pergunta sobre as casas, regras, localização, horários, pets ou comodidades que as INFORMAÇÕES DAS CASAS abaixo respondem por completo.
+- "agradecimento": só agradece, concorda, se despede ou diz que vai pensar / falar com alguém e depois retorna ("obrigado", "ok, valeu", "show", "vou ver com minha esposa e te falo", "👍"), sem pergunta nem dado novo. Se junto vier pergunta ou dado (datas, pessoas, casa), use o assunto dela.
 - "outro": qualquer outra coisa (dúvida que as informações não respondem, reclamação, pedido especial, conversa).
 
 Datas: converta para AAAA-MM-DD. Datas sem ano são a próxima ocorrência a partir de hoje. "Fim de semana" = sexta a domingo (saída no domingo). Feriados citados pelo nome (Réveillon, Carnaval etc.): use as datas do próximo feriado. Se o cliente der só a entrada e o número de noites, preencha noites e deixe checkout nulo. Se não houver data clara, deixe nulo: nunca invente.
@@ -577,7 +650,9 @@ casa: a casa citada pelo nome na última mensagem ou antes na conversa (se o cli
 pets: quantos animais de estimação vão junto, considerando a conversa toda ("levo um cachorrinho" = 1, "dois cachorros" = 2, "não vamos levar pet" = 0); nulo se o cliente nunca falou de pet. Se perguntou se pode levar sem dizer quantos, 1.
 resumo: até 8 palavras para o card, ex.: "Vaga 20-23/11, 6 pessoas, Casa Azul".
 pergunta_claudio: se a ÚLTIMA mensagem do cliente traz uma pergunta ou pedido que só o dono (Claudio) pode decidir ou informar, escreva-a aqui, curta e em 3ª pessoa (ex.: "Pede desconto para 5 noites", "Quer levar um cachorro grande", "Quer fazer check-in às 8h", "Quer pagar por Pix fora do Airbnb"). Entram: desconto ou negociação de preço; pet, festa, evento ou visita quando as informações das casas não respondem; check-in antecipado ou checkout tardio; forma de pagamento diferente do Pix do sinal (cartão, parcelado); qualquer informação das casas que não está abaixo. Se a mesma mensagem também traz datas ou número de pessoas para a reserva, use assunto "disponibilidade_preco" e preencha pergunta_claudio. NÃO entram: o que o próprio cliente responde (datas, pessoas, casa), o que as informações das casas respondem, cumprimentos, agradecimentos e conversa. Senão, nulo.
-resposta: só quando assunto = "duvida": a resposta para o cliente, em português do Brasil, curta e cordial, no tom de quem já está conversando (sem "Olá"), usando SOMENTE fatos das informações das casas, sem inventar nem prometer nada além delas. Nunca escreva campos para preencher (colchetes, chaves, "XX", "nome do cliente"): o texto vai pronto para o cliente. Nos outros assuntos, nulo.
+resposta: quando assunto = "agradecimento": uma frase curta e calorosa, como uma pessoa responderia no WhatsApp (ex.: "Imagina! Fico à disposição 😊", "Claro, sem pressa! Qualquer dúvida é só chamar"), sem números, valores, datas nem promessas.
+Quando assunto = "duvida": a resposta para o cliente, em português do Brasil, curta e cordial, como uma pessoa da equipe no WhatsApp, no tom de quem já está conversando (sem "Olá"), usando SOMENTE fatos das informações das casas, sem inventar nem prometer nada além delas. Nunca escreva campos para preencher (colchetes, chaves, "XX", "nome do cliente"): o texto vai pronto para o cliente. Nos outros assuntos, nulo.
+resumo, quando assunto = "agradecimento": o que o cliente disse, ex.: "Agradeceu", "Vai falar com a esposa".
 
 <informacoes_das_casas>
 ${base || '(nenhuma informação cadastrada: nunca use "duvida")'}
@@ -596,7 +671,7 @@ ${base || '(nenhuma informação cadastrada: nunca use "duvida")'}
 }
 
 // ---------- o que o cliente já disse (wa_contacts.pedido) e o que falta perguntar ----------
-type Pedido = { casa: string; checkin: string | null; checkout: string | null; noites: number | null; hospedes: number | null; pets?: number | null; datas_exatas: boolean; em: string };
+type Pedido = { casa: string; checkin: string | null; checkout: string | null; noites: number | null; hospedes: number | null; pets?: number | null; datas_exatas: boolean; em: string; cotado?: string | null };
 const isoOk = (s: string | null | undefined) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s));
 
 // O que veio agora tem prioridade; o que não veio continua o que o cliente disse antes (até 7 dias)
@@ -632,6 +707,9 @@ function oQueFalta(p: Pedido): Falta | null {
   return Object.keys(f).length ? f : null;
 }
 
+// Identifica a consulta já enviada ao cliente (casa, período, pessoas, pets)
+const chaveCotacao = (p: Pedido) => { const d = normalizarDatas(p); return d ? [p.casa, d.checkin, d.checkout, p.hospedes, p.pets || 0].join('|') : null; };
+
 function normalizarDatas(p: Pedido) {
   const fim = fimDe(p);
   if (!isoOk(p.checkin) || !fim || fim <= p.checkin! || p.checkin! < hoje() || dias(p.checkin!, fim) > 60) return null;
@@ -641,7 +719,9 @@ function normalizarDatas(p: Pedido) {
 // "4 pessoas" / "4 pessoas e 1 pet"
 const quem = (h: number, pets?: number | null) => `${h} ${h === 1 ? 'pessoa' : 'pessoas'}${pets ? ` e ${pets} ${pets === 1 ? 'pet' : 'pets'}` : ''}`;
 
-const PEDE_TUDO = 'Para eu verificar a disponibilidade e os valores, me diga a data de entrada, a data de saída e quantas pessoas vão se hospedar.';
+const PEDE_TUDO = 'Me conta a data de entrada, a de saída e quantas pessoas vão, que eu já vejo a disponibilidade e os valores.';
+const PEDE_TUDO_DE_NOVO = 'Os valores mudam conforme a data e o número de pessoas, por isso preciso dessas informações 😊 Qual seria a data de entrada e a de saída? E quantas pessoas vão?';
+const PEDE_ESCRITO = 'Recebi seu áudio, mas por aqui não consigo ouvir agora 🙏 Pode me escrever?';
 const SEMANA = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
 const diaDm = (iso: string) => `${SEMANA[new Date(iso + 'T12:00:00Z').getUTCDay()]}, ${dm(iso)}`;
 // "no sábado, 05/12" / "na terça, 17/11"
@@ -652,7 +732,7 @@ function pergunta(f: Falta, p: Pedido): string {
   const extra = f.pessoas ? ' E quantas pessoas vão se hospedar?' : '';
   if (f.datas) {
     if (f.pessoas) return PEDE_TUDO;
-    return `Para eu verificar a disponibilidade e os valores para ${p.hospedes} ${p.hospedes === 1 ? 'pessoa' : 'pessoas'}, me diga a data de entrada e a data de saída.`;
+    return `Anotado, ${p.hospedes} ${p.hospedes === 1 ? 'pessoa' : 'pessoas'}! Agora me conta a data de entrada e a de saída, que eu já vejo os valores.`;
   }
   const fim = fimDe(p);
   if (f.confirmar) {
@@ -661,7 +741,7 @@ function pergunta(f: Falta, p: Pedido): string {
       : `Só para eu consultar certinho: a entrada seria ${noDia(p.checkin!)}? E até que dia vocês ficariam?${extra}`;
   }
   if (f.saida) return `Anotei a entrada ${noDia(p.checkin!)}. Até que dia vocês ficam (ou quantas noites)?${extra}`;
-  return `Para eu consultar de ${dm(p.checkin!)} a ${dm(fim!)}: quantas pessoas vão se hospedar?`;
+  return `Perfeito, de ${dm(p.checkin!)} a ${dm(fim!)}. E quantas pessoas vão se hospedar?`;
 }
 
 // ---------- IA: escreve a resposta de disponibilidade e valores ----------
@@ -693,12 +773,12 @@ function valoresConferem(texto: string, cot: any) {
 }
 
 async function redigir(historico: any[], cot: any, base: string, aviso: string, nomePerfil?: string | null) {
-  const nome = String(nomePerfil || '').trim().split(/\s+/)[0];
-  const primeiro = /^\p{L}{2,}$/u.test(nome) ? nome : '';
+  const primeiro = primeiroNome(nomePerfil);
   const emAndamento = conversando(historico);
   const system = `Você responde, pelo WhatsApp, os clientes das casas de temporada do Claudio no Condomínio Pipa Natureza (Pipa/RN). Escreva a resposta para a ÚLTIMA mensagem do cliente.
-Tom: português do Brasil, cordial e direto, como uma pessoa da equipe (não um robô): frases curtas, no máximo 1 emoji, até 8 linhas. Use quebras de linha para separar casas.
-${emAndamento ? 'A conversa já está em andamento: NÃO cumprimente e NÃO comece com "Olá" ou "Oi".' : `É o começo da conversa: comece com um cumprimento curto${primeiro ? ` usando o nome ${primeiro}` : ''}.`}
+Tom: português do Brasil, cordial e direto, como uma pessoa da equipe conversando no WhatsApp (não um robô nem um e-mail): frases curtas e naturais, no máximo 1 emoji, até 8 linhas. Acompanhe o jeito do cliente: se ele escreve informal, seja informal. Nada de "Prezado", "Informamos que", "Segue abaixo" ou de repetir a pergunta dele. Quebras de linha só para separar casas.
+O cliente pode ter mandado várias mensagens seguidas desde a última resposta: responda a todas juntas, numa mensagem só.
+${emAndamento ? 'A conversa já está em andamento: NÃO cumprimente e NÃO comece com "Olá" ou "Oi".' : `É o começo da conversa: comece com "${periodo()}${primeiro ? `, ${primeiro}` : ''}!" (é ${periodo().toLowerCase()} em Pipa agora).`}
 Regras:
 - Disponibilidade, datas e valores: use SOMENTE a consulta abaixo e copie os valores exatamente como estão escritos (ex.: "R$ 1.450"). Nunca invente valor, desconto, taxa, data ou disponibilidade, e não faça contas.
 - Se o cliente pediu uma casa específica, responda sobre ela primeiro. Cite as outras só se a pedida não estiver livre, como alternativa.
@@ -739,8 +819,11 @@ async function cotar(checkin: string, checkout: string, adultos: number, pets?: 
 }
 
 // ---------- envio: Z-API (se configurada) ou WhatsApp Cloud API ----------
+// "digitando..." do tamanho do texto, como uma pessoa: 2 s numa frase curta, até 8 s numa resposta longa
+const tempoDigitando = (t: string) => Math.min(8, Math.max(2, Math.round(t.length / 40)));
+
 async function enviar(to: string, body: string, phoneIdWebhook?: string) {
-  if (Deno.env.get('ZAPI_INSTANCE')) return enviarZapi(to, body);
+  if (Deno.env.get('ZAPI_INSTANCE')) return enviarZapi(to, body, { digitando: tempoDigitando(body) });
   const phoneId = Deno.env.get('WA_PHONE_ID') || phoneIdWebhook;
   const token = Deno.env.get('WA_TOKEN');
   if (!phoneId || !token) { console.error('WA_TOKEN/WA_PHONE_ID ausentes'); return null; }

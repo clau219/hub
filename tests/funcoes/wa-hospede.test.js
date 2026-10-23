@@ -12,7 +12,7 @@ import { relogio } from '../helpers/ambiente.js';
 import { airbnbFalso, calendarSources } from '../helpers/airbnb-falso.js';
 import { ligarIA, comprovante, fotoQualquer } from '../helpers/ia-robo.js';
 
-const ZAPI = { ZAPI_INSTANCE: 'INST1', ZAPI_TOKEN: 'tok1', ZAPI_CLIENT_TOKEN: 'cli1', ZAPI_WEBHOOK_KEY: 'chave-z', ANTHROPIC_API_KEY: 'sk-teste' };
+const ZAPI = { ZAPI_INSTANCE: 'INST1', ZAPI_TOKEN: 'tok1', ZAPI_CLIENT_TOKEN: 'cli1', ZAPI_WEBHOOK_KEY: 'chave-z', ANTHROPIC_API_KEY: 'sk-teste', WA_AGRUPAR_S: '0' };
 const SENHA_WIFI = 'SenhaSecreta2026', PIX = 'pix@casaspipa.com.br';
 const BASE = {
   geral: { endereco: 'Condomínio Pipa Natureza, Pipa/RN', checkin: '14h', checkout: '10h', pets: 'A Casa Frida e a Casa Terracota aceitam pets; a Casa Azul não aceita.',
@@ -43,7 +43,7 @@ class Hospede {
     const antes = enviadas().length;
     const id = extra.messageId || `ZIN${++seq}`;
     const r = await wa(pedido('/wa-webhook?zapi=chave-z', { auth: null, corpo: {
-      type: 'ReceivedCallback', instanceId: 'INST1', messageId: id, phone: this.fone, fromMe: false, momment: Date.now(),
+      type: 'ReceivedCallback', instanceId: 'INST1', messageId: id, phone: this.fone, fromMe: false, momment: Date.now() - 5000, // a mensagem chega uns segundos depois de escrita
       status: 'RECEIVED', senderName: this.nome, chatName: this.nome, isGroup: false, isNewsletter: false, text: { message: texto }, ...extra,
     } }));
     assert.equal(r.status, 200);
@@ -127,6 +127,13 @@ afterEach(() => {
       const cp = banco().t('wa_comprovantes').find(x => x.wa_id === phone && x.status === 'valido');
       assert.ok(cp && banco().t('bookings').some(b => b.id === cp.booking_id), `confirmou reserva sem comprovante válido: ${message}`);
     }
+  }
+  // gente não manda a mesma mensagem duas vezes seguidas para a mesma pessoa
+  const ultima = {};
+  for (const c of todas) {
+    const { phone, message } = c.json();
+    assert.notEqual(message, ultima[phone], `mensagem repetida: ${message}`);
+    ultima[phone] = message;
   }
   for (const p of ia.chamadas) assert.ok(!String(p.system).includes(SENHA_WIFI) && !String(p.system).includes(PIX), 'senha do Wi-Fi e Pix nunca vão para a IA do robô');
 });
@@ -267,11 +274,17 @@ describe('hóspede: o que fica para o Claudio', () => {
     assert.equal(await h.diz('O chuveiro do quarto não está esquentando'), null);
     assert.match(h.ultimaDecisao, /fica para você/);
   });
-  test('áudio e foto: ficam para o Claudio, guardados com o tipo', async () => {
+  test('áudio: pede por escrito uma vez só (o áudio fica para o Claudio); foto fica para o Claudio', async () => {
     const h = new Hospede('5584991110023', 'Karen');
-    assert.equal(await h.diz(undefined, { text: undefined, audio: { audioUrl: 'https://x/a.ogg' } }), null);
+    const audio = () => h.diz(undefined, { text: undefined, audio: { audioUrl: 'https://x/a.ogg' } });
+    const r = await audio();
+    assert.match(r, /^Boa tarde, Karen! Recebi seu áudio/);
+    assert.match(r, /escrever/);
+    assert.equal(h.card.proxima_acao, 'Responder WhatsApp', 'o áudio continua esperando você');
+    assert.equal(await audio(), null, 'no segundo áudio não repete o pedido');
+    assert.match(h.ultimaDecisao, /já pediu por escrito/);
     assert.equal(await h.diz(undefined, { text: undefined, image: { caption: 'essa é a casa?' } }), null);
-    assert.deepEqual(h.conversa.map(m => m.texto), ['[audio]', '[image] essa é a casa?']);
+    assert.deepEqual(h.conversa.filter(m => m.autor === 'cliente').map(m => m.texto), ['[audio]', '[audio]', '[image] essa é a casa?']);
   });
 });
 
@@ -484,5 +497,76 @@ describe('hóspede: reserva com sinal por Pix e comprovante', () => {
     const r = await ateOPix(h);
     assert.match(r, /Vou confirmar isso e já te retorno/);
     assert.match(h.card.proxima_acao, /Quer reservar a Casa Azul/);
+  });
+});
+
+describe('hóspede: atendimento com jeito de gente', () => {
+  test('rajada ("oi" / "tudo bem?" / pergunta): espera, junta e responde uma vez só, já com os valores', async () => {
+    definirEnv('WA_AGRUPAR_S', '0.2');
+    const fone = '5584991110060';
+    relogio.avancar(60e3);
+    const t0 = Date.now();
+    const corpo = (i, texto) => ({ type: 'ReceivedCallback', instanceId: 'INST1', messageId: `RAJ${i}`, phone: fone, fromMe: false, momment: t0 - 5000 + i * 1000,
+      senderName: 'Paula Lima', isGroup: false, isNewsletter: false, text: { message: texto } });
+    const msgs = ['oi', 'tudo bem?', 'tem vaga de 20/11 a 23/11 para 4 pessoas?'];
+    await Promise.all(msgs.map((t, i) => new Promise(r => setTimeout(r, i * 30)).then(() => wa(pedido('/wa-webhook?zapi=chave-z', { auth: null, corpo: corpo(i, t) })))));
+    const env = enviadas().filter(m => m.phone === fone);
+    assert.equal(env.length, 1, 'uma resposta só');
+    assert.match(env[0].message, /^Boa tarde, Paula!/);
+    assert.match(env[0].message, /R\$/, 'já com os valores');
+    const decisoes = banco().t('wa_messages').filter(m => m.wa_id === fone && m.autor === 'cliente').map(m => m.extracao?.robo);
+    assert.deepEqual(decisoes, ['juntou com a mensagem seguinte', 'juntou com a mensagem seguinte', 'respondeu']);
+  });
+  test('"tudo bem?" no primeiro contato: responde que está tudo ótimo, em vez de perguntar de volta a mesma coisa', async () => {
+    const r = await new Hospede('5584991110061', 'Ana').diz('Oi, tudo bem?');
+    assert.match(r, /^Boa tarde, Ana! Tudo ótimo por aqui, e com você\?/);
+    assert.match(r, /data de entrada/);
+  });
+  test('cumprimento pelo horário de Pipa e pelo primeiro nome (e sem nome quando o perfil não tem um)', async () => {
+    relogio.definir('2026-10-19T11:00:00Z'); // 8h em Pipa
+    assert.match(await new Hospede('5584991110062', 'MARIANA COSTA').diz('oi'), /^Bom dia, Mariana!/);
+    relogio.definir('2026-10-20T01:30:00Z'); // 22h30 em Pipa
+    assert.match(await new Hospede('5584991110063', '🌴 Pousada X').diz('oi'), /^Boa noite! /);
+  });
+  test('"obrigado" depois dos valores: resposta curta, sem valores, card para acompanhar; e sem pingue-pongue de agradecimentos', async () => {
+    const h = new Hospede('5584991110064', 'Rafael');
+    assert.match(await h.ateValores('Tem vaga de 20/11 a 23/11? somos 2', { pessoas: 2 }), /R\$/);
+    const r = await h.diz('obrigado!');
+    assert.ok(r, 'responde o agradecimento');
+    assert.doesNotMatch(r, /R\$|\d/, 'sem repetir valores nem números');
+    assert.ok(r.length < 120, 'curta');
+    assert.match(h.card.proxima_acao, /^Acompanhar: Agradeceu/, 'o card não pede mais "Responder WhatsApp"');
+    assert.equal(await h.diz('👍'), null, 'não responde o agradecimento do agradecimento');
+    assert.match(h.ultimaDecisao, /agradecimento: nada a responder/);
+    assert.match(h.card.proxima_acao, /^Acompanhar/);
+  });
+  test('"vou ver com minha esposa e te falo": responde sem pressionar e o card fica para acompanhar', async () => {
+    const h = new Hospede('5584991110065', 'Bruno');
+    await h.ateValores('Quanto fica a Casa Frida de 10 a 13/11 para 3 pessoas?', { pessoas: 3 });
+    const r = await h.diz('vou ver com minha esposa e te falo');
+    assert.match(r, /disponibilidade|chamar/);
+    assert.match(h.card.proxima_acao, /^Acompanhar: Vai pensar/);
+  });
+  test('o mesmo pedido de novo: não reenvia a mesma cotação', async () => {
+    const h = new Hospede('5584991110066', 'Carla');
+    const q = 'Tem vaga na Casa Azul de 05/12 a 08/12? somos 5';
+    assert.match(await h.diz(q), /R\$/);
+    assert.equal(await h.diz(q), null);
+    assert.match(h.ultimaDecisao, /mesma consulta/);
+  });
+  test('pergunta o preço de novo sem dar as datas: explica por que precisa delas, em vez de repetir a mesma frase', async () => {
+    const h = new Hospede('5584991110067', 'Bia');
+    const a = await h.diz('quanto custa?');
+    const b = await h.diz('quanto custa a diária?');
+    assert.notEqual(a.replace(/^Boa tarde, Bia! /, ''), b);
+    assert.match(b, /mudam conforme a data/);
+    assert.match(b, /data de entrada/);
+  });
+  test('"digitando..." do tamanho da mensagem', async () => {
+    const h = new Hospede('5584991110068', 'Davi');
+    await h.diz('oi');
+    await h.ateValores('Quanto fica de 20/11 a 23/11 para 4 pessoas?', { pessoas: 4 });
+    const d = enviadas().filter(m => m.phone === h.fone).map(m => m.delayTyping);
+    assert.ok(d.every(x => x >= 2 && x <= 8), JSON.stringify(d));
   });
 });

@@ -71,6 +71,8 @@ const AFIRMA = /^(sim|isso|certo|exato|correto|pode ser|ok|confirmo|perfeito)\b/
 const RESERVA = /\b(reservar|reserva|fechar|fechado|pix|comprovante|sinal|pagar|paguei|transferencia)\b/;
 const NEGOCIA = /\b(desconto|parcel\w*|cartao|abatimento|condicao especial|mais barato)\b/;
 const SAUDA = /^(?:(?:oi+|ola|opa|bom dia|boa tarde|boa noite|tudo bem|tudo bom|e ai|\?+|alguem ai|queria (?:mais )?informacoes(?: sobre as casas)?)[!.?,\s]*)+$/;
+// "obrigado", "valeu", "vou ver com minha esposa", "ok" / "show" sozinhos (não respondem a uma pergunta de confirmação)
+const AGRADECE = /^(?:(?:ok|blz|beleza|show|valeu|obrigad[oa]s?|brigad[oa]|muito obrigad[oa]|vou (?:ver|pensar|falar|conversar)\b[^?]*|👍|🙏)[!.,\s]*)+$/;
 const PRECO = /\b(vaga|dispon\w*|valor\w*|preco\w*|quanto|diaria\w*|livre|tem para|orcamento|cotar|cotacao)\b/; // palavras inteiras ("Terracota" não é "cota")
 const DUVIDAS = [
   [/(pet|cachorr|cao|caes|gat[oa]|animal)/, ['Pets']],
@@ -87,7 +89,8 @@ function extrair(system, conteudo) {
   const temBase = base && !/^\(nenhuma/.test(base);
   const conv = lerConversa(conteudo);
   const cli = conv.filter(m => m.autor === 'Cliente');
-  const ult = cli.at(-1)?.texto || '';
+  // Como pede o prompt: as mensagens do cliente depois da última resposta contam como uma só
+  const ult = conv.slice(conv.findLastIndex(m => m.autor !== 'Cliente') + 1).map(m => m.texto).join('\n') || cli.at(-1)?.texto || '';
   const u = sem(ult);
   // conversa toda: a última menção vale
   let hospedes = null, casa = 'qualquer';
@@ -108,6 +111,8 @@ function extrair(system, conteudo) {
   if (NEGOCIA.test(u)) assunto = 'confirmar_reserva';
   else if (RESERVA.test(u) && !PRECO.test(u.replace(/reserva\w*/g, ''))) assunto = 'reservar';
   else if (SAUDA.test(u)) assunto = 'saudacao';
+  else if (AGRADECE.test(u) && !datasDe(ult, hoje) && !PRECO.test(u) && pessoasDe(ult) == null
+    && (/obrigad|brigad|valeu|vou (ver|pensar|falar|conversar)/.test(u) || !/\?\s*$/.test(conv.findLast(m => m.autor !== 'Cliente')?.texto || ''))) assunto = 'agradecimento';
   else if (d || PRECO.test(u) || (pessoasDe(ult) != null && cli.length > 1)) assunto = 'disponibilidade_preco';
   else if (duvida && temBase) {
     const linhas = base.split('\n').filter(l => duvida[1].some(r => l.trim().startsWith(r + ':')));
@@ -116,6 +121,7 @@ function extrair(system, conteudo) {
   if (/wi-?fi|senha/.test(u) && assunto === 'duvida') { assunto = 'outro'; resposta = null; }
   const resumo = assunto === 'disponibilidade_preco'
     ? ['Vaga', d ? `${d.checkin.slice(8)}/${d.checkin.slice(5, 7)}` : '', hospedes ? `${hospedes} pessoas` : ''].filter(Boolean).join(' ')
+    : assunto === 'agradecimento' ? (/vou (ver|pensar|falar|conversar)/.test(u) ? 'Vai pensar e retorna' : 'Agradeceu')
     : assunto === 'reservar' ? 'Quer reservar' : assunto === 'confirmar_reserva' ? 'Quer negociar' : assunto === 'saudacao' ? 'Cumprimento' : assunto === 'duvida' ? 'Dúvida sobre a casa' : 'Assunto para o Claudio';
   return { assunto, casa, checkin: d?.checkin ?? null, checkout: d?.checkout ?? null, noites: d?.noites ?? null, hospedes, datas_exatas: !!d?.exatas, resumo, resposta };
 }
@@ -134,8 +140,8 @@ function redigir(system, conteudo, { mentir = false } = {}) {
   const ordem = pedida ? [...linhas.filter(l => l.startsWith(pedida + ':')), ...linhas.filter(l => !l.startsWith(pedida + ':'))] : linhas;
   const usar = pedida && ordem[0] && livre(ordem[0]) ? [ordem[0]] : ordem;
   const out = [];
-  const nome = (system.match(/usando o nome (\p{L}+)/u) || [])[1];
-  if (/comece com um cumprimento curto/.test(system)) out.push(nome ? `Oi, ${nome}!` : 'Oi!');
+  const cumprimento = (system.match(/começo da conversa: comece com "([^"]+)"/) || [])[1];
+  if (cumprimento) out.push(cumprimento);
   out.push(...usar.map(l => l.replace(': LIVRE. Total ', ': disponível, total ').replace(': OCUPADA nessas datas.', ': ocupada nessas datas.')));
   if (/(pet|cachorr|cao|caes|gat[oa])/.test(ult)) { const p = base.split('\n').find(l => l.startsWith('Pets:')); out.push(p ? `Sobre pets: ${p.slice(6).trim()}` : 'Sobre pets, o Claudio confirma em seguida.'); }
   const aviso = (system.match(/Diga também, com suas palavras: "([^"]+)"/) || [])[1];
