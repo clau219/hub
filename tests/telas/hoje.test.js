@@ -89,7 +89,19 @@ describe('Hoje: conteúdo', () => {
     assert.equal($('#sec-esc'), null);
     assert.equal(texto($$('.stat')[0]), '✓nada atrasado');
     assert.match(texto('#sec-dia'), /Dia livre/);
-    assert.match(texto('#sec-prox'), /Nada marcado na semana/);
+    assert.match(texto('#sec-prox'), /Semana sem gigs/);
+    // Vazios ensinam o próximo passo (campo do topo ou WhatsApp)
+    assert.match(texto('#sec-dia'), /me lembra às 15h/);
+    assert.match(texto('#view'), /\+dj Anabela 15\/11 3500/);
+    assert.equal($('.hero-frase'), null, 'dia vazio: sem frase');
+  });
+  test('frases: o dia embaixo da saudação, ocupação das casas e pipeline parado / a receber', () => {
+    assert.equal(texto('.hero-frase'), 'Gig às 21:00 (Casamento).');
+    const blocos = $$('#view .col-side section.block');
+    const ocup = blocos.find(b => /Ocupação/.test(b.textContent));
+    assert.match(texto(ocup.querySelector('.frase')), /^Próximas 2 semanas: Azul 21%, Frida 0%, Terracota 0%\. A Terracota está livre neste fim de semana\.$/);
+    const pipe = blocos.find(b => /Pipeline aberto/.test(b.textContent));
+    assert.match(texto(pipe.querySelector('.frase')).replace(/\s/g, ' '), /1 negociação parada: a mais antiga é Festa Ana \(4 dias sem o próximo passo\)\. A receber: R\$ 5\.000 de Casamento\./);
   });
 });
 

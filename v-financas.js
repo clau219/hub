@@ -11,6 +11,7 @@ import { modal, toast } from './ui.js';
 import * as fc from './fin-calc.js';
 import * as moedaV from './moeda.js';
 import * as carteira from './v-fin-carteira.js';
+import { fraseSaidas, fraseNegocios } from './frases.js';
 
 const ABAS = [['painel', 'Painel'], ['fluxo', 'Fluxo de caixa'], ['lancamentos', 'Lançamentos'], ['contas', 'Contas']];
 const ABA_ANTIGA = { resumo: 'fluxo', investimentos: 'painel' }; // links antigos continuam funcionando
@@ -297,10 +298,11 @@ function porNegocio(tx) {
     if (t.negocio === 'alugueis' && t.casa) { const c = (g.casas[t.casa] ||= { ent: 0, sai: 0 }); if (t.valor > 0) c.ent += +t.valor; else c.sai += +t.valor; }
   }
   const ordem = [...NEGOCIOS, ''].filter(n => grupos[n]);
-  if (!ordem.length) return `<section class="block"><h2>Por negócio</h2><p class="empty">Nada neste mês.</p></section>`;
+  if (!ordem.length) return `<section class="block"><h2>Por negócio</h2><p class="empty">Nada neste mês ainda. Os bancos entram sozinhos duas vezes por dia; o que foi pago em dinheiro, mande pelo WhatsApp: “gastei 120 de faxina na Frida”.</p></section>`;
+  const f = fraseNegocios(grupos, n => area(n).nome, casaNome, brl0);
   const linha = (nome, g, attr, sub) => `<tr ${attr}><td>${nome}</td><td class="num fn-pos">${g.ent ? brl0(g.ent) : ''}</td><td class="num fn-neg">${g.sai ? brl0(-g.sai) : ''}</td>
     <td class="num ${g.ent + g.sai >= 0 ? 'fn-pos' : 'fn-neg'}"><b>${brl0(g.ent + g.sai)}</b></td></tr>${sub || ''}`;
-  return `<section class="block"><h2>Por negócio</h2><div class="table-wrap"><table class="table fn-neg-tbl">
+  return `<section class="block"><h2>Por negócio</h2>${f ? `<p class="frase">${h(f.texto)}</p>` : ''}<div class="table-wrap"><table class="table fn-neg-tbl">
     <thead><tr><th>Negócio</th><th class="num">Entrou</th><th class="num">Saiu</th><th class="num">Resultado</th></tr></thead>
     <tbody>${ordem.map(n => linha(n ? `<span class="tag" style="--c:${area(n).cor}">${h(area(n).nome)}</span>` : '<span class="muted">Sem negócio</span>', grupos[n],
       `data-neg="${n || '-'}"`, Object.entries(grupos[n].casas).map(([c, v]) => linha(`<span class="fn-casa">${h(casaNome(c))}</span>`, v, `data-neg="alugueis"`)).join(''))).join('')}</tbody>
@@ -312,9 +314,12 @@ function porCategoria(tx) {
   for (const t of tx.filter(t => t.valor < 0)) m[catDe(t)] = (m[catDe(t)] || 0) - t.valor;
   const lst = Object.entries(m).sort((a, b) => b[1] - a[1]);
   const max = lst[0]?.[1] || 1;
+  // Comparação com o mês anterior (até o mesmo dia, se o mês está em andamento) e a categoria que mais subiu
+  const f = fraseSaidas(D.tx.filter(t => !fora(t)), mes, catDe, { fmt: brl0 });
   return `<section class="block"><h2>Para onde foi</h2>
+    ${f ? `<p class="frase">${h(f.texto)}${f.cat ? ` <button class="link-btn" data-cat="${h(f.cat)}">${h(f.rotulo)}</button>` : ''}</p>` : ''}
     ${lst.length ? `<div class="fn-bars">${lst.slice(0, 12).map(([c, v]) => `<button class="fn-bar" data-cat="${h(c)}">
-      <span>${h(c)}</span><b>${brl0(v)}</b><i style="width:${Math.max(2, v / max * 100)}%"></i></button>`).join('')}</div>` : '<p class="empty">Nenhuma saída neste mês.</p>'}
+      <span>${h(c)}</span><b>${brl0(v)}</b><i style="width:${Math.max(2, v / max * 100)}%"></i></button>`).join('')}</div>` : '<p class="empty">Nenhuma saída neste mês ainda.</p>'}
   </section>`;
 }
 
@@ -355,7 +360,8 @@ function lancamentos() {
   <div class="table-wrap"><table class="table fn-tx">
     <thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th class="num">Valor</th></tr></thead>
     <tbody>${tx.map(linhaTx).join('')}</tbody>
-  </table></div>` : '<p class="empty">Nenhum lançamento.</p>'}`;
+  </table></div>` : ativo ? '<p class="empty">Nenhum lançamento com esses filtros.</p>'
+    : `<p class="empty">Nenhum lançamento em ${h(mesTxt(mes))}. Os bancos entram sozinhos duas vezes por dia; gasto em dinheiro, mande pelo WhatsApp (“gastei 120 de faxina na Frida”) ou a foto do comprovante.</p>`}`;
 }
 
 function linhaTx(t) {

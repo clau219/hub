@@ -3,6 +3,7 @@ import { h, today, addDays, fmtDate, relDate, weekdayShort, areaTag, brl, hhmm, 
 import { openItem, dealDone, snooze, toggleTask, taskForm, dealForm, toast, etapaDone, dealWa, aposWhats } from './ui.js';
 import { CONFIG } from './config.js';
 import * as habitos from './habitos.js';
+import { fraseDia, fraseOcupacao, frasePipeline } from './frases.js';
 
 let bound = [];
 const abertos = new Set(); // grupos do Escapando expandidos ("ver mais")
@@ -43,6 +44,8 @@ function row(it, { late } = {}) {
     ${canSnooze || wa ? `<span class="row-act">${wa ? `<a class="mini wa" href="${h(wa)}" target="_blank" rel="noopener" data-wa="${idx}" aria-label="WhatsApp: ${h(it.sub || it.title)}">WhatsApp</a>` : ''}${canSnooze ? `<button class="mini" data-snz="${idx}:1" aria-label="Adiar para amanhã: ${h(it.title)}">amanhã</button><button class="mini" data-snz="${idx}:3" aria-label="Adiar 3 dias: ${h(it.title)}">+3d</button>` : ''}</span>` : ''}
   </li>`;
 }
+// Frase que interpreta o card, com o link para a lista certa
+const frase = f => f ? `<p class="frase">${h(f.texto)}${f.link ? ` <a class="link" href="${f.link}">${h(f.rotulo)}</a>` : ''}</p>` : '';
 const areaVar = a => ({ dj: 'dj', alugueis: 'alug', aluguel: 'alug', consultoria: 'eng', argila: 'argila' }[a] || 'casa');
 
 function ribbon(list) {
@@ -104,6 +107,7 @@ export function render(el) {
     <div>
       <p class="hero-date">${fmtDate(hoje, { long: true })}</p>
       <h1>${saud}, Claudio</h1>
+      ${(f => f ? `<p class="hero-frase">${h(f.texto)}</p>` : '')(fraseDia(doDia))}
     </div>
     <div class="hero-stats">${stats.map(([c, n, l, alvo]) => `<button class="stat ${c}" data-ir="${alvo}"><b>${n}</b><span>${l}</span></button>`).join('')}</div>
   </section>
@@ -116,19 +120,20 @@ export function render(el) {
       </section>` : ''}
       <section class="block" id="sec-dia">
         <h2>Hoje</h2>
-        ${doDia.length ? `<ul class="list">${doDia.map(i => row(i)).join('')}</ul>` : `<p class="empty">Dia livre. Use a captura no topo para anotar o que aparecer.</p>`}
+        ${doDia.length ? `<ul class="list">${doDia.map(i => row(i)).join('')}</ul>` : `<p class="empty">Dia livre. Anote o que aparecer no campo do topo ou pelo WhatsApp: “me lembra às 15h de ligar pro contador”.</p>`}
       </section>
       <section class="block" id="sec-prox">
         <h2>Próximos 7 dias</h2>
         ${Object.keys(porDia).length ? Object.entries(porDia).map(([d, l]) => `
           <h3 class="day">${relDate(d)}<span>${fmtDate(d)}</span></h3>
-          <ul class="list">${l.map(i => row(i)).join('')}</ul>`).join('') : '<p class="empty">Nada marcado na semana.</p>'}
+          <ul class="list">${l.map(i => row(i)).join('')}</ul>`).join('') : '<p class="empty">Semana sem gigs, reservas nem compromissos. Gig novo: “+dj Ana 15/11 3500” no campo do topo ou no WhatsApp.</p>'}
       </section>
     </div>
     <aside class="col-side">
       ${habitos.bloco()}
       <section class="block">
         <h2>Ocupação das casas</h2>
+        ${frase(fraseOcupacao(S.properties, (id, d) => !!ocupacao(id, d), hoje))}
         ${ocupacaoStrip()}
         <a class="link" href="#/alugueis">Reservas e calendário</a>
       </section>
@@ -136,10 +141,11 @@ export function render(el) {
         <h2>Caixa de entrada <span class="count">${inbox.length || ''}</span></h2>
         ${inbox.length ? `<ul class="list compact">${inbox.map(t => row({ kind: 'tarefa', area: 'inbox', title: t.titulo, ref: t, prio: t.prioridade })).join('')}</ul>
           <p class="muted small">Abra um item para dar área e prazo, ou transformar em oportunidade.</p>`
-          : '<p class="empty">Vazia. Tudo que você anotar sem data aparece aqui.</p>'}
+          : '<p class="empty">Vazia. O que você anota sem data, aqui ou pelo WhatsApp, cai nesta caixa para organizar depois.</p>'}
       </section>
       <section class="block">
         <h2>Pipeline aberto</h2>
+        ${frase(frasePipeline(S.deals, hoje))}
         ${pipeResumo()}
       </section>
     </aside>
@@ -208,6 +214,6 @@ function pipeResumo() {
     return `<div><dt>${AREAS[n].nome}<small class="pipe-et">${etapas.map(([nome, q]) => `${q} ${h(nome.toLowerCase())}`).join(' · ')}</small></dt>
       <dd>${ab.length}<small>${brl(ab.reduce((s, d) => s + (+d.valor || 0), 0))}</small></dd></div>`;
   }).join('');
-  if (!linhas) return '<p class="empty">Nenhuma oportunidade aberta.</p>';
+  if (!linhas) return '<p class="empty">Nenhuma oportunidade aberta. Pelo WhatsApp, “+dj Anabela 15/11 3500” cria uma.</p>';
   return `<dl class="pipe-sum">${linhas}</dl><a class="link" href="#/pipeline">Abrir pipeline</a>`;
 }

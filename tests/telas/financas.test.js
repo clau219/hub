@@ -6,7 +6,7 @@ import { abrirHub, trocarDados, CASAS } from '../helpers/tela.js';
 import { banco } from '../helpers/fake-supabase.js';
 
 let V, F, el;
-const nb = s => s.replace(/ /g, ' ');
+const nb = s => s.replace(/ /g, ' ').replace(/⁠/g, '');
 const tx = (id, data, valor, x = {}) => ({ id, data, valor, descricao: x.descricao || id, conta_id: 'ct1', ...x });
 const DADOS = (x = {}) => ({
   properties: CASAS,
@@ -64,6 +64,16 @@ describe('Fluxo de caixa', () => {
   test('fatura paga e investimento ficam fora dos totais', () => {
     assert.doesNotMatch(texto('.fn-bars'), /Transferência|Investimento/);
     assert.deepEqual($$('.fn-bar').map(b => nb(textoSep(b))), ['Mercado R$ 580']);
+  });
+  test('frases: saídas contra setembro até o mesmo dia, com link para a categoria que mais subiu; negócio que mais rendeu', async () => {
+    const bloco = $$('#view section.block').find(b => /Para onde foi/.test(b.textContent));
+    assert.equal(nb(texto(bloco.querySelector('.frase'))), 'Saídas até o dia 19 93% acima de setembro. Quem mais subiu foi Mercado (+R$ 580). Ver lançamentos de Mercado');
+    const neg = $$('#view section.block').find(b => /Por negócio/.test(b.textContent));
+    assert.equal(nb(texto(neg.querySelector('.frase'))), 'Aluguéis foi o que mais rendeu (R$ 2.000).');
+    await clicar(bloco.querySelector('.frase [data-cat]'));
+    assert.ok($('[data-aba=lancamentos]').classList.contains('on'));
+    assert.equal($('#fnCatF').value, 'Mercado');
+    await ir('fluxo', DADOS());
   });
   test('aviso de lançamentos sem categoria', () => {
     assert.match(texto('.fn-aviso'), /3 lançamentos de Outubro 2026 sem categoria escolhida/);
