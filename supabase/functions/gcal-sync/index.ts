@@ -20,11 +20,12 @@ Deno.serve(async req => {
   try {
     const tk = await token();
     const cal = await calendarioDj(sb);
-    res = body.evento ? await alterarDoGoogle(sb, tk, cal, body.evento) : await reconciliar(sb, tk, cal);
+    res = Array.isArray(body.eventos) ? await alterarVarios(sb, tk, cal, body.eventos)
+      : body.evento ? await alterarDoGoogle(sb, tk, cal, body.evento) : await reconciliar(sb, tk, cal);
   } catch (e) {
     res = { erro: (e as Error).message };
   }
-  if (!body.evento || res.erro) {
+  if (!(body.evento || body.eventos) || res.erro) {
     await sb.from('app_config').upsert({ key: 'gcal_status', value: JSON.stringify({ em: new Date().toISOString(), ...res }) }, { onConflict: 'key' });
   }
   return json(res); // erro vai no corpo (com 500 o Hub não consegue ler a mensagem)
@@ -114,6 +115,19 @@ async function alterarDoGoogle(sb: any, tk: string, cal: string, id: string) {
   const { summary, location, start, end } = deEvento(e);
   await g(tk, 'PATCH', `/calendars/${encodeURIComponent(cal)}/events/${encodeURIComponent(alvo)}`, { summary, location: location || '', start, end });
   return { ok: true, alterados: 1 };
+}
+
+// Vários de uma vez (o canal do dono muda uma série inteira): os do Google um a um; os do Hub numa reconciliação só
+async function alterarVarios(sb: any, tk: string, cal: string, ids: string[]) {
+  const { data: evs } = await sb.from('events').select('id,origem').in('id', ids);
+  let alterados = 0;
+  for (const e of (evs || []).filter((e: any) => e.origem === 'google')) {
+    const r = await alterarDoGoogle(sb, tk, cal, e.id);
+    if (r.erro) return { erro: r.erro, alterados };
+    alterados++;
+  }
+  if ((evs || []).some((e: any) => e.origem !== 'google')) await reconciliar(sb, tk, cal);
+  return { ok: true, alterados };
 }
 
 // ---------- Google ----------

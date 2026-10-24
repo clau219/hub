@@ -56,8 +56,7 @@ describe('canal do dono: quem é o dono', () => {
   test('mensagem do número pessoal não vira cliente: nada em wa_contacts, wa_messages nem deal de Aluguéis', async () => {
     novoBanco(DADOS());
     const r = await diz('oi', { acao: 'conversa', resposta: 'Oi, Claudio!' });
-    assert.match(r, /Oi, Claudio!/);
-    assert.match(r, /\+dj Anabela/, 'mostra o que dá para pedir');
+    assert.equal(r, 'Oi, Claudio!', 'cumprimento: resposta curta, sem a lista de exemplos');
     assert.equal(banco().t('wa_contacts').length, 0);
     assert.equal(banco().t('wa_messages').length, 0);
     assert.equal(banco().t('deals').length, 0);
@@ -308,11 +307,11 @@ describe('canal do dono: consultas', () => {
   test('"o que tenho hoje?": agenda em ordem, casas, pendências com atraso e nada cancelado', async () => {
     novoBanco(AGENDA());
     const r = await diz('o que tenho hoje?', { acao: 'consultar', consulta: 'hoje' });
-    assert.match(r, /14:00 Dentista[\s\S]*21:00 DJ — Júlia \(Pipa Beach\)/);
+    assert.match(r, /14:00–15:00 Dentista[\s\S]*21:00 DJ — Júlia \(Pipa Beach\)/);
     assert.match(r, /Entra: Casa Frida — Ana \(até 22\/10, airbnb\)/);
     assert.match(r, /Sai: Casa Azul — Bruno/);
     assert.doesNotMatch(r, /Terracota/);
-    assert.match(r, /Aluguéis — Eduardo: Responder WhatsApp \(atraso de 2 dias\)/);
+    assert.match(r, /• Eduardo: responder no WhatsApp \(atraso de 2 dias\)/);
     assert.match(r, /Tarefa: Pagar IPTU ❗ \(atraso de 1 dia\)/);
     assert.doesNotMatch(r, /Futuro/);
   });

@@ -155,6 +155,14 @@ describe('gcal-sync: evento do Google editado no Hub', () => {
     assert.equal(p.id, 'serie9_20261020');
     assert.deepEqual(p.corpo.start, { date: '2026-10-20' });
   });
+  test('vários de uma vez ({eventos}, canal do dono): PATCH em cada um do Google e uma reconciliação para os do Hub', async () => {
+    G.eventos.set('serie9', { id: 'serie9', recurrence: ['RRULE:FREQ=WEEKLY'], start: { date: '2026-10-20' } });
+    const { corpo } = await sync({ eventos: ['g1', 'g2', EV1] }, 'cron');
+    assert.deepEqual(corpo, { ok: true, alterados: 2 });
+    assert.deepEqual(G.chamadas.filter(c => c.m === 'PATCH').map(c => c.id), ['abc123_20261016T180000Z', 'serie9_20261020']);
+    assert.ok(G.chamadas.some(c => c.m === 'POST'), 'evento manual: reconciliação cria no Google');
+    assert.equal(banco().t('app_config').length, 0, 'edição pontual não sobrescreve o status');
+  });
   test('evento inexistente; evento manual faz a reconciliação completa', async () => {
     assert.equal((await sync({ evento: 'nao-existe' })).corpo.erro, 'evento não encontrado');
     assert.equal((await sync({ evento: EV1 })).corpo.criados, 3);
