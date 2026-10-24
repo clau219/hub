@@ -21,7 +21,7 @@ export type Tx = { id: string; data: string; valor: number; descricao?: string |
 export type Classe = { categoria: string; negocio: string | null; casa: string | null; origem_cat: string; revisar: boolean; sugestoes: unknown; ia_motivo: string | null };
 
 export const CATS_SAI = ['Moradia', 'Contas da casa', 'Mercado', 'Alimentação fora', 'Transporte', 'Combustível', 'Saúde', 'Educação', 'Lazer',
-  'Compras', 'Assinaturas', 'Impostos', 'Tarifas bancárias', 'Faxina e limpeza', 'Condomínio', 'Manutenção', 'Equipamento', 'Outros'];
+  'Compras', 'Assinaturas', 'Impostos', 'Tarifas bancárias', 'Faxina e limpeza', 'Condomínio', 'Manutenção', 'Obra', 'Equipamento', 'Outros'];
 export const CATS_ENT = ['Airbnb', 'Reserva direta', 'Cachê DJ', 'Engenharia', 'Salário / pró-labore', 'Rendimentos', 'Reembolso', 'Outras entradas'];
 export const INTERNA = 'Transferência entre contas';
 export const INVEST = 'Investimento';
@@ -181,6 +181,7 @@ Como decidir:
 - PIX ou transferência para o próprio Claudio (Claudio, CLAUDIO...) ou entre bancos dele = ${INTERNA}.
 - PIX recebido de alguém que é contratante de gig (lista abaixo), perto da data do evento = Cachê DJ / dj. De hóspede de reserva direta = Reserva direta / alugueis com a casa.
 - Faxina, diarista, lavanderia, enxoval, manutenção e contas que pelo contexto são das casas de aluguel = negócio alugueis.
+- Obra x Manutenção: "Obra" é construção ou reforma (material de construção, madeira, cimento, areia, tijolo, ferragens em quantidade, pedreiro, mão de obra, marceneiro, serralheiro, arquiteto, projeto, aluguel de caçamba/betoneira). "Manutenção" é conserto pontual de algo que já existe (encanador, eletricista para reparo, troca de peça).
 - Sem pista de negócio, gastos do dia a dia são "pessoal".
 - confianca (o Claudio revisa à mão os de "media" e "baixa", então só rebaixe quando ele realmente precisar olhar):
   - "alta": a categoria é clara pelo nome do estabelecimento ou pelo tipo (Mercado Livre/Amazon/Shopee = Compras, supermercado = Mercado, iFood/restaurante = Alimentação fora, Uber/99 = Transporte, posto = Combustível, farmácia = Saúde, Netflix/Spotify/software recorrente = Assinaturas) e nada indica outro negócio. "pessoal" como padrão, sem pista contrária, conta como certo: não rebaixe só porque "poderia ser" das casas ou do DJ.

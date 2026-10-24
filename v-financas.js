@@ -17,7 +17,7 @@ const ABAS = [['painel', 'Painel'], ['fluxo', 'Fluxo de caixa'], ['lancamentos',
 const ABA_ANTIGA = { resumo: 'fluxo', investimentos: 'painel' }; // links antigos continuam funcionando
 const NEGOCIOS = ['pessoal', 'dj', 'alugueis', 'consultoria', 'argila', 'casa'];
 const CATS_SAI = ['Moradia', 'Contas da casa', 'Mercado', 'Alimentação fora', 'Transporte', 'Combustível', 'Saúde', 'Educação', 'Lazer',
-  'Compras', 'Assinaturas', 'Impostos', 'Tarifas bancárias', 'Faxina e limpeza', 'Condomínio', 'Manutenção', 'Equipamento', 'Outros'];
+  'Compras', 'Assinaturas', 'Impostos', 'Tarifas bancárias', 'Faxina e limpeza', 'Condomínio', 'Manutenção', 'Obra', 'Equipamento', 'Outros'];
 const CATS_ENT = ['Airbnb', 'Reserva direta', 'Cachê DJ', 'Engenharia', 'Salário / pró-labore', 'Rendimentos', 'Reembolso', 'Outras entradas'];
 const INTERNA = 'Transferência entre contas'; // não entra nos totais (fatura paga, PIX entre contas próprias, aplicação)
 const INVEST = 'Investimento';

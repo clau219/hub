@@ -26,7 +26,7 @@ const PROXIMA: Record<string, Record<string, [string, number]>> = {
 const ETAPA_NOME: Record<string, string> = { lead: 'Contato', orcamento: 'Orçamento enviado', negociacao: 'Negociando', fechado: 'Fechado', realizado: 'Realizado', pago: 'Pago' };
 const ABERTAS = ['lead', 'orcamento', 'negociacao', 'fechado', 'realizado'];
 const CATS_SAI = ['Moradia', 'Contas da casa', 'Mercado', 'Alimentação fora', 'Transporte', 'Combustível', 'Saúde', 'Educação', 'Lazer',
-  'Compras', 'Assinaturas', 'Impostos', 'Tarifas bancárias', 'Faxina e limpeza', 'Condomínio', 'Manutenção', 'Equipamento', 'Outros'];
+  'Compras', 'Assinaturas', 'Impostos', 'Tarifas bancárias', 'Faxina e limpeza', 'Condomínio', 'Manutenção', 'Obra', 'Equipamento', 'Outros'];
 const AJUDA = 'Pode me pedir assim (por texto ou áudio):\n• +dj Anabela 15/11 3500\n• recebi 1750 da Anabela no pix\n• gastei 120 de faxina na Frida\n• me lembra de ligar pro contador amanhã às 10h\n• o que tenho hoje? / quem me deve?\n• a Terracota tá livre de 20 a 23/11 pra 4?\n• foto ou PDF de comprovante ou boleto\nDepois de cada registro: "desfaz" ou "o valor é 3800".';
 
 // ---------- quem é o dono ----------

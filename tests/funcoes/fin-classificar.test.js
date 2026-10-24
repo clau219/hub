@@ -140,6 +140,13 @@ describe('IA', () => {
     assert.match(p.messages[0].content, /JOAO BATISTA \| banco diz: Transfers \| conta Nubank/);
     assert.doesNotMatch(p.messages[0].content, /Café/, 'manual não vai para a IA');
   });
+  test('categoria Obra: a IA conhece e pode usar (material de construção, mão de obra)', async () => {
+    novoBanco(DADOS({ fin_tx: [t('mad', -268, 'MAC MADEIRA COMERCIO VAREJISTA', { cat_pluggy: 'Services' })] }));
+    iaResponde({ MADEIRA: { categoria: 'Obra', negocio: 'alugueis', casa: 'QS50', confianca: 'alta' } });
+    await rodar();
+    assert.deepEqual([porId().mad.categoria, porId().mad.casa, porId().mad.revisar], ['Obra', 'QS50', false]);
+    assert.match(IA().chamadas[0].system[0].text, /Obra x Manutenção/);
+  });
   test('muitos lançamentos: lotes de 60; limite por chamada e o que falta', async () => {
     novoBanco(DADOS({ fin_tx: Array.from({ length: 130 }, (_, i) => t('x' + i, -(i + 1), 'Compra ' + i, { data: `2026-${String(1 + (i % 9)).padStart(2, '0')}-10` })) }));
     iaResponde({});
