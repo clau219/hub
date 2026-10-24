@@ -1,7 +1,8 @@
 // Open Finance → Hub, pelo Meu Pluggy (grátis para uso pessoal; a Pluggy atualiza cada banco a cada 24 h).
 //   - Lê as conexões de fin_items (o Item ID vem do dashboard da Pluggy), as contas/cartões e os lançamentos.
-//   - Lançamento novo recebe categoria/negócio/casa pelas regras (fin_regras); os já existentes só têm valor,
-//     descrição e status atualizados, então o que foi ajustado no Hub não se perde.
+//   - Lançamento novo entra pendente e, no fim, é classificado (regras, memória das correções, reservas/gigs e IA;
+//     ver _shared/fin-classificar.ts). Os já existentes só têm valor, descrição e status atualizados, então o que
+//     foi ajustado no Hub não se perde.
 //   - Pendentes que sumiram na Pluggy (viraram outro lançamento ao compensar) são apagados.
 //   - Gasto lançado pelo WhatsApp (id "wa-…", canal do dono) é provisório: o lançamento do banco com o mesmo valor,
 //     até 5 dias de diferença, herda categoria/negócio/casa e a descrição dele, e o provisório sai.
@@ -10,8 +11,9 @@
 // Corpo: {} sincroniza tudo · {item: "<id>", nome?} cadastra uma conexão e sincroniza · {dias: N} relê N dias
 //        · {connect: true} devolve {connectToken} para abrir a janela da Pluggy (Pluggy Connect) no Hub.
 // Chamada pelo cron (x-hub-cron, 2x por dia) e pelo botão da tela Finanças.
-// Segredos: PLUGGY_CLIENT_ID, PLUGGY_CLIENT_SECRET.
+// Segredos: PLUGGY_CLIENT_ID, PLUGGY_CLIENT_SECRET (e ANTHROPIC_API_KEY para a IA da categorização).
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
+import { classificarPendentes } from '../_shared/fin-classificar.ts';
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-hub-cron' };
 const API = 'https://api.pluggy.ai';
@@ -64,8 +66,6 @@ async function sincronizar(sb: any, key: string, so: string[] | null, dias: numb
   const { data: items, error } = await q;
   if (error) throw new Error(error.message);
   if (!items?.length) return { contas: 0, novos: 0, aviso: 'Nenhuma conexão cadastrada.' };
-  const { data: regras } = await sb.from('fin_regras').select('*');
-
   let contas = 0, novos = 0, atualizados = 0, apagados = 0, invest = 0;
   const erros: string[] = [];
   for (const it of items) {
@@ -95,7 +95,7 @@ async function sincronizar(sb: any, key: string, so: string[] | null, dias: numb
           desde = ult?.[0]?.data ? addDays(ult[0].data, -10) : addDays(hojeSp(), -365);
         }
         const txs = await transacoes(key, a.id, desde);
-        const r = await gravar(sb, a, txs, desde, regras || []);
+        const r = await gravar(sb, a, txs, desde);
         novos += r.novos; atualizados += r.atualizados; apagados += r.apagados;
       }
       // Investimentos: falha aqui (produto não liberado no banco) não impede o resto
@@ -107,7 +107,14 @@ async function sincronizar(sb: any, key: string, so: string[] | null, dias: numb
     }
   }
   try { await foto(sb); } catch (e) { erros.push(`foto do dia: ${(e as Error).message}`); }
-  return { contas, novos, atualizados, apagados, invest, ...(erros.length ? { erro: erros.join(' · ') } : {}) };
+  // Categorização dos novos (e de pendentes antigos, até 300 por vez); falha aqui não estraga a leitura
+  let cat: Record<string, unknown> = {};
+  try {
+    const c = await classificarPendentes(sb, { limite: 300 });
+    cat = { classificados: c.classificados, revisar: c.revisar, ...(c.restantes ? { a_classificar: c.restantes } : {}) };
+    if ((c as any).erro_ia) erros.push(`IA da categorização: ${(c as any).erro_ia}`);
+  } catch (e) { erros.push(`categorização: ${(e as Error).message}`); }
+  return { contas, novos, atualizados, apagados, invest, ...cat, ...(erros.length ? { erro: erros.join(' · ') } : {}) };
 }
 
 async function investimentos(sb: any, key: string, item: string) {
@@ -170,7 +177,7 @@ async function foto(sb: any) {
   if (rows.length) await sb.from('fin_invest_hist').upsert(rows, { onConflict: 'invest_id,dia' });
 }
 
-async function gravar(sb: any, conta: any, txs: any[], desde: string, regras: any[]) {
+async function gravar(sb: any, conta: any, txs: any[], desde: string) {
   const ids = txs.map(t => t.id);
   const existentes = new Set<string>();
   for (let i = 0; i < ids.length; i += 200) {
@@ -191,7 +198,7 @@ async function gravar(sb: any, conta: any, txs: any[], desde: string, regras: an
       atualizado_em: agora,
     };
   };
-  const novos = txs.filter(t => !existentes.has(t.id)).map(t => { const b = base(t); return { ...b, ...classificar(b, regras) }; });
+  const novos = txs.filter(t => !existentes.has(t.id)).map(t => ({ ...base(t), manual: false }));
   const casados = await casarProvisorios(sb, novos);
   const velhos = txs.filter(t => existentes.has(t.id)).map(base);
   for (const lote of [novos, velhos]) {
@@ -218,20 +225,11 @@ async function casarProvisorios(sb: any, novos: any[]) {
     const dist = (p: any) => Math.abs(Date.parse(p.data) - Date.parse(n.data)) / 864e5;
     const p = livres.filter(p => Math.round(p.valor * 100) === Math.round(n.valor * 100) && dist(p) <= 5).sort((a, b) => dist(a) - dist(b))[0];
     if (!p) continue;
-    Object.assign(n, { categoria: p.categoria, negocio: p.negocio, casa: p.casa, manual: true, descricao: p.descricao && p.descricao !== n.descricao ? `${p.descricao} · ${n.descricao}` : n.descricao });
+    Object.assign(n, { categoria: p.categoria, negocio: p.negocio, casa: p.casa, manual: true, origem_cat: 'whatsapp', descricao: p.descricao && p.descricao !== n.descricao ? `${p.descricao} · ${n.descricao}` : n.descricao });
     livres.splice(livres.indexOf(p), 1);
     casados.push(p.id);
   }
   return casados;
-}
-
-// Regras do usuário primeiro (a mais longa ganha); depois o padrão do Airbnb
-function classificar(t: any, regras: any[]) {
-  const txt = `${t.descricao} ${t.contraparte || ''}`.toLowerCase();
-  const r = regras.filter(r => r.contem && txt.includes(r.contem.toLowerCase())).sort((a, b) => b.contem.length - a.contem.length)[0];
-  if (r) return { categoria: r.categoria || null, negocio: r.negocio || null, casa: r.casa || null };
-  if (/airbnb/.test(txt) && t.valor > 0) return { categoria: 'Airbnb', negocio: 'alugueis', casa: null };
-  return {};
 }
 
 // /v2/transactions: filtro dateFrom e cursor "after" tirado do link `next`; se a v2 recusar, usa /transactions (páginas)

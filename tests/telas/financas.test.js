@@ -75,8 +75,8 @@ describe('Fluxo de caixa', () => {
     assert.equal($('#fnCatF').value, 'Mercado');
     await ir('fluxo', DADOS());
   });
-  test('aviso de lançamentos sem categoria', () => {
-    assert.match(texto('.fn-aviso'), /3 lançamentos de Outubro 2026 sem categoria escolhida/);
+  test('aviso de lançamentos ainda sem a categorização automática', () => {
+    assert.match(texto('#fnPend'), /^7 lançamentos ainda sem a categorização automática .* Classificar agora$/);
   });
   test('por negócio, com a casa do aluguel', () => {
     const linhas = $$('.fn-neg-tbl tbody tr').map(r => nb(textoSep(r)));
@@ -197,6 +197,78 @@ describe('Contas e conexões', () => {
   });
 });
 const redeBtc = e => /^(bc1|[13])[a-zA-HJ-NP-Z0-9]{25,62}$/.test(e); // mesma regra do Hub para endereço Bitcoin
+
+describe('Categorização automática: revisar, aprender e classificar', () => {
+  const SUGS = [{ categoria: 'Manutenção', negocio: 'alugueis', casa: 'QS40' }, { categoria: 'Faxina e limpeza', negocio: 'alugueis', casa: 'QS40' }];
+  const CAT = () => DADOS({ fin_tx: [
+    tx('jo1', '2026-10-12', -300, { descricao: 'Pix enviado', contraparte: 'JOAO BATISTA', categoria: 'Manutenção', negocio: 'alugueis', casa: 'QS40', origem_cat: 'ia', revisar: true, sugestoes: SUGS, ia_motivo: 'PIX sem pista' }),
+    tx('jo2', '2026-09-20', -250, { descricao: 'PIX ENVIADO JOAO BATISTA', categoria: 'Outros', negocio: 'pessoal', origem_cat: 'ia', ia_motivo: 'palpite' }),
+    tx('jo3', '2026-09-21', 250, { descricao: 'Pix recebido', contraparte: 'JOAO BATISTA', categoria: 'Outras entradas', origem_cat: 'ia' }),
+    tx('jo4', '2026-10-05', -120, { descricao: 'Pix enviado', contraparte: 'JOAO BATISTA', categoria: 'Outros', negocio: 'pessoal', origem_cat: 'ia', revisar: true, sugestoes: [{ categoria: 'Outros', negocio: 'pessoal', casa: null }] }),
+    tx('ub', '2026-10-11', -40, { descricao: 'UBER TRIP', categoria: 'Transporte', negocio: 'pessoal', origem_cat: 'ia', ia_motivo: 'corrida de app' }),
+    tx('rv2', '2026-08-03', -90, { descricao: 'LOJA X', categoria: 'Compras', negocio: 'pessoal', origem_cat: 'ia', revisar: true, sugestoes: [{ categoria: 'Compras', negocio: 'pessoal', casa: null }] }),
+    tx('man', '2026-10-01', -10, { descricao: 'Café', categoria: 'Alimentação fora', manual: true, origem_cat: 'manual' }),
+  ] });
+  before(async () => { await ir('fluxo', CAT()); });
+  test('fluxo avisa o que ficou para revisar no mês; sem pendentes, sem o aviso de classificar', () => {
+    assert.match(texto('.fn-aviso.warn'), /2 lançamentos de Outubro 2026 para revisar: a IA ficou em dúvida/);
+    assert.equal($('#fnPend'), null);
+  });
+  test('fila de revisão: todos os meses, palpite e alternativa em 1 clique; selo e motivo da IA', async () => {
+    await clicar('#fnRevisar');
+    assert.match(textoSep('.fn-revisar-h'), /^Para revisar .* Confirmar os 3 palpites$/);
+    assert.deepEqual($$('tr[data-tx]').map(r => r.dataset.tx), ['jo1', 'rv2'], 'os 2 PIX para o João viram uma linha');
+    assert.match(texto('tr[data-tx=jo1] .fn-desc'), /×2 iguais/);
+    assert.match(texto('#view'), /2 decisões resolvem 3 lançamentos/);
+    assert.deepEqual($$('tr[data-tx=jo1] [data-sug]').map(texto), ['✓ Manutenção · Aluguéis · Casa Azul', 'Faxina e limpeza · Aluguéis · Casa Azul']);
+    assert.match($('tr[data-tx=jo1] td:nth-child(3) span').getAttribute('title'), /sugerido pela IA: PIX sem pista/);
+    await clicar('#fnLimpa');
+    assert.equal(texto('tr[data-tx=ub] .fn-ia'), 'IA');
+  });
+  test('trocar pela alternativa grava como sua e ensina o mesmo recebedor (só no mesmo sentido)', async () => {
+    $('#fnRevisar') || (await ir('fluxo'));
+    await clicar('#fnRevisar');
+    await clicar('tr[data-tx=jo1] [data-sug="jo1|1"]', 10);
+    const t = id => banco().t('fin_tx').find(x => x.id === id);
+    assert.deepEqual([t('jo1').categoria, t('jo1').manual, t('jo1').origem_cat, t('jo1').revisar], ['Faxina e limpeza', true, 'manual', false]);
+    assert.deepEqual([t('jo2').categoria, t('jo2').negocio, t('jo2').casa, t('jo2').origem_cat], ['Faxina e limpeza', 'alugueis', 'QS40', 'memoria'], 'mesmo recebedor, outro texto');
+    assert.equal(t('jo3').categoria, 'Outras entradas', 'entrada do mesmo nome não muda');
+    assert.equal(t('jo4').origem_cat, 'memoria', 'o outro da fila também');
+    assert.equal(texto('#toast'), 'Faxina e limpeza; e mais 2 do mesmo recebedor');
+    assert.deepEqual($$('tr[data-tx]').map(r => r.dataset.tx), ['rv2']);
+  });
+  test('confirmar todos os palpites', async () => {
+    const c = globalThis.confirm; globalThis.confirm = () => true;
+    await ir('fluxo', CAT());
+    await clicar('#fnRevisar');
+    await clicar('#fnConfirmaTodas', 10);
+    globalThis.confirm = c;
+    assert.ok(banco().t('fin_tx').filter(x => ['jo1', 'jo4', 'rv2'].includes(x.id)).every(x => x.manual && !x.revisar));
+    assert.match(texto('#view'), /Nada para revisar/);
+  });
+  test('classificar agora: chama a função em blocos até zerar e resume', async () => {
+    const respostas = [{ classificados: 300, restantes: 5, revisar: 2 }, { classificados: 5, restantes: 0, revisar: 1 }];
+    const dados = CAT(); dados.fin_tx.push(tx('novo1', '2026-10-13', -12, { descricao: 'PADARIA' }));
+    await ir('lancamentos', dados);
+    banco().funcoes['fin-classificar'] = () => respostas.shift();
+    assert.match(texto('#fnPend'), /1 lançamento ainda sem a categorização automática/);
+    await clicar('#fnClassificar', 15);
+    await ate(() => /classificados/.test(texto('#toast')), { msg: 'resumo da classificação' });
+    assert.equal(texto('#toast'), '305 lançamentos classificados; 3 para revisar');
+    assert.deepEqual(banco().invocacoes.filter(i => i.nome === 'fin-classificar').map(i => i.body), [{}, {}]);
+  });
+  test('aba Contas: de onde vieram as categorias e reclassificar tudo', async () => {
+    await ir('contas', CAT());
+    assert.match(nb(textoSep('.fn-origens')), /6 pela IA 1 escolhidos por você/);
+    const c = globalThis.confirm; globalThis.confirm = () => true;
+    banco().invocacoes.length = 0;
+    banco().funcoes['fin-classificar'] = () => ({ classificados: 5, restantes: 0, revisar: 0 });
+    await clicar('#fnRefazer', 15);
+    globalThis.confirm = c;
+    await ate(() => /classificados/.test(texto('#toast')));
+    assert.deepEqual(banco().invocacoes.filter(i => i.nome === 'fin-classificar').map(i => i.body), [{ refazer: true }]);
+  });
+});
 
 describe('Atualizar, privacidade e situações especiais', () => {
   before(() => ir('fluxo', DADOS()));

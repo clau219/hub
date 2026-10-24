@@ -146,8 +146,10 @@ describe('fin-sync: contas e lançamentos', () => {
     assert.deepEqual([t.b1.categoria, t.b1.negocio, t.b1.casa, t.b1.manual, t.b1.descricao], ['Faxina e limpeza', 'alugueis', 'QS39', true, 'Faxina · PIX MARIA']);
     assert.ok(!t['wa-1'], 'o provisório casado sai');
     assert.ok(t['wa-2'], 'mais de 5 dias de diferença: continua provisório');
-    assert.equal(t.b2.categoria ?? null, null);
-    assert.equal(t.b3.categoria ?? null, null, 'entrada não casa com gasto');
+    assert.deepEqual([t.b1.origem_cat, t.b2.manual], ['whatsapp', false]);
+    // sem casar: categoria vem da Pluggy (sem chave da IA neste teste), não da classificação do provisório
+    assert.deepEqual([t.b2.categoria, t.b2.origem_cat], ['Outros', 'pluggy_sem_ia']);
+    assert.deepEqual([t.b3.categoria, t.b3.negocio ?? null], ['Outras entradas', null], 'entrada não casa com gasto');
   });
   test('desde quando: 1 ano na primeira vez; depois 10 dias antes do último; ou N dias pedidos', async () => {
     novoBanco(DADOS());
