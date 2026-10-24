@@ -82,12 +82,35 @@ describe('Fluxo de caixa', () => {
     const linhas = $$('.fn-neg-tbl tbody tr').map(r => nb(textoSep(r)));
     assert.deepEqual(linhas, ['Aluguéis R$ 2.000 R$ 2.000', 'Casa Frida R$ 2.000 R$ 2.000', 'Sem negócio R$ 10.000 R$ 580 R$ 9.420']);
   });
-  test('navegar meses; o próximo não passa do mês atual', async () => {
-    assert.equal($('[data-mes="1"]').disabled, true);
-    await clicar('[data-mes="-1"]');
-    assert.match(texto('.fn-mes'), /Setembro 2026/);
+  test('navegar meses: setas só entre meses com lançamentos, seletor, mês atual, teclado e gráfico clicável', async () => {
+    const prox = () => $('.fn-mes [aria-label="Próximo mês"]'), ant = () => $('.fn-mes [aria-label="Mês anterior"]');
+    const mesSel = () => [...$('#fnMesSel').options].find(o => o.selected)?.value;
+    assert.equal(prox().disabled, true);
+    assert.deepEqual([...$('#fnMesSel').options].map(o => o.textContent), ['Outubro 2026 · 6', 'Setembro 2026 · 1']);
+    await clicar('.fn-mes [aria-label="Mês anterior"]');
+    assert.equal(mesSel(), '2026-09');
+    assert.equal(ant().disabled, true, 'não há lançamentos antes de setembro');
     assert.deepEqual($$('.fn-bar').map(b => nb(textoSep(b))), ['Lazer R$ 300']);
-    await clicar('[data-mes="1"]');
+    assert.match(texto('.fn-mes'), /Mês atual/);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    await esperar(5);
+    assert.equal(mesSel(), '2026-10', 'seta → do teclado');
+    assert.doesNotMatch(texto('.fn-mes'), /Mês atual/);
+    await clicar('.fn-hist-col[data-mes-ir="2026-09"]');
+    assert.equal(mesSel(), '2026-09', 'coluna do gráfico de 6 meses');
+    const s = $('#fnMesSel'); s.value = '2026-10'; s.dispatchEvent(new Event('change'));
+    await esperar(5);
+    assert.equal(mesSel(), '2026-10', 'seletor');
+  });
+  test('parcela futura: dá para ir até o mês dela', async () => {
+    await ir('fluxo', DADOS({ fin_tx: [...DADOS().fin_tx, tx('par', '2026-12-10', -100, { descricao: 'Loja 3/3', parcela: '3/3', categoria: 'Compras' })] }));
+    assert.equal($('.fn-mes [aria-label="Próximo mês"]').disabled, false);
+    assert.match(texto('#fnMesSel'), /Dezembro 2026 \(futuro\) · 1/);
+    await clicar('.fn-mes [aria-label="Próximo mês"]');
+    assert.match(texto('.fn-mes'), /Dezembro 2026/, texto('.fn-mes'));
+    assert.deepEqual($$('.fn-bar').map(b => nb(textoSep(b))), ['Compras R$ 100']);
+    await clicar('.fn-mes [data-mes-ir="2026-10"]');
+    await ir('fluxo', DADOS());
   });
   test('últimos 6 meses', () => {
     assert.equal($$('.fn-hist-col').length, 6);

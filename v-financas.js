@@ -181,7 +181,8 @@ export function render(el) {
 
   el.querySelectorAll('[data-aba]').forEach(b => b.onclick = () => irAba(b.dataset.aba));
   el.querySelector('#fnSync')?.addEventListener('click', () => sincronizar().catch(e => toast(e.message, 5000)));
-  el.querySelectorAll('[data-mes]').forEach(b => b.onclick = () => { mes = mesMais(mes, +b.dataset.mes); render(el); });
+  el.querySelectorAll('[data-mes-ir]').forEach(b => b.onclick = () => irMes(b.dataset.mesIr));
+  el.querySelector('#fnMesSel')?.addEventListener('change', e => irMes(e.target.value));
   el.querySelector('#fnConectar')?.addEventListener('submit', conectarSubmit);
   el.querySelector('#fnConnect')?.addEventListener('click', abrirConnect);
   el.querySelectorAll('[data-cat]').forEach(b => b.onclick = () => { filtro = { ...filtro, cat: b.dataset.cat, revisar: false, negocio: '' }; irAba('lancamentos'); });
@@ -207,6 +208,14 @@ export function render(el) {
 }
 
 function irAba(a) { aba = a; history.replaceState(null, '', '#/financas?' + a); render(viewEl); window.scrollTo(0, 0); }
+// ← → trocam o mês no Fluxo de caixa e em Lançamentos (fora de campos de texto e com o modal fechado)
+document.addEventListener('keydown', e => {
+  if (!naTela() || !['fluxo', 'lancamentos'].includes(aba) || (aba === 'lancamentos' && filtro.revisar)) return;
+  if (!['ArrowLeft', 'ArrowRight'].includes(e.key) || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  if (e.target.closest?.('input, textarea, select') || document.querySelector('dialog[open]')) return;
+  const b = viewEl?.querySelector(`.fn-mes [aria-label="${e.key === 'ArrowLeft' ? 'Mês anterior' : 'Próximo mês'}"]`);
+  if (b && !b.disabled) { e.preventDefault(); b.click(); }
+});
 // O que o Painel precisa desta tela
 const ctx = { catDe: t => catDe(t), rerender: () => viewEl && naTela() && render(viewEl), recarregar: () => carregar(true), irAba: a => irAba(a) };
 
@@ -286,10 +295,25 @@ async function conectarSubmit(ev) {
 function doMes(m = mes) { return D.tx.filter(t => t.data.startsWith(m) && !fora(t)); }
 const soma = a => a.reduce((s, t) => s + Number(t.valor), 0);
 
-function navMes() {
-  return `<div class="fn-mes"><button class="btn" data-mes="-1" aria-label="Mês anterior">‹</button><b>${mesTxt(mes)}</b>
-    <button class="btn" data-mes="1" aria-label="Próximo mês" ${mes >= today().slice(0, 7) ? 'disabled' : ''}>›</button></div>`;
+// Meses com lançamentos (inclusive parcelas futuras) + o atual, do mais novo para o mais antigo
+function mesesComDados() {
+  const n = {};
+  for (const t of D.tx) if (!conta_(t)?.oculta) n[t.data.slice(0, 7)] = (n[t.data.slice(0, 7)] || 0) + 1;
+  const atual = today().slice(0, 7);
+  n[atual] ||= 0;
+  return Object.entries(n).sort((a, b) => b[0].localeCompare(a[0]));
 }
+function navMes() {
+  const ms = mesesComDados(), atual = today().slice(0, 7);
+  if (!ms.some(([m]) => m === mes)) ms.push([mes, 0]), ms.sort((a, b) => b[0].localeCompare(a[0]));
+  const i = ms.findIndex(([m]) => m === mes);
+  return `<div class="fn-mes">
+    <button class="btn" data-mes-ir="${h(ms[i + 1]?.[0] || '')}" aria-label="Mês anterior" title="Mês anterior (←)" ${ms[i + 1] ? '' : 'disabled'}>‹</button>
+    <select id="fnMesSel" aria-label="Escolher o mês">${ms.map(([m, q]) => `<option value="${m}" ${m === mes ? 'selected' : ''}>${mesTxt(m)}${m > atual ? ' (futuro)' : ''}${q ? ` · ${q}` : ''}</option>`).join('')}</select>
+    <button class="btn" data-mes-ir="${h(ms[i - 1]?.[0] || '')}" aria-label="Próximo mês" title="Próximo mês (→)" ${i > 0 ? '' : 'disabled'}>›</button>
+    ${mes !== atual ? `<button class="link-btn" data-mes-ir="${atual}">Mês atual</button>` : ''}</div>`;
+}
+function irMes(m) { if (!m || m === mes) return; mes = m; render(viewEl); }
 
 function resumo() {
   const tx = doMes();
@@ -355,10 +379,10 @@ function historico() {
   const max = Math.max(1, ...vals.flatMap(v => [v.ent, v.sai]));
   if (!vals.some(v => v.ent || v.sai)) return '';
   return `<section class="block"><h2>Últimos 6 meses</h2><div class="fn-hist">${vals.map(v => `
-    <div class="fn-hist-col ${v.m === mes ? 'on' : ''}" title="${mesTxt(v.m)}: entrou ${brl0(v.ent)}, saiu ${brl0(v.sai)}">
+    <button class="fn-hist-col ${v.m === mes ? 'on' : ''}" data-mes-ir="${v.m}" title="${mesTxt(v.m)}: entrou ${brl0(v.ent)}, saiu ${brl0(v.sai)} (abrir o mês)">
       <div class="fn-hist-bars"><i class="e" style="height:${v.ent / max * 100}%"></i><i class="s" style="height:${v.sai / max * 100}%"></i></div>
       <span>${mesNome(+v.m.slice(5) - 1).slice(0, 3)}</span><small class="${v.ent - v.sai >= 0 ? 'fn-pos' : 'fn-neg'}">${brl0(v.ent - v.sai)}</small>
-    </div>`).join('')}</div>
+    </button>`).join('')}</div>
     <p class="muted small"><i class="fn-dot e"></i> entradas <i class="fn-dot s"></i> saídas. Transferências entre suas contas, pagamento de fatura e investimentos não contam.</p>
   </section>`;
 }
