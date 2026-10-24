@@ -2,12 +2,13 @@ import { S, save, del, load } from './store.js';
 import * as db from './db.js';
 import { h, today, fmtDate, mesNome } from './util.js';
 import * as moedaV from './moeda.js';
+import { CONFIG } from './config.js';
 import { modal, toast, confirmInline, closeModal } from './ui.js';
 import {
   M, VELHO_MS, PADRAO, TIPOS, CORRETORAS, LIMITE_ISENCAO, LIMITE_DECLARACAO, FNG_PT,
   atualizar, atualizando, buscar, preco, precoV, reais, brl, compacto, qtd, pct, sparkline, posicoes, calcular,
   paraCsv, interpretarCsv, resolverSimbolos, CSV_COLS, lerNumero, coinLabel,
-  H, STABLES, atualizarSinais, sinaisAtualizando, sinaisVencidos, anotarDominancia, indicadores, progresso,
+  H, STABLES, PERIODOS, historicoPreco, atualizarSinais, sinaisAtualizando, sinaisVencidos, anotarDominancia, indicadores, progresso,
 } from './cripto.js';
 
 let aba = 'mercado';
@@ -18,6 +19,7 @@ let erro = '';
 let snapAt = 0;
 let viewEl = null;
 let sel = null; // coin_id escolhido no quadro: os boxes do topo mostram os detalhes dele
+let periodo = '30'; // período do gráfico de preço (dias da CoinGecko)
 
 const dlg = () => document.getElementById('modal');
 const naTela = () => location.hash.startsWith('#/cripto');
@@ -231,6 +233,12 @@ function bindMercado(el) {
     tr.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(e); } };
   });
   el.querySelector('#crSelX')?.addEventListener('click', () => { sel = null; render(el); });
+  el.querySelectorAll('[data-per]').forEach(b => b.onclick = () => {
+    periodo = b.dataset.per;
+    el.querySelectorAll('[data-per]').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
+    montarGraf(el);
+  });
+  montarGraf(el);
 }
 
 // Detalhes da moeda escolhida (no lugar dos boxes do mercado)
@@ -260,8 +268,141 @@ function detalhe(id, w) {
     ${kpi('RSI de 14 dias', r ?? '—', r != null ? `${r < 30 ? 'sobrevendido (abaixo de 30)' : r > 70 ? 'sobrecomprado (acima de 70)' : 'zona neutra (30 a 70)'}${i.ch30 != null ? ` · 30 dias: ${pct(i.ch30)}` : ''}` : carregando)}
     ${pos ? kpi('Na sua carteira', reais(pos.valor), `${qtd(pos.qtd)} ${h(pos.simbolo)} · médio ${preco(pos.medio)} · ${pct(pos.resPct)}`)
       : kpi('Oferta circulante', curto(c.oferta), c.ofertaMax ? `${num(c.oferta / c.ofertaMax * 100)}% do máximo de ${curto(c.ofertaMax)}` : c.oferta ? 'sem limite máximo definido' : '')}
-  </div>`;
+  </div>
+  <section class="cr-graf" aria-label="Histórico de preço">
+    <div class="cr-graf-head">
+      <div class="seg seg-sm" role="group" aria-label="Período">${PERIODOS.map(([k, l]) => `<button class="${periodo === k ? 'on' : ''}" data-per="${k}" aria-pressed="${periodo === k}">${l}</button>`).join('')}</div>
+      <span class="cr-graf-res small" id="crGrafRes"></span>
+    </div>
+    <div class="cr-graf-area" id="crGrafArea"></div>
+  </section>`;
 }
+
+// ---------- Gráfico de preço da moeda escolhida ----------
+// Desenhado já na largura real do contêiner; passar o mouse (ou o dedo, ou as setas) mostra preço e data de cada ponto.
+const grafDados = new Map(); // `${id}|${dias}|${cur}` -> {pts, aprox} ou {erro, at}
+const grafPedidos = new Set();
+const fmtTempo = (t, dias) => new Intl.DateTimeFormat('pt-BR', { timeZone: CONFIG.TZ,
+  ...(dias === '1' ? { hour: '2-digit', minute: '2-digit' } : dias === '7' ? { weekday: 'short', day: 'numeric' }
+    : ['365', 'max'].includes(dias) ? { month: 'short', year: '2-digit' } : { day: 'numeric', month: 'short' }) }).format(t).replace(/\./g, '').replace(/ de /g, ' ').replace(',', '');
+const fmtDica = (t, dias) => new Intl.DateTimeFormat('pt-BR', { timeZone: CONFIG.TZ, day: 'numeric', month: 'short', year: 'numeric',
+  ...(['1', '7', '30', '90'].includes(dias) ? { hour: '2-digit', minute: '2-digit' } : {}) }).format(t).replace('.', '');
+
+function ticksY(lo, hi, n = 4) {
+  const bruto = (hi - lo) / n, mag = 10 ** Math.floor(Math.log10(bruto || 1));
+  const passo = [1, 2, 2.5, 5, 10].map(k => k * mag).find(k => k >= bruto) || mag;
+  const out = []; for (let v = Math.ceil(lo / passo) * passo; v <= hi; v += passo) out.push(+v.toPrecision(12));
+  return out;
+}
+
+function montarGraf(el) {
+  const box = el.querySelector('#crGrafArea'), res = el.querySelector('#crGrafRes');
+  if (!box || !sel) return;
+  const cur = moedaV.cod().toLowerCase(), id = sel, dias = periodo, key = `${id}|${dias}|${cur}`;
+  let d = grafDados.get(key);
+  // erro ou reserva aproximada: tenta a CoinGecko de novo depois de 1 min; dado bom vale 10 min
+  if (d && Date.now() - d.at > (d.erro || d.aprox ? 60e3 : 10 * 60e3)) { grafDados.delete(key); d = null; }
+  if (!d) {
+    box.innerHTML = '<p class="cr-graf-msg muted">Carregando o histórico…</p>';
+    res.textContent = '';
+    if (!grafPedidos.has(key)) {
+      grafPedidos.add(key);
+      historicoPreco(id, dias, cur).then(v => grafDados.set(key, v)).catch(e => {
+        grafDados.set(key, { erro: e.message, limite: e.limite, at: Date.now() });
+        // limite da CoinGecko: tenta sozinho de novo em 20 s, se a moeda e o período ainda estiverem na tela
+        if (e.limite) setTimeout(() => { if (grafDados.get(key)?.erro) grafDados.delete(key); if (viewEl && naTela() && sel === id && periodo === dias) montarGraf(viewEl); }, 20000);
+      })
+        .finally(() => { grafPedidos.delete(key); if (viewEl && naTela() && sel === id && periodo === dias) montarGraf(viewEl); });
+    }
+    return;
+  }
+  if (d.erro || d.pts.length < 2) {
+    box.innerHTML = `<p class="cr-graf-msg muted">${h(d.erro || 'Sem histórico de preço para esta moeda.')}${d.limite ? ' Tentando de novo em instantes…' : ''}${d.erro ? ' <button class="link-btn" id="crGrafDe">Tentar agora</button>' : ''}</p>`;
+    res.textContent = '';
+    box.querySelector('#crGrafDe')?.addEventListener('click', () => { grafDados.delete(key); montarGraf(el); });
+    return;
+  }
+  desenharGraf(box, res, d, dias, cur.toUpperCase());
+}
+
+function desenharGraf(box, res, d, dias, CUR) {
+  const pts = d.pts, n = pts.length;
+  const vals = pts.map(p => p[1]), ini = vals[0], fim = vals[n - 1];
+  let iMin = 0, iMax = 0; vals.forEach((v, i) => { if (v < vals[iMin]) iMin = i; if (v > vals[iMax]) iMax = i; });
+  // Preço médio da carteira como linha de referência (convertido pelo dólar de hoje quando em US$)
+  const pos = posicoes(S.crypto_tx).ativos.find(p => p.coin_id === sel);
+  const medio = pos?.medio ? (CUR === 'USD' ? (M.dolar ? pos.medio / M.dolar : null) : pos.medio) : null;
+  let lo = vals[iMin], hi = vals[iMax];
+  const pad = (hi - lo) * .08 || hi * .02 || 1;
+  lo -= pad; hi += pad;
+  const medioDentro = medio != null && medio >= lo && medio <= hi;
+  const fmt = v => preco(v, CUR);
+  const ticks = ticksY(lo, hi);
+  const W = Math.max(280, Math.floor(box.clientWidth || 640)), H = W < 500 ? 220 : 270;
+  const m = { t: 12, r: 10, b: 26, l: Math.max(...ticks.map(t => fmt(t).length)) * 6.6 + 14 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b, t0 = pts[0][0], t1 = pts[n - 1][0];
+  const X = t => m.l + (t - t0) / (t1 - t0 || 1) * iw;
+  const Y = v => m.t + (1 - (v - lo) / (hi - lo)) * ih;
+  const sobe = fim >= ini, cor = sobe ? 'var(--up)' : 'var(--down)';
+  const linha = pts.map(([t, v], i) => `${i ? 'L' : 'M'}${X(t).toFixed(1)},${Y(v).toFixed(1)}`).join('');
+  const nx = Math.max(2, Math.min(6, Math.floor(iw / 95)));
+  const marcasX = Array.from({ length: nx }, (_, k) => t0 + (t1 - t0) * k / (nx - 1));
+  const varPct = (fim / ini - 1) * 100;
+
+  res.innerHTML = `${pct(varPct)} ${dias === 'max' ? 'desde o início' : `em ${PERIODOS.find(p => p[0] === dias)[1].replace('d', ' dias').replace('24h', '24 horas')}`}
+    <span class="muted">· mín. ${fmt(vals[iMin])} · máx. ${fmt(vals[iMax])}${medio != null ? ` · seu preço médio ${CUR === 'USD' ? '≈ ' : ''}${fmt(medio)}${medioDentro ? '' : medio > hi ? ' (acima do gráfico)' : ' (abaixo do gráfico)'}` : ''}${d.aprox ? ' · aproximado: CoinGecko indisponível, usando o histórico diário' : ''}</span>`;
+  box.innerHTML = `<svg class="cr-graf-svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img"
+      aria-label="Preço de ${h(sel)} de ${fmtDica(t0, dias)} a ${fmtDica(t1, dias)}: de ${fmt(ini)} para ${fmt(fim)} (${pct(varPct, false)})">
+    ${ticks.map(t => `<line class="fg-grade" x1="${m.l}" x2="${W - m.r}" y1="${Y(t).toFixed(1)}" y2="${Y(t).toFixed(1)}"/><text class="fg-eixo" x="${m.l - 8}" y="${(Y(t) + 4).toFixed(1)}" text-anchor="end">${h(fmt(t))}</text>`).join('')}
+    ${marcasX.map((t, k) => `<text class="fg-eixo" x="${X(t).toFixed(1)}" y="${H - 6}" text-anchor="${k === 0 ? 'start' : k === nx - 1 ? 'end' : 'middle'}">${h(fmtTempo(t, dias))}</text>`).join('')}
+    <path d="${linha}L${X(t1).toFixed(1)},${m.t + ih}L${m.l},${m.t + ih}Z" fill="${cor}" opacity=".1"/>
+    <path d="${linha}" fill="none" stroke="${cor}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    ${medioDentro ? `<line class="cr-graf-medio" x1="${m.l}" x2="${W - m.r}" y1="${Y(medio).toFixed(1)}" y2="${Y(medio).toFixed(1)}"/>
+      <text class="cr-graf-medio-t" x="${W - m.r - 4}" y="${(Y(medio) - 5).toFixed(1)}" text-anchor="end">seu preço médio</text>` : ''}
+    <g class="cr-graf-mira" hidden><line x1="0" x2="0" y1="${m.t}" y2="${m.t + ih}"/><circle r="5" fill="${cor}"/></g>
+    <rect class="cr-graf-hit" x="${m.l}" y="${m.t}" width="${iw}" height="${ih}" fill="transparent" tabindex="0"
+      aria-label="Percorrer o histórico: use as setas"/>
+  </svg><div class="cr-graf-tip" hidden></div>`;
+
+  const svg = box.querySelector('svg'), mira = svg.querySelector('.cr-graf-mira'), tip = box.querySelector('.cr-graf-tip'), hit = svg.querySelector('.cr-graf-hit');
+  let atual = -1;
+  const mostrar = i => {
+    atual = i = Math.max(0, Math.min(n - 1, i));
+    const [t, v] = pts[i], x = X(t), y = Y(v);
+    mira.removeAttribute('hidden'); // em SVG, .hidden não existe: mexe no atributo
+    mira.querySelector('line').setAttribute('x1', x); mira.querySelector('line').setAttribute('x2', x);
+    mira.querySelector('circle').setAttribute('cx', x); mira.querySelector('circle').setAttribute('cy', y);
+    const dif = medio ? (v / medio - 1) * 100 : null;
+    tip.innerHTML = `<b>${fmt(v)}</b><span>${h(fmtDica(t, dias))}</span><span>${pct((v / ini - 1) * 100)} desde o início do período</span>${dif != null ? `<span>${pct(dif)} sobre o seu preço médio</span>` : ''}`;
+    tip.hidden = false;
+    const esc = box.clientWidth / W; // o SVG ocupa a largura do contêiner
+    const tw = tip.offsetWidth;
+    // ao lado da linha vertical (esquerda na metade direita), na altura do ponto, sem cobrir o ponto
+    const px = x * esc, lado = px > box.clientWidth / 2 ? px - tw - 14 : px + 14;
+    tip.style.left = Math.min(Math.max(lado, 0), box.clientWidth - tw) + 'px';
+    tip.style.top = Math.min(Math.max(0, y * esc - tip.offsetHeight / 2), (m.t + ih) * esc - tip.offsetHeight) + 'px';
+  };
+  const esconder = () => { mira.setAttribute('hidden', ''); tip.hidden = true; atual = -1; };
+  // ponto mais perto do mouse (busca binária no tempo)
+  const perto = clientX => {
+    const r = svg.getBoundingClientRect(), t = t0 + ((clientX - r.left) * W / r.width - m.l) / iw * (t1 - t0);
+    let a = 0, b = n - 1;
+    while (b - a > 1) { const c = (a + b) >> 1; if (pts[c][0] < t) a = c; else b = c; }
+    return t - pts[a][0] < pts[b][0] - t ? a : b;
+  };
+  hit.onpointermove = e => mostrar(perto(e.clientX));
+  hit.onpointerdown = e => mostrar(perto(e.clientX));
+  hit.onpointerleave = e => { if (e.pointerType === 'mouse') esconder(); };
+  hit.onblur = esconder;
+  hit.onkeydown = e => {
+    const passo = e.shiftKey ? Math.ceil(n / 20) : 1;
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); mostrar((atual < 0 ? n - 1 : atual) + (e.key === 'ArrowLeft' ? -passo : passo)); }
+    else if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); mostrar(e.key === 'Home' ? 0 : n - 1); }
+    else if (e.key === 'Escape') esconder();
+  };
+}
+let grafTm = null;
+window.addEventListener('resize', () => { clearTimeout(grafTm); grafTm = setTimeout(() => viewEl?.isConnected && naTela() && montarGraf(viewEl), 150); });
 
 // Arrastar pela alça (mouse e toque); salva a nova ordem ao soltar
 function arrastar(ev, handle) {

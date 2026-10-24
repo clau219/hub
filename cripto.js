@@ -165,6 +165,32 @@ export function atualizarSinais(ids, aoAvancar) {
   return filaH;
 }
 
+// Gráfico de preço da moeda escolhida no quadro: uma consulta por período/moeda, guardada 10 min em memória.
+// Se a CoinGecko recusar (limite), usa o histórico diário de 1 ano dos Sinais e avisa que é aproximado.
+export const PERIODOS = [['1', '24h'], ['7', '7d'], ['30', '30d'], ['90', '90d'], ['365', '1 ano'], ['max', 'Tudo']];
+const GRAF = new Map();
+export async function historicoPreco(id, dias, cur = 'usd') {
+  const k = `${id}|${dias}|${cur}`, c = GRAF.get(k);
+  if (c && Date.now() - c.at < 10 * 60e3) return c;
+  let r;
+  try { r = await fetch(`${CG}/coins/${encodeURIComponent(id)}/market_chart?vs_currency=${cur}&days=${dias}`); }
+  catch { r = { status: 429 }; } // o 429 da CoinGecko chega como falha de rede (sem CORS)
+  if (r.ok) {
+    const d = await r.json();
+    const v = { at: Date.now(), pts: (d.prices || []).filter(p => p[1] != null).map(([t, p]) => [t, +p]) };
+    GRAF.set(k, v);
+    return v;
+  }
+  const hist = H.coins[id]?.p || [];
+  const taxa = cur === 'brl' ? M.dolar : 1;
+  if (hist.length > 1 && !['1', '7'].includes(dias) && taxa) {
+    const n = Math.min(hist.length, dias === 'max' ? hist.length : +dias + 1), fim = H.coins[id].at;
+    return { at: Date.now(), aprox: true, pts: hist.slice(-n).map((p, i, a) => [fim - (a.length - 1 - i) * 864e5, p * taxa]) };
+  }
+  if (r.status === 429) throw Object.assign(new Error('A CoinGecko limitou as consultas por um instante.'), { limite: true });
+  throw new Error(`Falha ao buscar o histórico (${r.status})`);
+}
+
 // Dominância do BTC: guarda um valor por dia para mostrar a tendência
 export function anotarDominancia(dia, v) {
   if (v == null || H.dom[dia] === +v.toFixed(2)) return;

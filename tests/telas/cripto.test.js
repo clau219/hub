@@ -107,6 +107,39 @@ describe('Mercado', () => {
     await clicar('#crSelX');
     assert.equal($('.cr-sel'), null);
   });
+  test('detalhe traz o gráfico de preço: resumo, dica ao percorrer e troca de período', async () => {
+    const T = Date.parse('2026-10-19T00:00:00Z');
+    simular(/ethereum\/market_chart\?vs_currency=brl&days=30$/, { prices: serie(31, i => [T - (30 - i) * 864e5, 20000 + i * 100]) });
+    simular(/ethereum\/market_chart\?vs_currency=brl&days=7$/, { prices: serie(8, i => [T - (7 - i) * 864e5, 25000 - i * 100]) });
+    await clicar('tr[data-coin=ethereum]');
+    await ate(() => $('.cr-graf-hit'), { msg: 'gráfico desenhado' });
+    assert.match(nb(texto('#crGrafRes')), /^\+15,00% em 30 dias · mín\. R\$ 20\.000 · máx\. R\$ 23\.000 · seu preço médio R\$ 15\.005 \(abaixo do gráfico\)$/);
+    assert.equal($('.cr-graf [data-per="30"]').classList.contains('on'), true);
+    // percorrer pelo teclado (o mouse usa o mesmo caminho): início, um passo à direita, fim
+    const hit = $('.cr-graf-hit');
+    hit.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+    assert.match(nb(textoSep('.cr-graf-tip')), /^R\$ 20\.000 .* 0,00% desde o início do período \+33,29% sobre o seu preço médio$/);
+    assert.equal($('.cr-graf-mira').hasAttribute('hidden'), false, 'linha vertical e ponto aparecem');
+    hit.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    assert.match(nb(texto('.cr-graf-tip')), /^R\$ 20\.100/);
+    hit.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+    assert.match(nb(textoSep('.cr-graf-tip')), /^R\$ 23\.000 .*\+15,00% desde o início/);
+    hit.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    assert.equal($('.cr-graf-mira').hasAttribute('hidden'), true);
+    // outro período: nova consulta à CoinGecko
+    await clicar('.cr-graf [data-per="7"]');
+    await ate(() => /em 7 dias/.test(texto('#crGrafRes')), { msg: 'período de 7 dias' });
+    assert.match(nb(texto('#crGrafRes')), /^-2,80% em 7 dias · mín\. R\$ 24\.300 · máx\. R\$ 25\.000/);
+    // CoinGecko no limite: 90 dias sai do histórico diário dos Sinais (aproximado); 24h não tem reserva e avisa
+    simular(/ethereum\/market_chart/, { status: 429 });
+    await clicar('.cr-graf [data-per="90"]');
+    await ate(() => /aproximado/.test(texto('#crGrafRes')), { msg: 'reserva do histórico diário' });
+    assert.ok($('.cr-graf-hit'));
+    await clicar('.cr-graf [data-per="1"]');
+    await ate(() => /limitou/.test(texto('#crGrafArea')), { msg: 'aviso do limite' });
+    assert.match(texto('#crGrafArea'), /Tentando de novo em instantes… Tentar agora/);
+    await clicar('#crSelX');
+  });
   test('"+ Carteira" abre o lançamento com a moeda e a cotação atual', async () => {
     await clicar('[data-buy=ethereum]');
     assert.equal(texto('#modalTitle'), 'Novo lançamento');
