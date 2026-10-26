@@ -1,0 +1,102 @@
+/* Hub — visual "vidro" (glassmorphism): fundo com manchas de cor, painéis translúcidos com desfoque.
+   Carregado depois do app.css: só troca tokens e acrescenta o efeito de vidro. */
+:root {
+  --bg: #eef3f4;
+  --surface: rgba(255, 255, 255, .42);
+  --raised: rgba(255, 255, 255, .78);
+  --sunk: rgba(255, 255, 255, .22);
+  --hover: rgba(255, 255, 255, .7);
+  --line: rgba(255, 255, 255, .7);
+  --line-2: rgba(17, 28, 30, .12);
+  --brand-soft: rgba(13, 107, 99, .13);
+  --late-bg: rgba(209, 54, 47, .1);
+  --r-s: 10px;
+  --r-m: 16px;
+  --r-l: 22px;
+  --glass-blur: blur(22px) saturate(1.7);
+  --glass-edge: inset 0 1px 0 rgba(255, 255, 255, .85), inset 0 0 0 1px rgba(255, 255, 255, .25);
+  --shadow-sm: 0 1px 2px rgba(31, 60, 70, .06), 0 6px 20px -10px rgba(31, 60, 70, .22);
+  --shadow: 0 2px 4px rgba(31, 60, 70, .05), 0 12px 32px -12px rgba(31, 60, 70, .28);
+  --shadow-lg: 0 30px 80px -20px rgba(31, 60, 70, .45);
+  --glass-bg:
+    radial-gradient(42vw 42vw at 8% 12%, rgba(64, 200, 182, .75), transparent 70%),
+    radial-gradient(38vw 38vw at 88% 6%, rgba(150, 118, 245, .6), transparent 70%),
+    radial-gradient(46vw 40vw at 78% 92%, rgba(96, 170, 255, .62), transparent 70%),
+    radial-gradient(34vw 34vw at 22% 96%, rgba(250, 196, 100, .65), transparent 70%),
+    linear-gradient(160deg, #f3f7f8, #e8eff2);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #071114; --surface: rgba(255, 255, 255, .06); --raised: rgba(22, 34, 38, .82); --sunk: rgba(0, 0, 0, .22); --hover: rgba(255, 255, 255, .1);
+    --line: rgba(255, 255, 255, .1); --line-2: rgba(255, 255, 255, .16); --brand-soft: rgba(79, 199, 184, .16); --late-bg: rgba(255, 125, 115, .12);
+    --glass-edge: inset 0 1px 0 rgba(255, 255, 255, .12), inset 0 0 0 1px rgba(255, 255, 255, .04);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px -12px rgba(0, 0, 0, .6);
+    --shadow: 0 2px 4px rgba(0, 0, 0, .3), 0 16px 40px -14px rgba(0, 0, 0, .7);
+    --glass-bg:
+      radial-gradient(42vw 42vw at 8% 12%, rgba(32, 150, 136, .45), transparent 70%),
+      radial-gradient(38vw 38vw at 88% 6%, rgba(109, 63, 209, .38), transparent 70%),
+      radial-gradient(46vw 40vw at 78% 92%, rgba(36, 87, 197, .38), transparent 70%),
+      radial-gradient(34vw 34vw at 22% 96%, rgba(180, 96, 10, .3), transparent 70%),
+      linear-gradient(160deg, #081316, #050c0e);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #071114; --surface: rgba(255, 255, 255, .06); --raised: rgba(22, 34, 38, .82); --sunk: rgba(0, 0, 0, .22); --hover: rgba(255, 255, 255, .1);
+  --line: rgba(255, 255, 255, .1); --line-2: rgba(255, 255, 255, .16); --brand-soft: rgba(79, 199, 184, .16); --late-bg: rgba(255, 125, 115, .12);
+  --glass-edge: inset 0 1px 0 rgba(255, 255, 255, .12), inset 0 0 0 1px rgba(255, 255, 255, .04);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px -12px rgba(0, 0, 0, .6);
+  --shadow: 0 2px 4px rgba(0, 0, 0, .3), 0 16px 40px -14px rgba(0, 0, 0, .7);
+  --glass-bg:
+    radial-gradient(42vw 42vw at 8% 12%, rgba(32, 150, 136, .45), transparent 70%),
+    radial-gradient(38vw 38vw at 88% 6%, rgba(109, 63, 209, .38), transparent 70%),
+    radial-gradient(46vw 40vw at 78% 92%, rgba(36, 87, 197, .38), transparent 70%),
+    radial-gradient(34vw 34vw at 22% 96%, rgba(180, 96, 10, .3), transparent 70%),
+    linear-gradient(160deg, #081316, #050c0e);
+}
+
+/* Fundo com as manchas de cor, parado enquanto a página rola */
+body { background: var(--glass-bg) fixed; background-color: var(--bg); }
+
+/* Painéis de vidro */
+.side, .card, .list, .stat, .ribbon, .block.warn, .occ, .pipe-sum, .col, .table, .gantt, .hb-grid, .kpi,
+.btn:not(.primary), .icon-btn, .capture input, .seg, .chip, .chip-static, .search, .tabbar, .day-panel,
+.sg-card, .sg-help, .sd-card, .sd-in, .fn-card, .fn-cl, .alloc, .lc, .cr-graf, .wz-col-conversa, .login-box, .md, .mh {
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+.card, .list, .stat, .ribbon, .block.warn, .occ, .pipe-sum, .table, .gantt, .hb-grid, .kpi, .day-panel,
+.sg-card, .sd-card, .fn-card, .fn-cl, .alloc, .lc, .cr-graf, .wz-col-conversa {
+  box-shadow: var(--glass-edge), var(--shadow-sm);
+}
+.card:hover { box-shadow: var(--glass-edge), var(--shadow); }
+
+/* Barra lateral e topo: vidro mais claro, sem linha dura */
+.side { background: color-mix(in srgb, var(--surface) 70%, transparent); border-right-color: var(--line); }
+.top { background: color-mix(in srgb, var(--surface) 55%, transparent); border-bottom-color: var(--line); }
+.side a.on { background: var(--raised); box-shadow: var(--glass-edge), var(--shadow-sm); }
+
+/* Colunas do pipeline: vidro mais fundo, cartões por cima */
+.col { background: var(--sunk); }
+
+/* Botão principal: verde com brilho de vidro */
+.btn.primary {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--brand-2) 75%, #fff), var(--brand));
+  border-color: color-mix(in srgb, var(--brand) 70%, #fff);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), 0 10px 24px -10px color-mix(in srgb, var(--brand) 85%, transparent);
+}
+
+/* Linhas dentro das listas ficam suaves */
+.row + .row, .table td { border-color: color-mix(in srgb, var(--line-2) 70%, transparent); }
+
+/* Janelas: vidro mais opaco para ler bem, fundo desfocado atrás */
+.modal, .pal, .sheet { background: var(--raised); -webkit-backdrop-filter: blur(28px) saturate(1.6); backdrop-filter: blur(28px) saturate(1.6); box-shadow: var(--glass-edge), var(--shadow-lg); }
+.modal::backdrop, .pal::backdrop, .sheet::backdrop { background: rgba(10, 20, 24, .25); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+
+/* Celular: barra inferior flutuante de vidro */
+.tabbar { background: color-mix(in srgb, var(--raised) 70%, transparent); box-shadow: var(--glass-edge), var(--shadow); }
+
+/* Quem prefere menos efeito (acessibilidade) recebe painéis sólidos */
+@media (prefers-reduced-transparency: reduce) {
+  :root { --surface: #ffffff; --sunk: #edf1f0; --raised: #ffffff; }
+  body { background: var(--bg); }
+}
