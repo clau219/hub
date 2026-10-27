@@ -9,7 +9,8 @@ let offset = 0;
 export function render(el) {
   const hoje = today();
   const ini = addDays(hoje, offset);
-  const dias = Array.from({ length: 35 }, (_, i) => addDays(ini, i));
+  // a janela vai de `ini` até pelo menos 1 ano depois de hoje; o resto se vê rolando o Gantt para o lado
+  const dias = Array.from({ length: Math.max(366, offset + 366) - offset }, (_, i) => addDays(ini, i));
   const fut = S.bookings.filter(b => b.checkout >= hoje && b.status !== 'cancelada').sort((a, b) => a.checkin.localeCompare(b.checkin));
   const mesAtual = hoje.slice(0, 7);
   const doMes = S.bookings.filter(b => b.status === 'confirmada' && b.checkin.slice(0, 7) === mesAtual);
@@ -24,7 +25,7 @@ export function render(el) {
     <button class="btn primary" id="bkNew">Nova reserva</button>
   </div>
   <div class="gantt" style="--n:${dias.length}">
-    <div class="g-row g-head"><span></span>${dias.map(d => `<span class="${d === hoje ? 'today' : ''} ${['sáb', 'dom'].includes(weekdayShort(d)) ? 'we' : ''}">${weekdayShort(d)[0]}<b>${+d.slice(8)}</b></span>`).join('')}</div>
+    <div class="g-row g-head"><span></span>${dias.map(d => `<span class="${d === hoje ? 'today' : ''} ${['sáb', 'dom'].includes(weekdayShort(d)) ? 'we' : ''}"${d.endsWith('-01') || d === dias[0] ? ` data-m="${h(fmtDate(d).split(' ').slice(1).join(' '))}"` : ''}>${weekdayShort(d)[0]}<b>${+d.slice(8)}</b></span>`).join('')}</div>
     ${S.properties.map(p => {
       const bars = S.bookings.filter(b => b.property_id === p.id && b.status !== 'cancelada' && b.checkout > dias[0] && b.checkin <= dias.at(-1));
       return `<div class="g-row"><span class="g-name"><b>${h(p.nome)}</b><small>${h(p.id)}</small></span>

@@ -51,6 +51,15 @@ describe('Gantt e tabela', () => {
     await clicar('[data-o="0"]');
     assert.equal(texto($$('.g-head span')[1]), 's19');
   });
+  test('o Gantt rola até pelo menos 1 ano à frente, com o nome de cada mês', async () => {
+    const meses = () => $$('.g-head span[data-m]').map(s => s.dataset.m);
+    assert.equal($$('.g-head span').length - 1, 366);
+    assert.deepEqual(meses().slice(0, 3), ['out', 'nov', 'dez']);
+    assert.deepEqual(meses().slice(-2), ['set 27', 'out 27']);
+    await clicar('[data-o="-7"]');
+    assert.equal($$('.g-head span').length - 1, 373); // voltar uma semana não encurta o fim
+    await clicar('[data-o="0"]');
+  });
   test('clicar na barra ou na linha abre a reserva', async () => {
     await clicar('.bar[data-bk=b2]');
     assert.equal($('#modal [name=hospede]').value, 'Bia');

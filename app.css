@@ -309,10 +309,14 @@ svg.ico { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColo
 
 /* ---------- Aluguéis (gantt) ---------- */
 .gantt { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-l); padding: 14px 16px; margin-bottom: 28px; overflow-x: auto; box-shadow: var(--shadow-sm); }
-.g-row { display: grid; grid-template-columns: 120px minmax(700px, 1fr); align-items: center; }
+.g-row { display: grid; grid-template-columns: 120px calc(var(--n) * 26px); width: max-content; align-items: center; }
 .g-row + .g-row { margin-top: 6px; }
-.g-head { grid-template-columns: 120px repeat(var(--n), minmax(20px, 1fr)); min-width: 820px; }
-.g-head span { font-size: 11px; color: var(--muted); text-align: center; line-height: 1.1; }
+.g-head { grid-template-columns: 120px repeat(var(--n), 26px); padding-top: 16px; }
+.g-head span { position: relative; font-size: 11px; color: var(--muted); text-align: center; line-height: 1.1; }
+.g-head span[data-m]::before { content: attr(data-m); position: absolute; left: 2px; bottom: 100%; margin-bottom: 3px; font-size: 11px; font-weight: 600; color: var(--ink); white-space: nowrap; text-transform: capitalize; }
+.g-head > span:first-child, .g-name { position: sticky; left: -16px; z-index: 2; align-self: stretch; margin-left: -16px; padding-left: 16px; background: linear-gradient(var(--surface), var(--surface)), var(--bg); }
+.g-head > span:first-child { margin-top: -16px; }
+.g-name { display: flex; flex-direction: column; justify-content: center; }
 .g-head span b { display: block; font-size: 12px; color: var(--ink); }
 .g-head .we b { color: var(--late); }
 .g-head .today b { background: var(--brand); color: var(--on-brand); border-radius: 999px; margin: 0 2px; }
