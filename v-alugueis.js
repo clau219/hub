@@ -4,13 +4,13 @@ import { bookingForm, modal, toast } from './ui.js';
 import * as db from './db.js';
 import { progresso, acompanhada, prazo } from './hospedagem.js';
 
-let offset = 0;
+const ATRAS = 30; // dias passados no começo do Gantt
+let rolagem = null; // posição do deslizador, mantida quando a tela redesenha
 
 export function render(el) {
   const hoje = today();
-  const ini = addDays(hoje, offset);
-  // a janela vai de `ini` até pelo menos 1 ano depois de hoje; o resto se vê rolando o Gantt para o lado
-  const dias = Array.from({ length: Math.max(366, offset + 366) - offset }, (_, i) => addDays(ini, i));
+  // de 30 dias atrás até 1 ano depois de hoje; navega-se pelo deslizador horizontal do Gantt
+  const dias = Array.from({ length: ATRAS + 366 }, (_, i) => addDays(hoje, i - ATRAS));
   const fut = S.bookings.filter(b => b.checkout >= hoje && b.status !== 'cancelada').sort((a, b) => a.checkin.localeCompare(b.checkin));
   const mesAtual = hoje.slice(0, 7);
   const doMes = S.bookings.filter(b => b.status === 'confirmada' && b.checkin.slice(0, 7) === mesAtual);
@@ -20,12 +20,11 @@ export function render(el) {
   el.innerHTML = `
   <div class="view-head">
     <h1>Aluguéis</h1>
-    <div class="seg"><button data-o="-7" aria-label="Semana anterior">‹</button><button data-o="0">Hoje</button><button data-o="7" aria-label="Próxima semana">›</button></div>
     <button class="btn" id="abQuote">Consultar Airbnb</button>
     <button class="btn primary" id="bkNew">Nova reserva</button>
   </div>
   <div class="gantt" style="--n:${dias.length}">
-    <div class="g-row g-head"><span></span>${dias.map(d => `<span class="${d === hoje ? 'today' : ''} ${['sáb', 'dom'].includes(weekdayShort(d)) ? 'we' : ''}"${d.endsWith('-01') || d === dias[0] ? ` data-m="${h(fmtDate(d).split(' ').slice(1).join(' '))}"` : ''}>${weekdayShort(d)[0]}<b>${+d.slice(8)}</b></span>`).join('')}</div>
+    <div class="g-row g-head"><span></span>${dias.map(d => `<span class="${d === hoje ? 'today' : ''} ${['sáb', 'dom'].includes(weekdayShort(d)) ? 'we' : ''}"${d.endsWith('-01') || d === dias[0] || d === hoje ? ` data-m="${h(fmtDate(d).split(' ').slice(1).join(' '))}"` : ''}>${weekdayShort(d)[0]}<b>${+d.slice(8)}</b></span>`).join('')}</div>
     ${S.properties.map(p => {
       const bars = S.bookings.filter(b => b.property_id === p.id && b.status !== 'cancelada' && b.checkout > dias[0] && b.checkin <= dias.at(-1));
       return `<div class="g-row"><span class="g-name"><b>${h(p.nome)}</b><small>${h(p.id)}</small></span>
@@ -57,7 +56,9 @@ export function render(el) {
       </dl>
     </aside>
   </div>`;
-  el.querySelectorAll('[data-o]').forEach(b => b.onclick = () => { offset = +b.dataset.o ? offset + +b.dataset.o : 0; render(el); });
+  const g = el.querySelector('.gantt');
+  g.scrollLeft = rolagem ?? (ATRAS - 3) * 26; // abre com 3 dias antes de hoje à vista (26px por dia, ver .g-row no app.css)
+  g.onscroll = () => { rolagem = g.scrollLeft; };
   el.querySelector('#bkNew').onclick = () => bookingForm();
   el.querySelector('#abQuote').onclick = () => consultaAirbnb();
   el.querySelectorAll('[data-bk]').forEach(b => b.onclick = () => bookingForm(S.bookings.find(x => x.id === b.dataset.bk)));

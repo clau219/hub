@@ -27,7 +27,7 @@ beforeEach(() => { $('#modal').open && $('#modal').close(); });
 describe('Gantt e tabela', () => {
   test('barras por casa: Airbnb, direta e bloqueio; cancelada não aparece', () => {
     const barras = $$('.bar').map(b => [b.dataset.bk, b.className.replace('bar ', ''), b.style.getPropertyValue('--s'), b.style.getPropertyValue('--e')]);
-    assert.deepEqual(barras, [['b1', 'air', '1.5', '4.5'], ['b2', 'dir', '6.5', '11.5'], ['b3', 'blk', '13.5', '16.5']]);
+    assert.deepEqual(barras, [['b1', 'air', '31.5', '34.5'], ['b2', 'dir', '36.5', '41.5'], ['b3', 'blk', '43.5', '46.5']]);
     assert.equal(texto('.bar[data-bk=b3]'), 'Bloqueado');
   });
   test('próximas reservas com noites, origem e sequência', () => {
@@ -45,20 +45,23 @@ describe('Gantt e tabela', () => {
     assert.equal(dl[2], 'Casa Azul, próximos 30 dias17%5 noites');
     assert.equal(dl[3], 'Casa Terracota, próximos 30 dias0%0 noites');
   });
-  test('navegar semanas move a janela; "Hoje" volta', async () => {
-    await clicar('[data-o="7"]');
-    assert.equal(texto($$('.g-head span')[1]), 's26');
-    await clicar('[data-o="0"]');
-    assert.equal(texto($$('.g-head span')[1]), 's19');
+  test('o Gantt vai de 30 dias atrás até 1 ano à frente, com o nome de cada mês', () => {
+    const dias = $$('.g-head span').slice(1);
+    assert.equal(dias.length, 30 + 366);
+    assert.equal(texto(dias[0]), 's19'); // 19/09
+    assert.equal(texto(dias.at(-1)), 't19'); // 19/10/2027
+    assert.ok(dias[30].classList.contains('today'));
+    const meses = $$('.g-head span[data-m]').map(s => s.dataset.m);
+    assert.deepEqual(meses.slice(0, 4), ['set', 'out', 'out', 'nov']); // o de hoje também tem rótulo
+    assert.deepEqual(meses.slice(-2), ['set 27', 'out 27']);
   });
-  test('o Gantt rola até pelo menos 1 ano à frente, com o nome de cada mês', async () => {
-    const meses = () => $$('.g-head span[data-m]').map(s => s.dataset.m);
-    assert.equal($$('.g-head span').length - 1, 366);
-    assert.deepEqual(meses().slice(0, 3), ['out', 'nov', 'dez']);
-    assert.deepEqual(meses().slice(-2), ['set 27', 'out 27']);
-    await clicar('[data-o="-7"]');
-    assert.equal($$('.g-head span').length - 1, 373); // voltar uma semana não encurta o fim
-    await clicar('[data-o="0"]');
+  test('sem botões de semana: abre perto de hoje e guarda a posição do deslizador', () => {
+    assert.equal($('[data-o]'), null);
+    const g = $('.gantt');
+    assert.equal(g.scrollLeft, 27 * 26);
+    g.scrollLeft = 2000; g.dispatchEvent(new Event('scroll'));
+    A.render(el);
+    assert.equal($('.gantt').scrollLeft, 2000);
   });
   test('clicar na barra ou na linha abre a reserva', async () => {
     await clicar('.bar[data-bk=b2]');
