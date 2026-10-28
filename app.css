@@ -1118,3 +1118,8 @@ button.fn-hist-col:hover { background: var(--sunk); }
 @media (max-width: 760px) {
   .wz-escrever { flex-direction: column; align-items: stretch; }
 }
+.fg-zero { stroke: var(--line-2); stroke-width: 1.5; }
+.fg-fim { fill: var(--ink-2); font-size: 12px; font-family: var(--f); font-variant-numeric: tabular-nums; }
+.fg-fim.forte { fill: var(--ink); font-weight: 650; }
+.fn-leg-linhas { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--ink-2); margin-bottom: 6px; }
+.fn-leg-linhas span { display: inline-flex; align-items: center; gap: 6px; }

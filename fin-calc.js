@@ -342,3 +342,60 @@ export function acumular(pontos, desde, ate) {
   for (const [dia, v] of pontos) if (dia > desde && dia <= ate) { f *= 1 + v / 100; usados++; }
   return usados ? (f - 1) * 100 : null;
 }
+
+// ---------- Rentabilidade dia a dia (gráfico de linhas Carteira × CDI × IPCA) ----------
+// Carteira: retorno de cada intervalo entre fotos, com o aporte/resgate do intervalo tratado como feito no fim
+// (r = (V1 − F) / V0 − 1), encadeado. Começa em 0% no primeiro dia com valor investido no período.
+export function rentabilidadeDiaria(serie, fluxos, desde) {
+  const pts = serie.filter(p => p.dia >= desde);
+  const i0 = pts.findIndex(p => p.investido > 0);
+  if (i0 < 0 || pts.length - i0 < 2) return [];
+  const fl = [...fluxos].sort((a, b) => a.data.localeCompare(b.data));
+  const out = [{ dia: pts[i0].dia, pct: 0 }];
+  let f = 1;
+  for (let i = i0 + 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i];
+    const F = fl.reduce((t, x) => x.data > a.dia && x.data <= b.dia ? t + x.valor : t, 0);
+    if (a.investido > 0) f *= (b.investido - F) / a.investido;
+    out.push({ dia: b.dia, pct: (f - 1) * 100 });
+  }
+  return out;
+}
+// CDI acumulado de d0 até cada dia (exclui d0, como acumular)
+export function curvaCdi(cdi, dias) {
+  if (!dias.length) return [];
+  const d0 = dias[0], pts = cdi.filter(([d]) => d > d0).sort((a, b) => a[0].localeCompare(b[0]));
+  let f = 1, k = 0;
+  return dias.map(dia => {
+    while (k < pts.length && pts[k][0] <= dia) f *= 1 + pts[k++][1] / 100;
+    return { dia, pct: (f - 1) * 100 };
+  });
+}
+// IPCA mensal distribuído pelos dias do mês ((1 + m)^(1/dias do mês) por dia). Mês ainda sem IPCA
+// divulgado não soma nada (a linha fica reta até o BC publicar).
+export function curvaIpca(ipca, dias) {
+  if (!dias.length) return [];
+  const mes = Object.fromEntries(ipca.map(([d, v]) => [d.slice(0, 7), v]));
+  const diasNoMes = ym => new Date(Date.UTC(+ym.slice(0, 4), +ym.slice(5, 7), 0)).getUTCDate();
+  let f = 1, atual = dias[0];
+  return dias.map(dia => {
+    while (atual < dia) {
+      atual = somaDias(atual, 1);
+      const ym = atual.slice(0, 7);
+      if (mes[ym] != null) f *= (1 + mes[ym] / 100) ** (1 / diasNoMes(ym));
+    }
+    return { dia, pct: (f - 1) * 100 };
+  });
+}
+// Junta as três curvas nos dias da carteira (opção A: CDI e IPCA só no trecho em que a carteira tem histórico)
+export function comparacao(serie, fluxos, bench, desde) {
+  const cart = rentabilidadeDiaria(serie, fluxos, desde);
+  if (!cart.length) return null;
+  const dias = cart.map(p => p.dia);
+  const cdi = bench?.cdi?.length ? curvaCdi(bench.cdi, dias) : null;
+  const ipca = bench?.ipca?.length ? curvaIpca(bench.ipca, dias) : null;
+  return {
+    desde: dias[0], ate: dias[dias.length - 1],
+    pts: cart.map((p, i) => ({ dia: p.dia, carteira: p.pct, cdi: cdi ? cdi[i].pct : null, ipca: ipca ? ipca[i].pct : null })),
+  };
+}

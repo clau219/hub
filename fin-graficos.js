@@ -121,6 +121,48 @@ export function area(pts, { fmt, fmtEixo = fmt, cor = 'var(--cl-rf)', alt = 230,
   };
 }
 
+// ---------- Linhas (comparação de rentabilidade) ----------
+// dias: eixo X; series [{nome, cor, estilo: 'cheia'|'tracejada'|'pontilhada', grossa, vals: [número|null] alinhados aos dias}]
+// dica(i): HTML (já escapado com tipTxt) da dica do dia i. Rótulo com nome e valor final no fim de cada linha.
+const TRACO = { cheia: '', tracejada: '7 5', pontilhada: '1.5 4.5' };
+export function linhas(series, dias, { fmtEixo, fmtFim = fmtEixo, dica, alt = 230, rotulo = '' } = {}) {
+  return w => {
+    const todos = series.flatMap(s => s.vals).filter(v => v != null);
+    if (!todos.length || dias.length < 2) return '';
+    const mn = Math.min(0, ...todos), mx = Math.max(0, ...todos), pad = (mx - mn) * 0.1 || 0.5;
+    const e = escala(mn - pad, mx + pad, 4);
+    const fins = series.map(s => { const k = s.vals.map(v => v != null).lastIndexOf(true); return { s, k, v: s.vals[k], txt: `${s.nome} ${fmtFim(s.vals[k])}` }; }).filter(f => f.k >= 0);
+    const m = { t: 12, b: 26, l: margemEixo(e.ticks, fmtEixo), r: Math.min(150, Math.max(...fins.map(f => f.txt.length)) * 7 + 30) };
+    const W = w, H = alt, iw = Math.max(40, W - m.l - m.r), ih = H - m.t - m.b;
+    const X = i => m.l + i / (dias.length - 1) * iw;
+    const Y = v => m.t + ih - (v - e.ini) / (e.fim - e.ini) * ih;
+    const grade = e.ticks.map(t => `<line x1="${m.l}" x2="${m.l + iw}" y1="${Y(t)}" y2="${Y(t)}" class="${Math.abs(t) < 1e-12 ? 'fg-zero' : 'fg-grade'}"/>
+      <text x="${m.l - 8}" y="${Y(t) + 4}" class="fg-eixo" text-anchor="end">${h(fmtEixo(t))}</text>`).join('');
+    const caminho = s => s.vals.map((v, i) => v == null ? '' : `${i && s.vals[i - 1] != null ? 'L' : 'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join('');
+    const traco = s => TRACO[s.estilo] ? `stroke-dasharray="${TRACO[s.estilo]}"` : '';
+    const paths = [...series].reverse().map(s => `<path d="${caminho(s)}" fill="none" stroke="${s.cor}" stroke-width="${s.grossa ? 2.5 : 2}" ${traco(s)}
+      stroke-linejoin="round" stroke-linecap="round"/>`).join('');
+    // Rótulos do fim: na altura do último valor, afastados para não encostar (mín. 16 px)
+    const pos = fins.map(f => ({ ...f, y: Y(f.v) })).sort((a, b) => a.y - b.y);
+    for (let i = 1; i < pos.length; i++) pos[i].y = Math.max(pos[i].y, pos[i - 1].y + 16);
+    const sobra = pos.length ? pos[pos.length - 1].y - (m.t + ih) : 0;
+    if (sobra > 0) pos.forEach(p => { p.y -= sobra; });
+    const rotFim = pos.map(p => `<line x1="${m.l + iw + 6}" x2="${m.l + iw + 18}" y1="${p.y}" y2="${p.y}" stroke="${p.s.cor}" stroke-width="2.5" ${traco(p.s)} stroke-linecap="round"/>
+      <text x="${m.l + iw + 22}" y="${p.y + 4}" class="fg-fim${p.s.grossa ? ' forte' : ''}">${h(p.txt)}</text>`).join('');
+    const nx = Math.min(dias.length, Math.max(2, Math.floor(iw / 90)));
+    const xs = [...new Set(Array.from({ length: nx }, (_, k) => Math.round(k * (dias.length - 1) / Math.max(1, nx - 1))))];
+    const rotX = xs.map(i => `<text x="${X(i)}" y="${H - 6}" class="fg-eixo" text-anchor="${i === 0 ? 'start' : i === dias.length - 1 ? 'end' : 'middle'}">${diaCurto(dias[i])}</text>`).join('');
+    const faixa = iw / (dias.length - 1);
+    const alvos = dias.map((d, i) => `<g class="fg-pt"><rect x="${Math.max(m.l, X(i) - faixa / 2)}" y="${m.t}" width="${faixa}" height="${ih}" fill="transparent" data-tip="${dica ? dica(i) : ''}"/>
+      <line x1="${X(i)}" x2="${X(i)}" y1="${m.t}" y2="${m.t + ih}" class="fg-cruz"/>
+      ${series.map(s => s.vals[i] == null ? '' : `<circle cx="${X(i)}" cy="${Y(s.vals[i])}" r="4" fill="${s.cor}" class="fg-ponto"/>`).join('')}</g>`).join('');
+    return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${h(rotulo)}">${grade}${paths}${rotFim}${rotX}${alvos}</svg>`;
+  };
+}
+// Amostra do estilo da linha para a legenda
+export const amostra = s => `<svg width="26" height="10" aria-hidden="true"><line x1="2" x2="24" y1="5" y2="5" stroke="${s.cor}" stroke-width="${s.grossa ? 3 : 2.5}"
+  ${TRACO[s.estilo] ? `stroke-dasharray="${TRACO[s.estilo]}"` : ''} stroke-linecap="round"/></svg>`;
+
 // ---------- Colunas (proventos por mês) ----------
 // itens [{rot, valor, tip}]
 export function colunas(itens, { fmtEixo, cor = 'var(--cl-rf)', alt = 210, rotulo = '' } = {}) {

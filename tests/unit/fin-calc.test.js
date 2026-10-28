@@ -330,3 +330,39 @@ describe('evolução, variação, proventos e rentabilidade', () => {
     assert.equal(F.acumular([['2026-01-01', 1]], '2026-01-01', '2026-03-01'), null);
   });
 });
+
+describe('rentabilidade dia a dia (gráfico de linhas)', () => {
+  test('carteira encadeia os dias e desconta o aporte do dia', () => {
+    const serie = [{ dia: '2026-10-01', investido: 1000 }, { dia: '2026-10-02', investido: 1010 }, { dia: '2026-10-03', investido: 1520 }];
+    const r = F.rentabilidadeDiaria(serie, [{ data: '2026-10-03', valor: 500 }], '2026-10-01');
+    assert.deepEqual(r.map(p => p.dia), ['2026-10-01', '2026-10-02', '2026-10-03']);
+    perto(r[0].pct, 0); perto(r[1].pct, 1);
+    // dia 3: (1520 − 500) / 1010 = 1,00990… → acumulado 1,01 × 1,0099 − 1 = 2%
+    perto(r[2].pct, 2, 1e-9);
+  });
+  test('começa no primeiro dia com valor e precisa de 2 pontos', () => {
+    assert.deepEqual(F.rentabilidadeDiaria([{ dia: '2026-10-01', investido: 1000 }], [], '2026-10-01'), []);
+    const r = F.rentabilidadeDiaria([{ dia: '2026-10-01', investido: 0 }, { dia: '2026-10-02', investido: 100 }, { dia: '2026-10-03', investido: 110 }], [], '');
+    assert.equal(r[0].dia, '2026-10-02'); perto(r[1].pct, 10);
+  });
+  test('CDI acumula a partir do dia seguinte ao início', () => {
+    const c = F.curvaCdi([['2026-10-01', 9], ['2026-10-02', 1], ['2026-10-03', 1]], ['2026-10-01', '2026-10-02', '2026-10-03']);
+    perto(c[0].pct, 0); perto(c[1].pct, 1); perto(c[2].pct, 2.01);
+  });
+  test('IPCA mensal distribuído pelos dias do mês; mês sem dado fica reto', () => {
+    const dias = ['2026-09-30', '2026-10-31'];
+    const c = F.curvaIpca([['2026-10-01', 1]], dias);
+    perto(c[1].pct, 1, 1e-9); // o mês inteiro de outubro = 1%
+    const meio = F.curvaIpca([['2026-10-01', 1]], ['2026-10-15', '2026-10-16']);
+    perto(meio[1].pct, ((1.01 ** (1 / 31)) - 1) * 100, 1e-12);
+    perto(F.curvaIpca([['2026-09-01', 1]], ['2026-10-01', '2026-10-20'])[1].pct, 0);
+  });
+  test('comparacao junta as três curvas nos dias da carteira', () => {
+    const serie = [{ dia: '2026-10-01', investido: 100 }, { dia: '2026-10-02', investido: 101 }];
+    const c = F.comparacao(serie, [], { cdi: [['2026-10-02', 0.5]], ipca: [['2026-10-01', 3.1]] }, '2026-09-01');
+    assert.equal(c.desde, '2026-10-01'); assert.equal(c.ate, '2026-10-02');
+    perto(c.pts[1].carteira, 1); perto(c.pts[1].cdi, 0.5); perto(c.pts[1].ipca, ((1.031 ** (1 / 31)) - 1) * 100, 1e-12);
+    assert.equal(F.comparacao(serie, [], null, '').pts[1].cdi, null);
+    assert.equal(F.comparacao(serie.slice(0, 1), [], null, ''), null);
+  });
+});

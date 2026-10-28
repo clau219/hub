@@ -234,18 +234,27 @@ function fluxos() {
 function cartaoBench() {
   carregarBench();
   const desde = fc.inicioPeriodo(est.periodo, C.hoje);
-  const r = fc.rentabilidade(serieFiltrada(), fluxos(), desde);
   const titulo = 'Rentabilidade × CDI e IPCA';
-  if (!r) return cartao(titulo, `<p class="empty">A comparação aparece quando houver pelo menos 2 dias de histórico dos investimentos no período.
+  // Opção A: CDI e IPCA só no trecho em que a carteira tem histórico (as três linhas partem do mesmo dia)
+  const cmp = fc.comparacao(serieFiltrada(), fluxos(), bench, desde);
+  if (!cmp) return cartao(titulo, `<p class="empty">A comparação aparece quando houver pelo menos 2 dias de histórico dos investimentos no período.
     ${bench ? `Para referência: CDI de 12 meses ${fc.pct(fc.acumular(bench.cdi, fc.somaDias(C.hoje, -365), C.hoje))}, IPCA de 12 meses ${fc.pct(fc.acumular(bench.ipca, fc.somaDias(C.hoje, -365), C.hoje))}.` : ''}</p>`);
-  const cdi = bench ? fc.acumular(bench.cdi, r.desde, r.ate) : null;
-  const ipca = bench ? fc.acumular(bench.ipca, fc.somaDias(r.desde, -15), r.ate) : null;
-  const linhas = [{ nome: filtroAtivo() ? 'Filtro' : 'Carteira', valor: r.pct, cor: 'var(--brand)' },
-    cdi != null && { nome: 'CDI', valor: cdi, cor: 'var(--muted)' }, ipca != null && { nome: 'IPCA', valor: ipca, cor: 'var(--muted)' }].filter(Boolean)
-    .map(x => ({ ...x, txt: fc.pct(x.valor), tip: fg.tipTxt(x.nome, [['No período', fc.pct(x.valor)], ['De', fc.dataBr(r.desde)], ['Até', fc.dataBr(r.ate)]]) }));
-  return cartao(titulo, `${fg.barrasH(linhas, { diverge: true })}
-    <p class="muted small">De ${fc.dataBr(r.desde)} a ${fc.dataBr(r.ate)}, descontando aportes e resgates (método de Dietz).
-    ${cdi != null && r.pct != null ? `${r.pct >= cdi ? 'Acima' : 'Abaixo'} do CDI em ${fc.pct(Math.abs(r.pct - cdi), 2, false)}.` : ''} Ibovespa: sem fonte gratuita disponível.</p>`);
+  const nome = filtroAtivo() ? 'Filtro' : 'Carteira';
+  const series = [
+    { nome, cor: 'var(--brand)', estilo: 'cheia', grossa: true, vals: cmp.pts.map(p => p.carteira) },
+    cmp.pts[0].cdi != null && { nome: 'CDI', cor: 'var(--muted)', estilo: 'tracejada', vals: cmp.pts.map(p => p.cdi) },
+    cmp.pts[0].ipca != null && { nome: 'IPCA', cor: 'var(--muted)', estilo: 'pontilhada', vals: cmp.pts.map(p => p.ipca) },
+  ].filter(Boolean);
+  const pct2 = v => fc.pct(v, 2);
+  const dif = (a, b) => `${a >= b ? '+' : '−'}${Math.abs(a - b).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ponto${Math.abs(a - b) >= 1.995 ? 's' : ''}`;
+  const dica = i => { const p = cmp.pts[i];
+    return fg.tipTxt(fc.dataBr(p.dia), [[nome, pct2(p.carteira)], ...(p.cdi != null ? [['CDI', pct2(p.cdi)], [`${nome} − CDI`, dif(p.carteira, p.cdi)]] : []), ...(p.ipca != null ? [['IPCA', pct2(p.ipca)]] : [])]); };
+  const fim = cmp.pts[cmp.pts.length - 1];
+  const leg = `<div class="fn-leg-linhas">${series.map(s => `<span>${fg.amostra(s)}${h(s.nome)}</span>`).join('')}</div>`;
+  return cartao(titulo, `${leg}${fg.slot(fg.linhas(series, cmp.pts.map(p => p.dia), { fmtEixo: v => Math.abs(v) < 1e-9 ? '0%' : fc.pct(v, Number.isInteger(+v.toFixed(6)) ? 0 : 1), fmtFim: pct2, dica, rotulo: 'Rentabilidade acumulada da carteira, do CDI e do IPCA' }))}
+    <p class="muted small">Rendimento acumulado de ${fc.dataBr(cmp.desde)} a ${fc.dataBr(cmp.ate)}, descontando aportes e resgates.
+    ${fim.cdi != null ? `${fim.carteira >= fim.cdi ? 'Acima' : 'Abaixo'} do CDI em ${dif(fim.carteira, fim.cdi).slice(1)}.` : ''}
+    ${cmp.desde > desde ? `O histórico da carteira começa em ${fc.dataBr(cmp.desde)}, por isso as linhas partem desse dia.` : ''} Ibovespa: sem fonte gratuita disponível.</p>`);
 }
 
 function cartaoRanking() {
