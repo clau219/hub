@@ -72,15 +72,128 @@ describe('hóspedes', () => {
     assert.equal(H.hospedesTxt(H.parseHospedes(txt)), txt);
     assert.equal(H.hospedesTxt(null), '');
   });
-  test('textoPortaria lista hóspedes numerados com casa e datas', () => {
-    const t = H.textoPortaria(direta({ hospedes: [{ nome: 'Maria', doc: 'RG 1' }, { nome: 'Pedro', doc: '' }] }), { id: 'QS39', nome: 'Casa Frida' });
-    assert.match(t, /na Casa Frida \(QS39\), com entrada em 20\/11\/2026 e saída em 23\/11\/2026/);
-    assert.match(t, /1\. Maria \(RG 1\)\n2\. Pedro\n/);
-    assert.match(t, /Claudio$/);
+});
+
+// E-mail real enviado pelo Claudio à portaria (outubro/2026)
+const MODELO = `Segue abaixo a lista de hóspedes autorizados para o período de 16/10/2026 a 21/10/2026:
+
+Casa Frida QS39
+
+1. Mauricio Batista da Silva Júnior | CPF 433.935.708-11
+2. Luiz Antônio da Silva | RG 2392336 | SDS/PE
+3. Lucineide Anjos da Silva | RG 3797768 | SDS/PE
+4. Josias Pedrosa da Silva | RG 1146627 | SSP/PE
+5. Flávia Pedrosa da Silva | RG 6204884 | SSP/PE
+6. Letice Maria da Silva | RG 57.720.661-8 | SSP/SP
+7. Mauricio Batista da Silva | RG 19.229.524-X | SSP/SP
+
+Veículos autorizados:
+— Honda HRV | TZX3D00
+— HB20 | RZW5I32
+
+Solicito a liberação de acesso para os hóspedes listados acima durante o período indicado.
+
+Qualquer dúvida, fico à disposição.
+
+Atenciosamente,
+Claudio Braga`;
+
+describe('e-mail da portaria', () => {
+  const FRIDA = { id: 'QS39', nome: 'Casa Frida' };
+  test('assunto no formato fixo, com a casa e o período', () => {
+    assert.equal(H.emailPortaria(direta(), FRIDA).assunto, 'Autorização de Acesso — Casa Frida QS39 — Hóspedes (20/11 a 23/11/2026)');
   });
-  test('textoPortaria sem hóspedes avisa que a lista falta', () => {
-    assert.match(H.textoPortaria(direta(), { nome: 'Casa Azul' }), /\(lista de hóspedes ainda não preenchida\)/);
-    assert.doesNotMatch(H.textoPortaria(direta(), { nome: 'Casa Azul' }), /\(undefined\)/);
+  test('virando o ano, a entrada também leva o ano', () => {
+    assert.equal(H.emailPortaria(direta({ checkin: '2026-12-28', checkout: '2027-01-02' }), { id: 'QS40', nome: 'Casa Azul' }).assunto,
+      'Autorização de Acesso — Casa Azul QS40 — Hóspedes (28/12/2026 a 02/01/2027)');
+  });
+  test('corpo no modelo do Claudio: período, casa, lista "nome | documento | órgão", sem saudação', () => {
+    const { corpo } = H.emailPortaria(direta({ hospedes: [{ nome: 'Maria', doc: 'RG 1.234 SSP/PE' }, { nome: 'Pedro', doc: '' }] }), FRIDA);
+    assert.equal(corpo, `Segue abaixo a lista de hóspedes autorizados para o período de 20/11/2026 a 23/11/2026:
+
+Casa Frida QS39
+
+1. Maria | RG 1.234 | SSP/PE
+2. Pedro | documento a enviar
+
+Solicito a liberação de acesso para os hóspedes listados acima durante o período indicado.
+
+Qualquer dúvida, fico à disposição.
+
+Atenciosamente,
+Claudio Braga`);
+  });
+  test('o e-mail real do Claudio colado como texto cru gera o mesmo e-mail, com os veículos', () => {
+    const hospedes = H.lerHospedesCru(MODELO), veiculos = H.lerVeiculosCru(MODELO);
+    assert.equal(hospedes.length, 7);
+    assert.deepEqual(veiculos, [{ modelo: 'Honda HRV', placa: 'TZX3D00' }, { modelo: 'HB20', placa: 'RZW5I32' }]);
+    const e = H.emailPortaria({ checkin: '2026-10-16', checkout: '2026-10-21', hospedes, veiculos }, FRIDA);
+    assert.equal(e.assunto, 'Autorização de Acesso — Casa Frida QS39 — Hóspedes (16/10 a 21/10/2026)');
+    assert.equal(e.corpo, MODELO);
+  });
+  test('sem hóspedes avisa que a lista falta', () => {
+    const { corpo } = H.emailPortaria(direta(), { nome: 'Casa Azul' });
+    assert.match(corpo, /\(lista de hóspedes ainda não preenchida\)/);
+    assert.doesNotMatch(corpo, /undefined/);
+  });
+});
+
+describe('dados crus dos hóspedes', () => {
+  test('lista numerada de conversa do WhatsApp, com nome em maiúsculas e CPF sem pontos', () => {
+    assert.deepEqual(H.lerHospedesCru(`[10:32, 20/10/2026] Ana Paula: Segue os dados
+1. MARIA DA SILVA - CPF 123.456.789-00
+2. joão pedro souza 98765432100
+3) Ana-Clara Lima, RG 1.234.567 SSP/PE`), [
+      { nome: 'Maria da Silva', doc: 'CPF 123.456.789-00' },
+      { nome: 'João Pedro Souza', doc: 'CPF 987.654.321-00' },
+      { nome: 'Ana-Clara Lima', doc: 'RG 1.234.567 SSP/PE' },
+    ]);
+  });
+  test('blocos "Hóspede 01 / Nome / CPF / RG": fica o CPF; "todos os RGs são SSP/PE" vale para os RGs', () => {
+    assert.deepEqual(H.lerHospedesCru(`Hóspede 01
+Nome: Carlos Alberto Nunes
+CPF: 111.222.333-44
+RG: 5.555.555
+
+Hóspede 02
+Nome: Beatriz
+RG: 6.666.666
+todos os RGs são SSP/PE`), [
+      { nome: 'Carlos Alberto Nunes', doc: 'CPF 111.222.333-44' },
+      { nome: 'Beatriz', doc: 'RG 6.666.666 SSP/PE' },
+    ]);
+  });
+  test('nome com número solto e passaporte; frases da conversa ficam de fora', () => {
+    assert.deepEqual(H.lerHospedesCru('Bom dia! Somos 3 pessoas\nPedro Henrique Alves 12.345.678\nLucas Martins passaporte fx123456\nSegue a lista dos hóspedes'), [
+      { nome: 'Pedro Henrique Alves', doc: '12.345.678' },
+      { nome: 'Lucas Martins', doc: 'Passaporte FX123456' },
+    ]);
+  });
+  test('documento na linha de baixo do nome (lista do Airbnb)', () => {
+    assert.deepEqual(H.lerHospedesCru('Maria Souza\n123.456.789-00\nJosé Lima\nRG 9.999.999'), [
+      { nome: 'Maria Souza', doc: 'CPF 123.456.789-00' }, { nome: 'José Lima', doc: 'RG 9.999.999' },
+    ]);
+  });
+  test('juntarHospedes acrescenta sem repetir, completa o documento e aplica o órgão geral', () => {
+    const r = H.juntarHospedes([{ nome: 'Beatriz Nunes', doc: 'RG 6.666.666' }, { nome: 'Caio Prado', doc: '' }],
+      'todos os RGs são SSP/PE\nCAIO PRADO, CPF 22233344455\nLia Prado - RG 7.777.777');
+    assert.deepEqual(r.lista, [
+      { nome: 'Beatriz Nunes', doc: 'RG 6.666.666 SSP/PE' }, { nome: 'Caio Prado', doc: 'CPF 222.333.444-55' }, { nome: 'Lia Prado', doc: 'RG 7.777.777 SSP/PE' },
+    ]);
+    assert.equal(r.novos, 2);
+    assert.equal(r.orgao, 'SSP/PE');
+  });
+  test('veículos: placa antiga ou Mercosul, com ou sem modelo; linha de veículo não vira hóspede', () => {
+    const txt = 'Maria Souza, CPF 12345678900\nCarro: Fiat Uno placa abc-1234\nRZW5I32\nHonda HRV, TZX3D00';
+    assert.deepEqual(H.lerVeiculosCru(txt), [{ modelo: 'Fiat Uno', placa: 'ABC1234' }, { modelo: '', placa: 'RZW5I32' }, { modelo: 'Honda HRV', placa: 'TZX3D00' }]);
+    assert.deepEqual(H.lerHospedesCru(txt), [{ nome: 'Maria Souza', doc: 'CPF 123.456.789-00' }]);
+    assert.deepEqual(H.juntarVeiculos([{ modelo: 'HB20', placa: 'RZW5I32' }], 'HB20 RZW5I32\nGol QWE9R87').lista,
+      [{ modelo: 'HB20', placa: 'RZW5I32' }, { modelo: 'Gol', placa: 'QWE9R87' }]);
+    assert.deepEqual(H.parseVeiculos('Honda HRV, TZX3D00\nmoto vermelha'), [{ modelo: 'Honda HRV', placa: 'TZX3D00' }, { modelo: 'moto vermelha', placa: '' }]);
+  });
+  test('o formato salvo ("nome, documento") volta igual', () => {
+    const l = H.lerHospedesCru('Maria da Silva - CPF 123.456.789-00');
+    assert.deepEqual(H.parseHospedes(H.hospedesTxt(l)), l);
   });
 });
 
@@ -90,6 +203,7 @@ describe('formulário (lerChecklist)', () => {
     const r = H.lerChecklist(f, { etapas: { contrato: '2026-10-01', portaria: '2026-10-10' } });
     assert.deepEqual(r.etapas, { orcamento: '2026-10-19', hospedes: '2026-10-19' });
     assert.deepEqual(r.hospedes, [{ nome: 'Maria', doc: 'RG 1' }]);
+    assert.deepEqual(r.veiculos, []);
     assert.deepEqual(f, { nome: 'x' });
   });
   test('checklistHtml esconde as etapas exclusivas de reserva direta no Airbnb', () => {

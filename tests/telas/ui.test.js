@@ -250,11 +250,12 @@ describe('reserva (bookingForm)', () => {
   test('reserva direta grava etapas marcadas e hóspedes', async () => {
     ui.bookingForm();
     const m = $('#modal');
-    preencher(m, { property_id: 'QS50', origem: 'direto', hospede: 'Caio', checkin: '2026-12-20', checkout: '2026-12-27', et_orcamento: true, hospedes: 'Caio Prado, RG 1\nLia' });
+    preencher(m, { property_id: 'QS50', origem: 'direto', hospede: 'Caio', checkin: '2026-12-20', checkout: '2026-12-27', et_orcamento: true, hospedes: 'Caio Prado, RG 1\nLia', veiculos: 'Gol, ABC1234' });
     await enviarModal();
     const b = S.bookings.find(b => b.hospede === 'Caio');
     assert.deepEqual(b.etapas, { orcamento: '2026-10-19' });
     assert.deepEqual(b.hospedes, [{ nome: 'Caio Prado', doc: 'RG 1' }, { nome: 'Lia', doc: '' }]);
+    assert.deepEqual(b.veiculos, [{ modelo: 'Gol', placa: 'ABC1234' }]);
     assert.equal(b.status, 'confirmada');
   });
   test('checklist reage à origem, ao status e ao check-in', () => {
@@ -275,10 +276,12 @@ describe('reserva (bookingForm)', () => {
     const m = $('#modal');
     await clicar('#copyPortaria');
     assert.equal(texto('#copyPortaria'), 'Preencha check-in e check-out');
-    preencher(m, { property_id: 'QS40', checkin: '2026-12-01', checkout: '2026-12-03', hospedes: 'Ana, RG 9' });
+    preencher(m, { property_id: 'QS40', checkin: '2026-12-01', checkout: '2026-12-03', hospedes: 'Ana, RG 9', veiculos: 'HB20, RZW5I32' });
     await clicar('#copyPortaria');
-    assert.match(await navigator.clipboard.readText(), /na Casa Azul \(QS40\), com entrada em 01\/12\/2026[\s\S]*1\. Ana \(RG 9\)/);
+    assert.match(await navigator.clipboard.readText(), /período de 01\/12\/2026 a 03\/12\/2026:\n\nCasa Azul QS40\n\n1\. Ana \| RG 9\n\nVeículos autorizados:\n— HB20 \| RZW5I32\n/);
     assert.match(texto('#copyPortaria'), /^Copiado/);
+    await clicar('#copyAssunto');
+    assert.equal(await navigator.clipboard.readText(), 'Autorização de Acesso — Casa Azul QS40 — Hóspedes (01/12 a 03/12/2026)');
   });
   test('etapaDone marca a etapa a partir do Hoje', async () => {
     await ui.etapaDone(S.bookings[0], 'faxina');

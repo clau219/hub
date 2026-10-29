@@ -1,14 +1,14 @@
 // Tela Aluguéis: Gantt das casas, próximas reservas com a sequência da hospedagem, receita/ocupação e "Consultar Airbnb".
 import { test, describe, before, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { hub, $, $$, texto, clicar, preencher, esperar } from '../helpers/dom.js';
+import { hub, $, $$, texto, clicar, preencher, esperar, enviarModal } from '../helpers/dom.js';
 import { abrirHub, CASAS } from '../helpers/tela.js';
 import { banco } from '../helpers/fake-supabase.js';
 
-let A, el;
+let A, el, S;
 const nb = s => s.replace(/ /g, ' ');
 before(async () => {
-  await abrirHub({ supabase: true, tabelas: {
+  ({ S } = await abrirHub({ supabase: true, tabelas: {
     properties: CASAS,
     bookings: [
       { id: 'b1', property_id: 'QS39', origem: 'airbnb', status: 'confirmada', hospede: 'Ana', checkin: '2026-10-20', checkout: '2026-10-23', valor: null, etapas: { hospedes: '2026-10-17' } },
@@ -17,7 +17,7 @@ before(async () => {
       { id: 'b4', property_id: 'QS50', origem: 'airbnb', status: 'cancelada', hospede: 'Cancelado', checkin: '2026-10-21', checkout: '2026-10-22' },
       { id: 'b5', property_id: 'QS39', origem: 'airbnb', status: 'confirmada', hospede: 'Velho', checkin: '2026-09-01', checkout: '2026-09-05' },
     ],
-  } });
+  } }));
   A = await hub('v-alugueis.js');
   el = $('#view');
   A.render(el);
@@ -69,6 +69,59 @@ describe('Gantt e tabela', () => {
     $('#modal').close();
     await clicar('tr[data-bk=b1]');
     assert.equal($('#modal [name=hospede]').value, 'Ana');
+  });
+});
+
+describe('E-mail da portaria', () => {
+  const campo = n => $(`#modal [name=${n}]`);
+  test('abre na reserva cuja portaria vence primeiro, com casa e datas dela', async () => {
+    await clicar('#abPortaria');
+    assert.equal(texto('#modalTitle'), 'E-mail da portaria');
+    assert.equal(campo('bk').value, 'b1');
+    assert.equal(campo('casa').value, 'QS39');
+    assert.equal(campo('casa').disabled, true);
+    assert.equal(campo('assunto').value, 'Autorização de Acesso — Casa Frida QS39 — Hóspedes (20/10 a 23/10/2026)');
+    assert.equal(texto('#ptAviso'), 'Falta os hóspedes.');
+  });
+  test('colar dados crus organiza a lista e monta o e-mail; copiar assunto e corpo', async () => {
+    A.portariaForm();
+    preencher($('#modal'), { cru: '1. MARIA DA SILVA - CPF 12345678900\n2. João Souza\nRG 1.234.567\ntodos os RGs são SSP/PE\nCarro: Honda HRV placa TZX3D00' });
+    await clicar('#ptLer');
+    assert.equal(campo('hospedes').value, 'Maria da Silva, CPF 123.456.789-00\nJoão Souza, RG 1.234.567 SSP/PE');
+    assert.equal(campo('veiculos').value, 'Honda HRV, TZX3D00');
+    assert.equal(campo('cru').value, '');
+    assert.equal(texto('#toast'), '2 hóspedes lidos · 1 veículo · RGs SSP/PE');
+    assert.match(campo('corpo').value, /\n\nCasa Frida QS39\n\n1\. Maria da Silva \| CPF 123\.456\.789-00\n2\. João Souza \| RG 1\.234\.567 \| SSP\/PE\n\nVeículos autorizados:\n— Honda HRV \| TZX3D00\n/);
+    assert.equal(texto('#ptAviso'), '2 hóspedes, todos com documento.');
+    await clicar('#ptCopA');
+    assert.equal(await navigator.clipboard.readText(), campo('assunto').value);
+    await clicar('#ptCopC');
+    assert.equal(await navigator.clipboard.readText(), campo('corpo').value);
+  });
+  test('"adicione esses dois": o segundo texto colado entra no fim da lista', async () => {
+    A.portariaForm();
+    preencher($('#modal'), { hospedes: 'Maria da Silva, CPF 123.456.789-00', cru: 'Pedro Alves 98765432100\nmaria da silva' });
+    await clicar('#ptLer');
+    assert.equal(campo('hospedes').value, 'Maria da Silva, CPF 123.456.789-00\nPedro Alves, CPF 987.654.321-00');
+  });
+  test('sem reserva: escolhe casa e datas à mão; Salvar pede uma reserva', async () => {
+    A.portariaForm();
+    preencher($('#modal'), { bk: '' });
+    assert.equal(campo('casa').disabled, false);
+    preencher($('#modal'), { casa: 'QS50', checkin: '2026-12-28', checkout: '2027-01-02', hospedes: 'Lia' });
+    assert.equal(campo('assunto').value, 'Autorização de Acesso — Casa Terracota QS50 — Hóspedes (28/12/2026 a 02/01/2027)');
+    assert.equal(texto('#ptAviso'), 'Sem documento: Lia.');
+    await enviarModal();
+    assert.match(texto('#modalErr'), /Escolha uma reserva/);
+  });
+  test('salvar grava os hóspedes na reserva e marca hóspedes e portaria', async () => {
+    A.portariaForm();
+    preencher($('#modal'), { bk: 'b2', hospedes: 'Bia Lima, CPF 111.222.333-44', veiculos: 'HB20, RZW5I32' });
+    await enviarModal();
+    const b = S.bookings.find(x => x.id === 'b2');
+    assert.deepEqual(b.hospedes, [{ nome: 'Bia Lima', doc: 'CPF 111.222.333-44' }]);
+    assert.deepEqual(b.veiculos, [{ modelo: 'HB20', placa: 'RZW5I32' }]);
+    assert.deepEqual(b.etapas, { hospedes: '2026-10-19', portaria: '2026-10-19' });
   });
 });
 

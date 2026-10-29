@@ -1,8 +1,8 @@
-import { S, prop, ocupacao } from './store.js';
+import { S, prop, ocupacao, save } from './store.js';
 import { h, today, addDays, fmtDate, weekdayShort, brl, diffDays, relDate } from './util.js';
 import { bookingForm, modal, toast } from './ui.js';
 import * as db from './db.js';
-import { progresso, acompanhada, prazo } from './hospedagem.js';
+import { progresso, acompanhada, prazo, alternar, parseHospedes, hospedesTxt, juntarHospedes, parseVeiculos, veiculosTxt, juntarVeiculos, emailPortaria } from './hospedagem.js';
 
 const ATRAS = 30; // dias passados no começo do Gantt
 let rolagem = null; // posição do deslizador, mantida quando a tela redesenha
@@ -20,6 +20,7 @@ export function render(el) {
   el.innerHTML = `
   <div class="view-head">
     <h1>Aluguéis</h1>
+    <button class="btn" id="abPortaria">E-mail da portaria</button>
     <button class="btn" id="abQuote">Consultar Airbnb</button>
     <button class="btn primary" id="bkNew">Nova reserva</button>
   </div>
@@ -61,6 +62,7 @@ export function render(el) {
   g.onscroll = () => { rolagem = g.scrollLeft; };
   el.querySelector('#bkNew').onclick = () => bookingForm();
   el.querySelector('#abQuote').onclick = () => consultaAirbnb();
+  el.querySelector('#abPortaria').onclick = () => portariaForm();
   el.querySelectorAll('[data-bk]').forEach(b => b.onclick = () => bookingForm(S.bookings.find(x => x.id === b.dataset.bk)));
 }
 
@@ -72,6 +74,83 @@ function seq(b) {
   if (!acompanhada(b)) return `<span class="seq">${p.feitas}/${p.total}</span>`;
   const late = prazo(b, p.proxima) < today();
   return `<span class="seq ${late ? 'late' : ''}"><b>${p.feitas}/${p.total}</b> ${h(p.proxima.nome)}${late ? ' (atrasada)' : ''}</span>`;
+}
+
+// ---------- E-mail da portaria ----------
+// Cola os dados crus (WhatsApp, Airbnb, lista), o Hub organiza nome + documento e monta assunto e corpo para copiar.
+// Com uma reserva escolhida, "Salvar" grava os hóspedes nela e marca as etapas de hóspedes e portaria.
+export function portariaForm(b0) {
+  const hoje = today();
+  const reservas = S.bookings.filter(b => b.status === 'confirmada' && b.checkout >= hoje).sort((a, b) => a.checkin.localeCompare(b.checkin));
+  // padrão: a reserva cuja portaria vence primeiro
+  const ini = b0 || reservas.find(b => !b.etapas?.portaria) || null;
+  const rotulo = b => `${prop(b.property_id).nome} · ${b.hospede || b.origem} · ${fmtDate(b.checkin)} a ${fmtDate(b.checkout)}${b.etapas?.portaria ? ' (já enviada)' : ''}`;
+  const d = modal('E-mail da portaria', `
+    <label>Reserva<select name="bk"><option value="">Outra (sem reserva no Hub)</option>${reservas.map(b => `<option value="${b.id}" ${b.id === ini?.id ? 'selected' : ''}>${h(rotulo(b))}</option>`).join('')}</select></label>
+    <div class="grid3">
+      <label>Casa<select name="casa">${S.properties.map(p => `<option value="${p.id}">${h(p.nome)} (${h(p.id)})</option>`).join('')}</select></label>
+      <label>Entrada<input name="checkin" type="date"></label>
+      <label>Saída<input name="checkout" type="date"></label>
+    </div>
+    <label>Cole os dados como vieram (WhatsApp, Airbnb, lista)<textarea name="cru" rows="4" placeholder="1. Maria da Silva - CPF 123.456.789-00&#10;Hóspede 02 / Nome: João Souza / RG: 1.234.567&#10;todos os RGs são SSP/PE"></textarea></label>
+    <div class="row-btns"><button type="button" class="btn" id="ptLer">Organizar e adicionar à lista</button></div>
+    <label>Hóspedes (um por linha: nome, documento)<textarea name="hospedes" rows="4"></textarea></label>
+    <label>Veículos (um por linha: modelo, placa)<textarea name="veiculos" rows="2" placeholder="Honda HRV, TZX3D00"></textarea></label>
+    <p class="muted small" id="ptAviso" aria-live="polite"></p>
+    <label>Assunto<input name="assunto" readonly></label>
+    <label>E-mail<textarea name="corpo" rows="10" readonly></textarea></label>
+    <div class="row-btns"><button type="button" class="btn" id="ptCopA">Copiar assunto</button><button type="button" class="btn" id="ptCopC">Copiar e-mail</button></div>`, {
+    submit: 'Salvar na reserva e marcar enviada',
+    onSubmit: async f => {
+      const b = S.bookings.find(x => x.id === f.bk);
+      if (!b) throw new Error('Escolha uma reserva para salvar. Sem reserva, é só copiar o e-mail.');
+      const hospedes = parseHospedes(f.hospedes), veiculos = parseVeiculos(f.veiculos);
+      const etapas = alternar({ etapas: alternar(b, 'hospedes', hospedes.length > 0) }, 'portaria', true);
+      await save('bookings', { hospedes, veiculos, etapas }, b.id);
+      toast('Hóspedes salvos e portaria marcada como enviada');
+    },
+  });
+  const $ = s => d.querySelector(s);
+  const campo = n => $(`[name=${n}]`);
+  const atualizar = () => {
+    const casa = prop(campo('casa').value), checkin = campo('checkin').value, checkout = campo('checkout').value;
+    const hospedes = parseHospedes(campo('hospedes').value), veiculos = parseVeiculos(campo('veiculos').value);
+    const falta = [!checkin || !checkout ? 'as datas' : '', !hospedes.length ? 'os hóspedes' : ''].filter(Boolean);
+    const semDoc = hospedes.filter(x => !x.doc).map(x => x.nome);
+    $('#ptAviso').textContent = falta.length ? `Falta ${falta.join(' e ')}.` : semDoc.length ? `Sem documento: ${semDoc.join(', ')}.` : `${hospedes.length} ${hospedes.length === 1 ? 'hóspede' : 'hóspedes'}, todos com documento.`;
+    if (!checkin || !checkout) { campo('assunto').value = ''; campo('corpo').value = ''; return; }
+    const e = emailPortaria({ checkin, checkout, hospedes, veiculos }, casa);
+    campo('assunto').value = e.assunto; campo('corpo').value = e.corpo;
+  };
+  const escolher = () => {
+    const b = S.bookings.find(x => x.id === campo('bk').value);
+    ['casa', 'checkin', 'checkout'].forEach(n => (campo(n).disabled = !!b));
+    if (b) { campo('casa').value = b.property_id; campo('checkin').value = b.checkin; campo('checkout').value = b.checkout; campo('hospedes').value = hospedesTxt(b.hospedes); campo('veiculos').value = veiculosTxt(b.veiculos); }
+    atualizar();
+  };
+  campo('bk').onchange = escolher;
+  ['casa', 'checkin', 'checkout'].forEach(n => campo(n).addEventListener('change', atualizar));
+  campo('hospedes').oninput = atualizar;
+  campo('veiculos').oninput = atualizar;
+  $('#ptLer').onclick = () => {
+    const r = juntarHospedes(parseHospedes(campo('hospedes').value), campo('cru').value);
+    const v = juntarVeiculos(parseVeiculos(campo('veiculos').value), campo('cru').value);
+    if (!r.novos && !r.orgao && !v.novos) { toast('Não achei nome, documento nem placa no texto colado'); return; }
+    campo('hospedes').value = hospedesTxt(r.lista);
+    campo('veiculos').value = veiculosTxt(v.lista);
+    campo('cru').value = '';
+    toast(`${r.novos} ${r.novos === 1 ? 'hóspede lido' : 'hóspedes lidos'}${v.novos ? ` · ${v.novos} ${v.novos === 1 ? 'veículo' : 'veículos'}` : ''}${r.orgao ? ` · RGs ${r.orgao}` : ''}`);
+    atualizar();
+  };
+  const copiar = async (n, msg) => {
+    if (!campo(n).value) { toast('Preencha as datas primeiro'); return; }
+    try { await navigator.clipboard.writeText(campo(n).value); toast(msg); }
+    catch { campo(n).select(); toast('Selecione e copie'); }
+  };
+  $('#ptCopA').onclick = () => copiar('assunto', 'Assunto copiado');
+  $('#ptCopC').onclick = () => copiar('corpo', 'E-mail copiado');
+  escolher();
+  return d;
 }
 
 // ---------- Consulta de disponibilidade e preço no Airbnb (função airbnb-quote) ----------
