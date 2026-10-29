@@ -32,7 +32,11 @@ async function vigiarConexao(sb: SB, avisos: any[]) {
   const inst = Deno.env.get('ZAPI_INSTANCE');
   if (!inst) return { ignorado: 'Z-API não configurada' };
   // Conversas pela API oficial: a Z-API não importa mais (a coexistência derruba a sessão dela)
-  if (Deno.env.get('WA_CANAL') === 'meta') return { ignorado: 'canal é a Meta' };
+  if (Deno.env.get('WA_CANAL') === 'meta') {
+    // Status novo no lugar da última queda da Z-API: a aba WhatsApp mostra "API oficial da Meta", sem a faixa vermelha
+    await gravarConfig(sb, 'zapi_status', { canal: 'meta', em: new Date().toISOString() });
+    return { ignorado: 'canal é a Meta' };
+  }
   let st: { ok: boolean; motivo: string; celular?: boolean };
   try {
     const r = await fetch(`https://api.z-api.io/instances/${inst}/token/${Deno.env.get('ZAPI_TOKEN')}/status`, {

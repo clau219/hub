@@ -109,9 +109,10 @@ function desenhar(el) {
     ${cfg ? `<label class="wa-switch wz-robo ${cfg.bot_ativo ? 'on' : ''}"><input type="checkbox" id="wzBot" ${cfg.bot_ativo ? 'checked' : ''}> <b>Robô ${cfg.bot_ativo ? 'ligado' : 'desligado'}</b></label>` : ''}
     <button class="btn" id="wzBase" title="Endereço, horários, regras, pets, Pix e o que cada casa tem: usado nas respostas prontas, no rascunho da IA e pelo robô">Informações das casas</button>
     <span class="muted small wz-at">${atualizado()}</span>
-    ${D.zapi?.ok ? `<span class="muted small wz-con" title="A vigia confere a conexão a cada 5 min">● Z-API conectada · ${quandoHora(D.zapi.em)}</span>` : ''}
+    ${D.zapi?.canal === 'meta' ? '<span class="muted small wz-con" title="As conversas chegam e saem pela API oficial do WhatsApp (Meta)">● API oficial da Meta</span>'
+      : D.zapi?.ok ? `<span class="muted small wz-con" title="A vigia confere a conexão a cada 5 min">● Z-API conectada · ${quandoHora(D.zapi.em)}</span>` : ''}
   </div>
-  ${D.zapi?.ok === false ? `<p class="banner wz-caiu"><b>WhatsApp das casas desconectado</b> desde ${quandoHora(D.zapi.desde)}: ${h(D.zapi.motivo)}. As mensagens não estão chegando e o robô está parado. Abra a <a href="https://app.z-api.io/app/instances" target="_blank" rel="noopener">Z-API</a> e confira a instância (talvez seja preciso ler o QR code de novo).</p>` : ''}
+  ${D.zapi?.canal !== 'meta' && D.zapi?.ok === false ?`<p class="banner wz-caiu"><b>WhatsApp das casas desconectado</b> desde ${quandoHora(D.zapi.desde)}: ${h(D.zapi.motivo)}. As mensagens não estão chegando e o robô está parado. Abra a <a href="https://app.z-api.io/app/instances" target="_blank" rel="noopener">Z-API</a> e confira a instância (talvez seja preciso ler o QR code de novo).</p>` : ''}
   ${D.erro ? `<p class="banner warn">Não foi possível ler as conversas: ${h(D.erro)}. Tentando de novo a cada 10 s.</p>` : ''}
   ${cfg && !cfg.bot_ativo ? '<p class="muted small wz-aviso">Com o robô desligado, as mensagens só chegam aqui e no Pipeline; ninguém recebe resposta automática.</p>' : ''}
   <div class="wz ${conv ? 'tem-aberta' : ''}">

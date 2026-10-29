@@ -34,6 +34,18 @@ describe('wa-vigia: acesso', () => {
 });
 
 describe('wa-vigia: conexão da Z-API', () => {
+  test('canal pela Meta (WA_CANAL=meta): não consulta a Z-API, não avisa queda e troca o status antigo por "canal Meta"', async () => {
+    novoBanco(DADOS({ app_config: [{ key: 'zapi_status', value: JSON.stringify({ ok: false, motivo: 'x', desde: min(120), avisado_em: min(120) }) }] }));
+    definirEnv('WA_CANAL', 'meta');
+    try {
+      const { corpo } = await rodar();
+      assert.equal(corpo.conexao.ignorado, 'canal é a Meta');
+      assert.equal(chamadasPara(/\/status$/).length, 0);
+      assert.equal(config('zapi_status').canal, 'meta');
+      assert.equal(config('zapi_status').ok, undefined, 'a faixa vermelha some');
+      assert.equal(envios().length, 0);
+    } finally { definirEnv('WA_CANAL', undefined); }
+  });
   test('conectada: grava o status e não avisa; consulta com o Client-Token', async () => {
     novoBanco(DADOS()); conectado();
     await rodar();

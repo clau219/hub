@@ -144,6 +144,12 @@ describe('WhatsApp: conexão da Z-API e número no menu', () => {
     assert.ok(!$('.wz-caiu'));
     assert.match(texto('.wz-con'), /Z-API conectada · 11:55/);
   });
+  test('canal pela API oficial da Meta: sem faixa vermelha da Z-API, selo "API oficial da Meta"', async () => {
+    await trocarDados(dados({ app_config: [{ key: 'zapi_status', value: JSON.stringify({ canal: 'meta', em: '2026-10-19T14:55:00Z' }) }] }), { supabase: true });
+    await abrir();
+    assert.ok(!$('.wz-caiu'));
+    assert.equal(texto('.wz-con'), '● API oficial da Meta');
+  });
   test('menu mostra quantas pessoas esperam resposta (some quando ninguém espera)', async () => {
     await trocarDados(dados(), { supabase: true });
     await abrir();
