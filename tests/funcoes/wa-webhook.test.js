@@ -725,6 +725,32 @@ describe('wa-webhook: pets na consulta, no sinal e na reserva', () => {
     assert.match(redacao, /4 hóspedes e 1 pet \(valores já com a taxa de pet\)/);
     assert.match(redacao, /Casa Azul: NÃO ACEITA PETS/);
   });
+  test('"vamos levar o cachorrinho, pode?" depois dos valores: cota de novo com o pet (a dúvida não fica com o preço antigo)', async () => {
+    novoBanco(dados({ ...PEDIDO, pets: null }));
+    simular(AIRBNB, COT_PET);
+    responderIA(IA({ assunto: 'duvida', resposta: 'Pode sim! A Terracota aceita pets.', casa: 'QS50', checkin: '2026-11-17', checkout: '2026-11-20', hospedes: 4, pets: 1, datas_exatas: true }));
+    const { corpo } = await teste({ texto: 'Ah, e vamos levar nosso cachorrinho, pode?' });
+    assert.deepEqual(chamadasPara(/airbnb-quote/)[0].json(), { checkin: '2026-11-17', checkout: '2026-11-20', adultos: 4, pets: 1 });
+    assert.match(corpo.texto, /4 hóspedes e 1 pet/);
+    assert.equal(banco().t('wa_contacts')[0].pedido.pets, 1);
+  });
+  test('dúvida sem mudar nada do pedido: não cota de novo', async () => {
+    novoBanco(dados());
+    simular(AIRBNB, COT_PET);
+    responderIA(IA({ assunto: 'duvida', resposta: 'O check-in é a partir das 14h.', casa: 'QS50', checkin: '2026-11-17', checkout: '2026-11-20', hospedes: 4, pets: 1, datas_exatas: true }));
+    const { corpo } = await teste({ texto: 'que horas é o check-in?' });
+    assert.equal(chamadasPara(/airbnb-quote/).length, 0);
+    assert.doesNotMatch(String(corpo.texto ?? ''), /R\$/, 'sem valores repetidos');
+  });
+  test('"dá pra parcelar no cartão?" com a cotação já enviada: só avisa que vai confirmar, sem repetir os valores', async () => {
+    novoBanco(dados({ ...PEDIDO, pets: null }));
+    simular(AIRBNB, COT_PET);
+    responderIA(IA({ assunto: 'confirmar_reserva', pergunta_claudio: 'Quer parcelar no cartão', casa: 'QS50', checkin: '2026-11-17', checkout: '2026-11-20', hospedes: 4, datas_exatas: true }));
+    const { corpo } = await teste({ texto: 'Dá pra parcelar no cartão?' });
+    assert.equal(chamadasPara(/airbnb-quote/).length, 0);
+    assert.match(corpo.texto, /Vou confirmar isso e já te retorno\.$/);
+    assert.doesNotMatch(corpo.texto, /R\$/);
+  });
   test('reservar com pet: total e sinal com a taxa de pet, e o pet aparece na mensagem e no sinal', async () => {
     novoBanco(dados());
     simular(AIRBNB, COT_PET);

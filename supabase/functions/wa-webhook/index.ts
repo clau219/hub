@@ -211,10 +211,15 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
   // Dúvida que a base das casas responde: o robô responde só com os fatos da base (a IA escreveu a resposta)
   // Pergunta que depende do Claudio: não inventa; avisa o cliente que vai confirmar, destaca no card e manda push
   const paraClaudio = x.pergunta_claudio?.trim() || null;
-  // Mensagem que completa a reserva em andamento ("somos 4") e ainda traz uma pergunta para o Claudio: segue com
-  // datas/valores e avisa da pergunta; sem dados da reserva, só avisa que vai confirmar
-  const trouxeDados = !!(x.checkin || x.checkout || x.noites || x.hospedes);
-  const disponibilidade = x.assunto === 'disponibilidade_preco' || (!!paraClaudio && trouxeDados && !!conversa.pedido);
+  // Só conta como dado novo o que muda o pedido guardado: a IA repete datas e pessoas da conversa em toda mensagem
+  const trouxeDados = trazNovidade(conversa.pedido, x);
+  // Pergunta para o Claudio com dado novo ("somos 4, aceita cartão?"): segue com valores e avisa da pergunta; sem dado
+  // novo ("dá pra parcelar?"), só avisa que vai confirmar, sem repetir a cotação. Dúvida que muda o preço com o pedido
+  // completo ("vamos levar o cachorro, pode?"): cota de novo (com a taxa de pet) e responde junto
+  const completo = !!conversa.pedido && !oQueFalta(combinarPedido(conversa.pedido, x));
+  const disponibilidade = paraClaudio
+    ? trouxeDados && (x.assunto === 'disponibilidade_preco' || !!conversa.pedido)
+    : x.assunto === 'disponibilidade_preco' || (x.assunto === 'duvida' && trouxeDados && completo);
   if (paraClaudio && !disponibilidade) return await encaminhar(sb, e, deal_id, x, paraClaudio, historico, teste);
 
   // "Obrigado", "ok", "vou ver com minha esposa": resposta curta, sem puxar assunto, e o card sai do "Responder"
@@ -223,7 +228,7 @@ async function decidir(sb: SB, e: Entrada, conversa: any, deal_id: string, msgId
   // Quer reservar: confere de novo no Airbnb e manda total, sinal e Pix (ou pergunta o que falta)
   if (x.assunto === 'reservar') return await reservar(sb, e, conversa, deal_id, x, historico, casas || [], teste);
 
-  const duvida = x.assunto === 'duvida' && !!base && !!x.resposta?.trim();
+  const duvida = !disponibilidade && x.assunto === 'duvida' && !!base && !!x.resposta?.trim();
   // Só cumprimento ("oi", "bom dia", "?") ou pedido genérico de informação: o robô dá as boas-vindas e pede as datas
   const saudacao = x.assunto === 'saudacao';
   if (!disponibilidade && !duvida && !saudacao) return { deal_id, respondeu: false, motivo: `assunto "${x.assunto}": fica para você`, extracao: x };
@@ -725,6 +730,14 @@ type Pedido = { casa: string; checkin: string | null; checkout: string | null; n
 const isoOk = (s: string | null | undefined) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s));
 
 // O que veio agora tem prioridade; o que não veio continua o que o cliente disse antes (até 7 dias)
+// A mensagem muda o pedido guardado (datas, confirmação das datas, pessoas, pets)? Sem pedido válido, qualquer dado conta
+function trazNovidade(antigo: Partial<Pedido> | null | undefined, x: Extracao) {
+  const v = antigo && Date.now() - Date.parse(antigo.em || '') < 7 * 864e5 ? antigo : null;
+  if (!v) return !!(x.checkin || x.checkout || x.noites || x.hospedes || x.pets);
+  const n: any = combinarPedido(v, x);
+  return ['checkin', 'checkout', 'noites', 'hospedes', 'pets'].some(k => n[k] != null && n[k] !== (v as any)[k]) || (n.datas_exatas && !v.datas_exatas);
+}
+
 function combinarPedido(antigo: Partial<Pedido> | null | undefined, x: Extracao): Pedido {
   const v: Partial<Pedido> = antigo && Date.now() - Date.parse(antigo.em || '') < 7 * 864e5 ? antigo : {};
   const p: Pedido = {
