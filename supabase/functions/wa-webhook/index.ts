@@ -21,7 +21,9 @@
 //
 // Segredos (supabase secrets set): ANTHROPIC_API_KEY e
 //   Z-API: ZAPI_INSTANCE, ZAPI_TOKEN, ZAPI_CLIENT_TOKEN, ZAPI_WEBHOOK_KEY (a Z-API não assina o webhook: a URL
-//          cadastrada nela leva ?zapi=<ZAPI_WEBHOOK_KEY>). Com ZAPI_INSTANCE definido, as respostas saem pela Z-API.
+//          cadastrada nela leva ?zapi=<ZAPI_WEBHOOK_KEY>).
+//   WA_CANAL = 'meta' ou 'zapi': qual canal vale para as conversas (o outro é ignorado na entrada). Sem ele, Z-API
+//          se ZAPI_INSTANCE estiver definido, senão Meta.
 //   Meta:  WA_VERIFY_TOKEN, WA_APP_SECRET, WA_TOKEN; opcionais WA_PHONE_ID (senão usa o do webhook), WA_GRAPH_VERSION (padrão v25.0)
 // Teste sem a Meta: POST com cabeçalho x-hub-cron e corpo { "teste": { "wa_id": "5584...", "nome": "Ana", "texto": "..." } }
 //   (acrescente "eco": true para simular uma mensagem sua). Nada é enviado ao WhatsApp no teste.
@@ -29,17 +31,16 @@ import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
 import Anthropic from 'npm:@anthropic-ai/sdk@0.134.0';
 import { zodOutputFormat } from 'npm:@anthropic-ai/sdk@0.134.0/helpers/zod';
 import { z } from 'npm:zod@4.6.7';
-import { enviarZapi, lerBase, baseTexto, campoAPreencher, avisarPush } from '../_shared/wa.ts';
+import { enviarZapi, enviarMeta, canalWa, baixarMetaMidia, lerBase, baseTexto, campoAPreencher, avisarPush } from '../_shared/wa.ts';
 import { ehDono, processarDono } from '../_shared/dono.ts';
 
 const SB_URL = Deno.env.get('SUPABASE_URL')!;
 const SB_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-const GRAPH = `https://graph.facebook.com/${Deno.env.get('WA_GRAPH_VERSION') || 'v25.0'}`;
 const ABERTAS = ['lead', 'orcamento', 'negociacao', 'fechado', 'realizado'];
 const ACAO_RESPONDER = 'Responder WhatsApp';
 
 type SB = ReturnType<typeof createClient>;
-type Midia = { url?: string; mime: string; base64?: string };
+type Midia = { url?: string; mime: string; base64?: string; metaId?: string };
 type Entrada = { wa_id: string; nome?: string | null; wamid: string; tipo: string; texto: string | null; ts: Date; phoneId?: string; midia?: Midia | null };
 
 Deno.serve(async req => {
@@ -84,13 +85,15 @@ Deno.serve(async req => {
 });
 
 async function processarWebhook(sb: SB, body: any) {
+  // Canal valendo é a Z-API: o que chega pela Meta (coexistência) é a mesma conversa e seria tratado duas vezes
+  if (canalWa() !== 'meta') return;
   for (const entry of body.entry || []) for (const ch of entry.changes || []) {
     const v = ch.value || {};
     const phoneId = v.metadata?.phone_number_id;
     if (ch.field === 'messages') {
       const nomes = Object.fromEntries((v.contacts || []).map((c: any) => [c.wa_id, c.profile?.name]));
       for (const m of v.messages || []) {
-        const e: Entrada = { wa_id: m.from, nome: nomes[m.from], wamid: m.id, tipo: m.type, texto: textoDe(m), ts: new Date(+m.timestamp * 1000), phoneId };
+        const e: Entrada = { wa_id: m.from, nome: nomes[m.from], wamid: m.id, tipo: m.type, texto: textoDe(m), ts: new Date(+m.timestamp * 1000), phoneId, midia: midiaDe(m) };
         if (await ehDono(sb, e.wa_id)) await processarDono(sb, e, { enviar: (to, t) => enviar(to, t, phoneId) });
         else await processarEntrada(sb, e, {});
       }
@@ -108,6 +111,8 @@ async function processarWebhook(sb: SB, body: any) {
 // (fromMe). As que o próprio robô mandou pela API vêm com fromApi e já estão gravadas.
 async function processarZapi(sb: SB, m: any) {
   if (m?.type !== 'ReceivedCallback') return;
+  // Canal valendo é a Meta: a Z-API ainda conectada entrega as mesmas mensagens; ficam de fora
+  if (canalWa() !== 'zapi') return;
   const inst = Deno.env.get('ZAPI_INSTANCE');
   if (inst && m.instanceId && m.instanceId !== inst) return console.warn('Z-API: instância desconhecida', m.instanceId);
   if (m.isGroup || m.isNewsletter || m.broadcast || m.isStatusReply || m.isEdit || m.reaction || !m.phone || !m.messageId) return;
@@ -542,13 +547,18 @@ type Leitura = z.infer<typeof ComprovanteSchema>;
 
 async function baixarMidia(m: Midia): Promise<{ mime: string; base64: string }> {
   if (m.base64) return { mime: m.mime, base64: m.base64 };
-  const r = await fetch(m.url!, { signal: AbortSignal.timeout(20000) });
-  if (!r.ok) throw new Error(`download ${r.status}`);
-  const buf = new Uint8Array(await r.arrayBuffer());
+  let buf: Uint8Array, tipo: string;
+  if (m.metaId) ({ bytes: buf, mime: tipo } = await baixarMetaMidia(m.metaId, 8));
+  else {
+    const r = await fetch(m.url!, { signal: AbortSignal.timeout(20000) });
+    if (!r.ok) throw new Error(`download ${r.status}`);
+    buf = new Uint8Array(await r.arrayBuffer());
+    tipo = r.headers.get('content-type') || '';
+  }
   if (buf.length > 8 * 1024 * 1024) throw new Error('arquivo grande demais');
   let bin = '';
   for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
-  const mime = (r.headers.get('content-type') || m.mime).split(';')[0].trim();
+  const mime = (tipo || m.mime).split(';')[0].trim();
   return { mime: /^image\/|^application\/pdf$/.test(mime) ? mime : m.mime, base64: btoa(bin) };
 }
 
@@ -875,22 +885,12 @@ async function cotar(checkin: string, checkout: string, adultos: number, pets?: 
 
 // ---------- envio: Z-API (se configurada) ou WhatsApp Cloud API ----------
 // Para o dono: sem "digitando..." de gente (é recibo, não conversa)
-const enviarDono = (to: string, body: string) => Deno.env.get('ZAPI_INSTANCE') ? enviarZapi(to, body, { digitando: 1 }) : enviar(to, body);
+const enviarDono = (to: string, body: string) => canalWa() === 'zapi' ? enviarZapi(to, body, { digitando: 1 }) : enviarMeta(to, body);
 // "digitando..." do tamanho do texto, como uma pessoa: 2 s numa frase curta, até 8 s numa resposta longa
 const tempoDigitando = (t: string) => Math.min(8, Math.max(2, Math.round(t.length / 40)));
 
 async function enviar(to: string, body: string, phoneIdWebhook?: string) {
-  if (Deno.env.get('ZAPI_INSTANCE')) return enviarZapi(to, body, { digitando: tempoDigitando(body) });
-  const phoneId = Deno.env.get('WA_PHONE_ID') || phoneIdWebhook;
-  const token = Deno.env.get('WA_TOKEN');
-  if (!phoneId || !token) { console.error('WA_TOKEN/WA_PHONE_ID ausentes'); return null; }
-  const r = await fetch(`${GRAPH}/${phoneId}/messages`, {
-    method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'text', text: { preview_url: false, body } }),
-  });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) { console.error('envio WhatsApp', r.status, JSON.stringify(j)); return null; }
-  return { wamid: j.messages?.[0]?.id as string };
+  return canalWa() === 'zapi' ? enviarZapi(to, body, { digitando: tempoDigitando(body) }) : enviarMeta(to, body, phoneIdWebhook);
 }
 
 async function assinaturaOk(req: Request, raw: string) {
@@ -905,6 +905,13 @@ async function assinaturaOk(req: Request, raw: string) {
   let diff = 0;
   for (let i = 0; i < hex.length; i++) diff |= hex.charCodeAt(i) ^ recebido.charCodeAt(i);
   return diff === 0;
+}
+
+// Foto, PDF ou áudio pela Meta: guarda o id; o download (com o token) só acontece se for preciso ler
+function midiaDe(m: any): Midia | null {
+  if (!['image', 'document', 'audio'].includes(m.type) || !m[m.type]?.id) return null;
+  const padrao = m.type === 'image' ? 'image/jpeg' : m.type === 'audio' ? 'audio/ogg' : 'application/pdf';
+  return { metaId: m[m.type].id, mime: String(m[m.type].mime_type || padrao).split(';')[0].trim() };
 }
 
 function textoDe(m: any): string | null {

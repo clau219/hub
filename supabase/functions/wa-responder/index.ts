@@ -8,7 +8,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
 import Anthropic from 'npm:@anthropic-ai/sdk@0.134.0';
 import { zodOutputFormat } from 'npm:@anthropic-ai/sdk@0.134.0/helpers/zod';
 import { z } from 'npm:zod@4.6.7';
-import { enviarZapi, lerBase, baseTexto, campoAPreencher } from '../_shared/wa.ts';
+import { enviarWa, canalWa, lerBase, baseTexto, campoAPreencher } from '../_shared/wa.ts';
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' };
 type SB = ReturnType<typeof createClient>;
@@ -39,9 +39,12 @@ async function enviar(sb: SB, c: any, texto: string) {
   if (texto.length > 4000) return json({ error: 'mensagem longa demais (máx. 4000 caracteres)' }, 400);
   const campo = campoAPreencher(texto);
   if (campo) return json({ error: `a mensagem tem um campo a preencher: ${campo}. Complete antes de enviar.` }, 400);
-  if (!Deno.env.get('ZAPI_INSTANCE')) return json({ error: 'Z-API não configurada' }, 500);
-  const r = await enviarZapi(c.wa_id, texto, { digitando: 0 });
-  if (!r) return json({ error: 'a Z-API não aceitou o envio (o WhatsApp das casas está conectado?)' }, 502);
+  const meta = canalWa() === 'meta';
+  if (meta ? !Deno.env.get('WA_TOKEN') : !Deno.env.get('ZAPI_INSTANCE')) return json({ error: `${meta ? 'API da Meta' : 'Z-API'} não configurada` }, 500);
+  const r = await enviarWa(c.wa_id, texto, { digitando: 0 });
+  if (!r) return json({ error: meta
+    ? 'a Meta não aceitou o envio (se o hóspede não escreve há mais de 24 h, só dá para responder pelo celular)'
+    : 'a Z-API não aceitou o envio (o WhatsApp das casas está conectado?)' }, 502);
   const agora = new Date().toISOString();
   await sb.from('wa_messages').insert({ wamid: r.wamid, wa_id: c.wa_id, deal_id: c.deal_id, direcao: 'out', autor: 'claudio', tipo: 'text', texto, enviado_em: agora });
   await sb.from('wa_contacts').update({ ultima_manual: agora }).eq('wa_id', c.wa_id);

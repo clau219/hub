@@ -918,3 +918,51 @@ describe('wa-webhook: Z-API', () => {
     assert.equal(banco().t('wa_messages').length, 1);
   });
 });
+
+describe('wa-webhook: troca de canal (Z-API → Meta)', () => {
+  const ZURL = /api\.z-api\.io/;
+  const zapi = (x = {}) => fn(pedido('/wa-webhook?zapi=chave-z', { corpo: {
+    type: 'ReceivedCallback', instanceId: 'INST1', messageId: 'Z' + Math.random(), phone: WA, fromMe: false,
+    momment: Date.parse('2026-10-19T14:59:00Z'), senderName: 'Ana Lima', isGroup: false, text: { message: 'Qual o valor?' }, ...x,
+  }, auth: null }));
+  beforeEach(() => { for (const [k, v] of Object.entries(ZAPI)) definirEnv(k, v); definirEnv('WA_CANAL', undefined); });
+
+  test('Z-API valendo (sem WA_CANAL): o que chega pela Meta é ignorado, sem resposta dupla', async () => {
+    novoBanco(DADOS());
+    responderIA(IA());
+    simular(ZURL, { messageId: 'Z-r' });
+    simular(/graph\.facebook\.com/, { messages: [{ id: 'wamid.r' }] });
+    await webhook(msgCliente('Qual o valor?'));
+    assert.equal(banco().t('wa_messages').length, 0);
+    await zapi();
+    assert.equal(banco().t('wa_messages').filter(m => m.autor === 'robo').length, 1);
+    assert.equal(chamadasPara(/graph\.facebook\.com/).length, 0);
+  });
+  test('WA_CANAL=meta com a Z-API ainda ligada: responde pela Meta e ignora a mesma mensagem vinda da Z-API', async () => {
+    novoBanco(DADOS());
+    definirEnv('WA_CANAL', 'meta');
+    responderIA(IA());
+    simular(ZURL, { messageId: 'Z-r' });
+    simular(/graph\.facebook\.com/, { messages: [{ id: 'wamid.r' }] });
+    await webhook(msgCliente('Qual o valor?'));
+    await zapi();
+    assert.equal(chamadasPara(ZURL).length, 0, 'nada sai pela Z-API');
+    assert.equal(chamadasPara(/graph\.facebook\.com/).length, 1);
+    assert.deepEqual(banco().t('wa_messages').map(m => m.autor), ['cliente', 'robo']);
+  });
+  test('comprovante em foto pela Meta: baixa pela Graph API com o token e a IA lê', async () => {
+    definirEnv('WA_CANAL', 'meta');
+    const SINAL = { casa: 'QS40', nome: 'Casa Azul', checkin: '2026-11-17', checkout: '2026-11-20', hospedes: 4, total: 1650, valor: 825, pct: 50, desde: '2026-10-19T14:00:00Z' };
+    novoBanco(DADOS({ contacts: [{ id: 'c1', nome: 'Ana Lima' }], deals: [{ id: 'd1', etapa: 'negociacao', contato_id: 'c1', pagamentos: [] }],
+      wa_contacts: [{ wa_id: WA, contato_id: 'c1', deal_id: 'd1', pedido: { casa: 'QS40', checkin: '2026-11-17', checkout: '2026-11-20', hospedes: 4, datas_exatas: true, em: '2026-10-19T10:00:00Z', sinal: SINAL } }],
+      app_config: [{ key: 'wa_base', value: JSON.stringify({ geral: { pix_chave: '12.345.678/0001-90', pix_nome: 'Claudio Roberto Sousa Braga LTDA', sinal_pct: '50' } }) }] }));
+    let leu;
+    responderIA(q => (q.system.includes('comprovantes de Pix') ? (leu = q, { e_comprovante_pix: false, valor: null, recebedor_nome: null, recebedor_chave: null, pagador_nome: null, data_hora: null, e2e: null }) : IA()));
+    simular('https://graph.facebook.com/v25.0/MID1', { url: 'https://lookaside.fbsbx.com/whatsapp/MID1', mime_type: 'image/jpeg', file_size: 6 });
+    simular('https://lookaside.fbsbx.com/whatsapp/MID1', () => new Response(new Uint8Array([0xff, 0xd8, 0xff, 1, 2, 3]), { headers: { 'content-type': 'image/jpeg' } }));
+    simular(/graph\.facebook\.com\/v25\.0\/\d+\/messages/, { messages: [{ id: 'wamid.r' }] });
+    await webhook(msgCliente(null, { type: 'image', text: undefined, image: { id: 'MID1', mime_type: 'image/jpeg' } }));
+    assert.equal(chamadasPara('https://lookaside.fbsbx.com/whatsapp/MID1')[0].headers.authorization, 'Bearer token-wa');
+    assert.equal(leu.messages[0].content[0].source.data, '/9j/AQID', 'a IA recebeu a foto');
+  });
+});

@@ -4,8 +4,14 @@
 // Cron 'dono-lembretes' (a cada minuto): { "lembretes": true } manda os avisos de tarefa com hora que venceram.
 // As mensagens do dono para o número das casas são tratadas no wa-webhook (_shared/dono.ts).
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
-import { enviarZapi } from '../_shared/wa.ts';
+import { enviarZapi, enviarMeta } from '../_shared/wa.ts';
 import { donoWa, resumoDoDia, enviarLembretes } from '../_shared/dono.ts';
+
+// Mensagem que parte do Hub (resumo, lembrete): pela Z-API enquanto existir; senão pela Meta, que só entrega se você
+// escreveu para o número das casas nas últimas 24 h
+const temZapi = () => !!Deno.env.get('ZAPI_INSTANCE');
+const configurado = () => temZapi() || !!Deno.env.get('WA_TOKEN');
+const enviarAoDono = (to: string, t: string) => (temZapi() ? enviarZapi(to, t, { digitando: 0 }) : enviarMeta(to, t));
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-hub-cron' };
 
@@ -17,8 +23,8 @@ Deno.serve(async req => {
   if (!(await autorizado(req, sb))) return json({ error: 'não autorizado' }, 401);
   const b = await req.json().catch(() => ({}));
   if (b.lembretes) {
-    if (!Deno.env.get('ZAPI_INSTANCE')) return json({ enviados: 0, motivo: 'Z-API não configurada' });
-    return json(await enviarLembretes(sb, (to, t) => enviarZapi(to, t, { digitando: 0 })));
+    if (!configurado()) return json({ enviados: 0, motivo: 'WhatsApp não configurado' });
+    return json(await enviarLembretes(sb, enviarAoDono));
   }
   const quando = b.resumo === 'noite' ? 'noite' : 'manha';
 
@@ -29,10 +35,10 @@ Deno.serve(async req => {
   if (cron && cfg?.dono_resumo === false) return json({ enviado: false, motivo: 'resumo automático desligado em Ajustes' });
   const texto = await resumoDoDia(sb, quando);
   if (b.previa) return json({ enviado: false, texto });
-  if (!Deno.env.get('ZAPI_INSTANCE')) return json({ enviado: false, motivo: 'Z-API não configurada', texto });
-  const r = await enviarZapi(para, texto, { digitando: 0 });
+  if (!configurado()) return json({ enviado: false, motivo: 'WhatsApp não configurado', texto });
+  const r = await enviarAoDono(para, texto);
   if (r) await sb.from('dono_msgs').insert({ wamid: r.wamid, direcao: 'out', texto });
-  return json({ enviado: !!r, texto, ...(r ? {} : { motivo: 'falha no envio pela Z-API' }) });
+  return json({ enviado: !!r, texto, ...(r ? {} : { motivo: temZapi() ? 'falha no envio pela Z-API' : 'a Meta recusou (sem mensagem sua nas últimas 24 h?)' }) });
 });
 
 async function autorizado(req: Request, sb: any) {

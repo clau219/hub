@@ -14,6 +14,48 @@ export async function enviarZapi(to: string, body: string, { digitando = 3 } = {
   return { wamid: (j.messageId || j.id) as string };
 }
 
+// Canal das conversas com hóspedes: 'meta' (API oficial, coexistência) ou 'zapi'. WA_CANAL decide; sem ele, Z-API
+// se estiver configurada. O canal que não está valendo é ignorado na entrada (senão cada mensagem viria duas vezes).
+export const canalWa = (): 'meta' | 'zapi' => {
+  const c = Deno.env.get('WA_CANAL');
+  return c === 'meta' || c === 'zapi' ? c : Deno.env.get('ZAPI_INSTANCE') ? 'zapi' : 'meta';
+};
+const GRAPH = () => `https://graph.facebook.com/${Deno.env.get('WA_GRAPH_VERSION') || 'v25.0'}`;
+
+// Envia texto pela API oficial (WA_TOKEN + WA_PHONE_ID, ou o número que veio no webhook). Fora da janela de 24 h
+// depois da última mensagem da pessoa a Meta recusa texto livre: devolve null e o motivo vai para o log.
+export async function enviarMeta(to: string, body: string, phoneIdWebhook?: string) {
+  const phoneId = Deno.env.get('WA_PHONE_ID') || phoneIdWebhook;
+  const token = Deno.env.get('WA_TOKEN');
+  if (!phoneId || !token) { console.error('WA_TOKEN/WA_PHONE_ID ausentes'); return null; }
+  const r = await fetch(`${GRAPH()}/${phoneId}/messages`, {
+    method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'text', text: { preview_url: false, body } }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { console.error('envio WhatsApp', r.status, JSON.stringify(j)); return null; }
+  return { wamid: j.messages?.[0]?.id as string };
+}
+
+// Envia pelo canal que está valendo
+export const enviarWa = (to: string, body: string, { digitando = 3, phoneId }: { digitando?: number; phoneId?: string } = {}) =>
+  canalWa() === 'meta' ? enviarMeta(to, body, phoneId) : enviarZapi(to, body, { digitando });
+
+// Foto, PDF ou áudio que chegou pela API oficial: a Meta manda só o id; o link sai da Graph API e o download
+// precisa do token
+export async function baixarMetaMidia(id: string, maxMb = 20): Promise<{ mime: string; bytes: Uint8Array }> {
+  const token = Deno.env.get('WA_TOKEN');
+  if (!token) throw new Error('WA_TOKEN ausente');
+  const info = await fetch(`${GRAPH()}/${id}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15000) }).then(r => r.json());
+  if (!info?.url) throw new Error(`mídia ${id} sem link (${info?.error?.message || 'resposta inválida'})`);
+  if (+info.file_size > maxMb * 1024 * 1024) throw new Error('arquivo grande demais');
+  const r = await fetch(info.url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30000) });
+  if (!r.ok) throw new Error(`download ${r.status}`);
+  const bytes = new Uint8Array(await r.arrayBuffer());
+  if (bytes.length > maxMb * 1024 * 1024) throw new Error('arquivo grande demais');
+  return { mime: String(info.mime_type || r.headers.get('content-type') || '').split(';')[0].trim(), bytes };
+}
+
 // Campo a preencher esquecido no texto ([nome], {data}, XX, ___, <valor>, (nome do cliente)): devolve o trecho
 // achado, ou null. Nada com isso é enviado ao cliente — nem pelo robô, nem pelo botão Enviar do Hub.
 export function campoAPreencher(texto: string): string | null {

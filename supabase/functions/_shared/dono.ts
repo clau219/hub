@@ -1,6 +1,7 @@
 import Anthropic from 'npm:@anthropic-ai/sdk@0.134.0';
 import { zodOutputFormat } from 'npm:@anthropic-ai/sdk@0.134.0/helpers/zod';
 import { z } from 'npm:zod@4.6.7';
+import { baixarMetaMidia } from './wa.ts';
 
 // Canal do dono: o Claudio manda mensagem do número pessoal (wa_settings.dono_wa) para o WhatsApp das casas e o
 // Hub trata como comando, não como cliente. A IA (Claude Haiku) transforma a frase em UMA ação de uma lista fechada;
@@ -12,7 +13,7 @@ import { z } from 'npm:zod@4.6.7';
 
 type SB = any;
 type Enviar = (to: string, texto: string) => Promise<{ wamid: string } | null>;
-type Midia = { url?: string; mime: string; base64?: string };
+type Midia = { url?: string; mime: string; base64?: string; metaId?: string };
 export type MsgDono = { wa_id: string; wamid: string; tipo: string; texto: string | null; ts: Date; midia?: Midia | null };
 
 const NEGOCIO_NOME: Record<string, string> = { dj: 'DJ', aluguel: 'Aluguéis', consultoria: 'Engenharia', argila: 'Argila Lab' };
@@ -639,6 +640,7 @@ async function transcrever(midia: Midia) {
 
 async function baixar(m: Midia, maxMb = 8): Promise<{ mime: string; bytes: Uint8Array }> {
   if (m.base64) return { mime: m.mime, bytes: Uint8Array.from(atob(m.base64), c => c.charCodeAt(0)) };
+  if (m.metaId) { const a = await baixarMetaMidia(m.metaId, maxMb); return { mime: a.mime || m.mime, bytes: a.bytes }; }
   const r = await fetch(m.url!, { signal: AbortSignal.timeout(30000) });
   if (!r.ok) throw new Error(`download ${r.status}`);
   const bytes = new Uint8Array(await r.arrayBuffer());
