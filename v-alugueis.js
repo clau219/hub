@@ -78,6 +78,8 @@ function seq(b) {
 
 // ---------- E-mail da portaria ----------
 // Cola os dados crus (WhatsApp, Airbnb, lista), o Hub organiza nome + documento e monta assunto e corpo para copiar.
+// Print ou foto de documento (Ctrl+V no campo, anexo ou câmera do celular) vai para a função portaria-ler (IA),
+// e o que ela devolve passa pelo mesmo leitor do texto colado.
 // Com uma reserva escolhida, "Salvar" grava os hóspedes nela e marca as etapas de hóspedes e portaria.
 export function portariaForm(b0) {
   const hoje = today();
@@ -92,8 +94,10 @@ export function portariaForm(b0) {
       <label>Entrada<input name="checkin" type="date"></label>
       <label>Saída<input name="checkout" type="date"></label>
     </div>
-    <label>Cole os dados como vieram (WhatsApp, Airbnb, lista)<textarea name="cru" rows="4" placeholder="1. Maria da Silva - CPF 123.456.789-00&#10;Hóspede 02 / Nome: João Souza / RG: 1.234.567&#10;todos os RGs são SSP/PE"></textarea></label>
-    <div class="row-btns"><button type="button" class="btn" id="ptLer">Organizar e adicionar à lista</button></div>
+    <label>Cole os dados como vieram: texto ou print (WhatsApp, Airbnb, lista, foto de documento)<textarea name="cru" rows="4" placeholder="1. Maria da Silva - CPF 123.456.789-00&#10;Hóspede 02 / Nome: João Souza / RG: 1.234.567&#10;todos os RGs são SSP/PE&#10;(ou cole aqui um print com Ctrl+V)"></textarea></label>
+    <div class="row-btns"><button type="button" class="btn" id="ptLer">Organizar e adicionar à lista</button>
+      <button type="button" class="btn" id="ptFoto">Ler print ou foto</button>
+      <input type="file" id="ptArq" accept="image/*,application/pdf" multiple hidden></div>
     <label>Hóspedes (um por linha: nome, documento)<textarea name="hospedes" rows="4"></textarea></label>
     <label>Veículos (um por linha: modelo, placa)<textarea name="veiculos" rows="2" placeholder="Honda HRV, TZX3D00"></textarea></label>
     <p class="muted small" id="ptAviso" aria-live="polite"></p>
@@ -112,12 +116,14 @@ export function portariaForm(b0) {
   });
   const $ = s => d.querySelector(s);
   const campo = n => $(`[name=${n}]`);
+  let avisosIA = []; // o que a IA pediu para conferir na última leitura de print
   const atualizar = () => {
     const casa = prop(campo('casa').value), checkin = campo('checkin').value, checkout = campo('checkout').value;
     const hospedes = parseHospedes(campo('hospedes').value), veiculos = parseVeiculos(campo('veiculos').value);
     const falta = [!checkin || !checkout ? 'as datas' : '', !hospedes.length ? 'os hóspedes' : ''].filter(Boolean);
     const semDoc = hospedes.filter(x => !x.doc).map(x => x.nome);
-    $('#ptAviso').textContent = falta.length ? `Falta ${falta.join(' e ')}.` : semDoc.length ? `Sem documento: ${semDoc.join(', ')}.` : `${hospedes.length} ${hospedes.length === 1 ? 'hóspede' : 'hóspedes'}, todos com documento.`;
+    $('#ptAviso').textContent = (falta.length ? `Falta ${falta.join(' e ')}.` : semDoc.length ? `Sem documento: ${semDoc.join(', ')}.` : `${hospedes.length} ${hospedes.length === 1 ? 'hóspede' : 'hóspedes'}, todos com documento.`)
+      + (avisosIA.length ? ` Conferir: ${avisosIA.join('; ')}.` : '');
     if (!checkin || !checkout) { campo('assunto').value = ''; campo('corpo').value = ''; return; }
     const e = emailPortaria({ checkin, checkout, hospedes, veiculos }, casa);
     campo('assunto').value = e.assunto; campo('corpo').value = e.corpo;
@@ -132,15 +138,61 @@ export function portariaForm(b0) {
   ['casa', 'checkin', 'checkout'].forEach(n => campo(n).addEventListener('change', atualizar));
   campo('hospedes').oninput = atualizar;
   campo('veiculos').oninput = atualizar;
-  $('#ptLer').onclick = () => {
-    const r = juntarHospedes(parseHospedes(campo('hospedes').value), campo('cru').value);
-    const v = juntarVeiculos(parseVeiculos(campo('veiculos').value), campo('cru').value);
-    if (!r.novos && !r.orgao && !v.novos) { toast('Não achei nome, documento nem placa no texto colado'); return; }
+  // Junta um texto (colado ou montado a partir da leitura do print) à lista; false se não achou nada
+  const juntar = (txt, origem) => {
+    const r = juntarHospedes(parseHospedes(campo('hospedes').value), txt);
+    const v = juntarVeiculos(parseVeiculos(campo('veiculos').value), txt);
+    if (!r.novos && !r.orgao && !v.novos) { toast(`Não achei nome, documento nem placa ${origem}`); return false; }
     campo('hospedes').value = hospedesTxt(r.lista);
     campo('veiculos').value = veiculosTxt(v.lista);
-    campo('cru').value = '';
     toast(`${r.novos} ${r.novos === 1 ? 'hóspede lido' : 'hóspedes lidos'}${v.novos ? ` · ${v.novos} ${v.novos === 1 ? 'veículo' : 'veículos'}` : ''}${r.orgao ? ` · RGs ${r.orgao}` : ''}`);
+    return true;
+  };
+  $('#ptLer').onclick = () => {
+    if (juntar(campo('cru').value, 'no texto colado')) campo('cru').value = '';
     atualizar();
+  };
+  // Casa e datas do print: acha a reserva; sem reserva escolhida, preenche casa/datas; com outra escolhida, avisa
+  const aplicarLeitura = r => {
+    avisosIA = r.avisos || [];
+    const atual = S.bookings.find(x => x.id === campo('bk').value);
+    if (r.casa || r.checkin) {
+      const achada = r.casa && r.checkin && reservas.find(b => b.property_id === r.casa && b.checkin === r.checkin);
+      if (!atual && achada) { campo('bk').value = achada.id; escolher(); }
+      else if (!atual) {
+        if (r.casa) campo('casa').value = r.casa;
+        if (r.checkin) campo('checkin').value = r.checkin;
+        if (r.checkout) campo('checkout').value = r.checkout;
+      } else if ((r.casa && r.casa !== atual.property_id) || (r.checkin && r.checkin !== atual.checkin)) {
+        avisosIA = [`o print fala de ${[r.casa && prop(r.casa).nome, r.checkin && fmtDate(r.checkin)].filter(Boolean).join(' em ')}, diferente da reserva escolhida`, ...avisosIA];
+      }
+    }
+    const txt = [...(r.hospedes || []).map(x => x.documento ? `${x.nome}, ${x.documento}` : x.nome), ...(r.veiculos || []).map(v => `${v.modelo} ${v.placa}`.trim())].join('\n');
+    juntar(txt, 'no arquivo');
+    atualizar();
+  };
+  const lerArquivos = async lista => {
+    const arqs = [...lista].filter(f => /^image\/|^application\/pdf$/.test(f.type));
+    if (!arqs.length) return;
+    if (db.mode !== 'supabase') { toast('Ler print precisa do Hub conectado ao Supabase'); return; }
+    if (arqs.length > 6) toast('Vou ler só os 6 primeiros arquivos');
+    const btn = $('#ptFoto');
+    btn.disabled = true; btn.textContent = `Lendo ${arqs.length > 1 ? `${Math.min(arqs.length, 6)} arquivos` : 'o arquivo'}…`;
+    try {
+      const arquivos = await Promise.all(arqs.slice(0, 6).map(prepararArquivo));
+      const { data, error } = await db.client().functions.invoke('portaria-ler', { body: { arquivos } });
+      if (error || data?.error) throw new Error(data?.error || error.message);
+      aplicarLeitura(data);
+    } catch (e) { $('#ptAviso').textContent = `Não consegui ler o arquivo: ${e.message}`; }
+    finally { btn.disabled = false; btn.textContent = 'Ler print ou foto'; }
+  };
+  $('#ptFoto').onclick = () => $('#ptArq').click();
+  $('#ptArq').onchange = ev => { lerArquivos(ev.target.files); ev.target.value = ''; };
+  campo('cru').onpaste = ev => {
+    const fs = [...(ev.clipboardData?.files || [])];
+    if (!fs.some(f => /^image\/|^application\/pdf$/.test(f.type))) return; // texto: cola normal
+    ev.preventDefault();
+    lerArquivos(fs);
   };
   const copiar = async (n, msg) => {
     if (!campo(n).value) { toast('Preencha as datas primeiro'); return; }
@@ -151,6 +203,24 @@ export function portariaForm(b0) {
   $('#ptCopC').onclick = () => copiar('corpo', 'E-mail copiado');
   escolher();
   return d;
+}
+
+// Foto vira JPEG de até 2000 px (print grande de celular passa de 5 MB e encarece a leitura); PDF vai como está
+async function prepararArquivo(f) {
+  if (f.type.startsWith('image/') && typeof createImageBitmap === 'function') {
+    try {
+      const img = await createImageBitmap(f);
+      const k = Math.min(1, 2000 / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      return { mime: 'image/jpeg', base64: c.toDataURL('image/jpeg', 0.88).split(',')[1] };
+    } catch { /* formato que o navegador não abre: manda o original */ }
+  }
+  const bytes = new Uint8Array(await f.arrayBuffer());
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return { mime: f.type, base64: btoa(s) };
 }
 
 // ---------- Consulta de disponibilidade e preço no Airbnb (função airbnb-quote) ----------

@@ -125,6 +125,78 @@ describe('E-mail da portaria', () => {
   });
 });
 
+describe('E-mail da portaria: print ou foto (função portaria-ler)', () => {
+  const campo = n => $(`#modal [name=${n}]`);
+  const png = (nome = 'print.png') => new File([new Uint8Array([137, 80, 78, 71])], nome, { type: 'image/png' });
+  const anexar = async (...arqs) => { $('#ptArq').onchange({ target: { files: arqs, value: 'x' } }); await esperar(15); };
+  const LIDO = (x = {}) => ({ hospedes: [], veiculos: [], casa: '', checkin: '', checkout: '', avisos: [], ...x });
+
+  test('anexar manda a imagem em base64; o resultado passa pelo leitor (CPF formatado, nome, órgão) e cai na lista', async () => {
+    banco().funcoes['portaria-ler'] = () => LIDO({
+      hospedes: [{ nome: 'MARIA DA SILVA', documento: 'CPF 12345678900' }, { nome: 'Luiz Antônio da Silva', documento: 'RG 2392336 SDS/PE' }],
+      veiculos: [{ modelo: 'HB20', placa: 'RZW5I32' }],
+    });
+    A.portariaForm(S.bookings.find(b => b.id === 'b1'));
+    await anexar(png());
+    assert.deepEqual(banco().invocacoes.at(-1), { nome: 'portaria-ler', body: { arquivos: [{ mime: 'image/png', base64: 'iVBORw==' }] } });
+    assert.equal(campo('hospedes').value, 'Maria da Silva, CPF 123.456.789-00\nLuiz Antônio da Silva, RG 2392336 SDS/PE');
+    assert.equal(campo('veiculos').value, 'HB20, RZW5I32');
+    assert.match(campo('corpo').value, /2\. Luiz Antônio da Silva \| RG 2392336 \| SDS\/PE\n\nVeículos autorizados:\n— HB20 \| RZW5I32/);
+    assert.equal(texto('#ptFoto'), 'Ler print ou foto');
+    assert.equal($('#ptFoto').disabled, false);
+  });
+  test('sem reserva escolhida: casa e entrada do print acham a reserva', async () => {
+    banco().funcoes['portaria-ler'] = () => LIDO({ hospedes: [{ nome: 'Bia Lima', documento: 'CPF 11122233344' }], casa: 'QS40', checkin: '2026-10-25', checkout: '2026-10-30' });
+    A.portariaForm();
+    preencher($('#modal'), { bk: '' });
+    await anexar(png());
+    assert.equal(campo('bk').value, 'b2');
+    assert.match(campo('hospedes').value, /Bia Lima, CPF 111\.222\.333-44$/);
+  });
+  test('sem reserva no Hub: preenche casa e datas; avisos da IA aparecem para conferir', async () => {
+    banco().funcoes['portaria-ler'] = () => LIDO({ hospedes: [{ nome: 'Caio Prado', documento: '' }], casa: 'QS50', checkin: '2026-12-28', checkout: '2027-01-02', avisos: ['documento do Caio não aparece no print'] });
+    A.portariaForm();
+    preencher($('#modal'), { bk: '' });
+    await anexar(png());
+    assert.deepEqual([campo('casa').value, campo('checkin').value, campo('checkout').value], ['QS50', '2026-12-28', '2027-01-02']);
+    assert.equal(campo('assunto').value, 'Autorização de Acesso — Casa Terracota QS50 — Hóspedes (28/12/2026 a 02/01/2027)');
+    assert.equal(texto('#ptAviso'), 'Sem documento: Caio Prado. Conferir: documento do Caio não aparece no print.');
+  });
+  test('print de outra casa que a reserva escolhida: avisa e não troca a reserva', async () => {
+    banco().funcoes['portaria-ler'] = () => LIDO({ hospedes: [{ nome: 'Lia Souza', documento: 'RG 1234567' }], casa: 'QS40', checkin: '2026-10-25' });
+    A.portariaForm(S.bookings.find(b => b.id === 'b1'));
+    await anexar(png());
+    assert.equal(campo('bk').value, 'b1');
+    assert.match(texto('#ptAviso'), /Conferir: o print fala de Casa Azul em 25 out, diferente da reserva escolhida\.$/);
+  });
+  test('colar (Ctrl+V) uma imagem no campo lê o print; texto colado segue normal', async () => {
+    banco().funcoes['portaria-ler'] = () => LIDO({ hospedes: [{ nome: 'Ana Paula Moura', documento: 'CPF 12345678900' }] });
+    A.portariaForm(S.bookings.find(b => b.id === 'b1'));
+    const n = banco().invocacoes.length;
+    let evitado = false;
+    campo('cru').onpaste({ clipboardData: { files: [] }, preventDefault: () => (evitado = true) });
+    assert.equal(evitado, false);
+    campo('cru').onpaste({ clipboardData: { files: [png()] }, preventDefault: () => (evitado = true) });
+    await esperar(15);
+    assert.equal(evitado, true);
+    assert.equal(banco().invocacoes.length, n + 1);
+    assert.match(campo('hospedes').value, /Ana Paula Moura, CPF 123\.456\.789-00/);
+  });
+  test('erro da função aparece e o botão volta', async () => {
+    banco().funcoes['portaria-ler'] = () => ({ error: 'tipo de arquivo não aceito: image/heic (use foto, print ou PDF)' });
+    A.portariaForm();
+    await anexar(new File(['x'], 'foto.heic', { type: 'image/heic' }));
+    assert.equal(texto('#ptAviso'), 'Não consegui ler o arquivo: tipo de arquivo não aceito: image/heic (use foto, print ou PDF)');
+    assert.equal($('#ptFoto').disabled, false);
+  });
+  test('arquivo que não é imagem nem PDF é ignorado', async () => {
+    const n = banco().invocacoes.length;
+    A.portariaForm();
+    await anexar(new File(['x'], 'lista.txt', { type: 'text/plain' }));
+    assert.equal(banco().invocacoes.length, n);
+  });
+});
+
 describe('Consultar Airbnb', () => {
   const RESPOSTA = {
     checkin: '2026-11-10', checkout: '2026-11-13', noites: 3, adultos: 4,
@@ -148,10 +220,11 @@ describe('Consultar Airbnb', () => {
     assert.equal($('#modal [name=checkout]').value, '2026-11-23');
   });
   test('saída antes da entrada não consulta', async () => {
+    const n = banco().invocacoes.length;
     A.consultaAirbnb({ checkin: '2026-11-10', checkout: '2026-11-09' });
     await clicar('#abGo');
     assert.match(texto('#abRes'), /saída precisa ser depois da entrada/);
-    assert.equal(banco().invocacoes.length, 0);
+    assert.equal(banco().invocacoes.length, n);
   });
   test('mostra as 3 casas e a mensagem pronta; copiar', async () => {
     banco().funcoes['airbnb-quote'] = () => RESPOSTA;
