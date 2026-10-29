@@ -5,7 +5,7 @@ import { CONFIG } from './config.js';
 import { acompanhada, pendentes, prazo } from './hospedagem.js';
 
 export const TABLES = ['contacts', 'deals', 'quotes', 'tasks', 'properties', 'bookings', 'events', 'calendar_sources', 'habits', 'habit_logs',
-  'crypto_watch', 'crypto_tx', 'crypto_snap'];
+  'crypto_watch', 'crypto_tx', 'crypto_snap', 'crypto_plano'];
 export const S = Object.fromEntries(TABLES.map(t => [t, []]));
 const listeners = new Set();
 export const onChange = fn => listeners.add(fn);

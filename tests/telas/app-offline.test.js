@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { hub, montarDom, $, texto, esperar, ate } from '../helpers/dom.js';
 import { novoBanco } from '../helpers/fake-supabase.js';
 
-const TODAS = ['contacts', 'deals', 'quotes', 'tasks', 'properties', 'bookings', 'events', 'calendar_sources', 'habits', 'habit_logs', 'crypto_watch', 'crypto_tx', 'crypto_snap'];
+const TODAS = ['contacts', 'deals', 'quotes', 'tasks', 'properties', 'bookings', 'events', 'calendar_sources', 'habits', 'habit_logs', 'crypto_watch', 'crypto_tx', 'crypto_snap', 'crypto_plano'];
 before(async () => {
   montarDom();
   const b = novoBanco();

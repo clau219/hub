@@ -222,3 +222,66 @@ describe('fin-sync: investimentos e foto do dia', () => {
     assert.deepEqual([st.em, st.contas], ['2026-10-19T15:00:00.000Z', 2]);
   });
 });
+
+describe('fin-sync: compras programadas de cripto → carteira cripto', () => {
+  const PLANO = [
+    { id: 'p1', coin_id: 'bitcoin', simbolo: 'BTC', nome: 'Bitcoin', valor: 250, corretora: 'Nubank', inicio: '2026-10-19', ativo: true },
+    { id: 'p2', coin_id: 'aave', simbolo: 'AAVE', nome: 'Aave', valor: 250, corretora: 'Nubank', inicio: '2026-10-19', ativo: true },
+    { id: 'p3', coin_id: 'ethereum', simbolo: 'ETH', nome: 'Ethereum', valor: 100, corretora: 'Nubank', inicio: '2026-10-19', ativo: true },
+  ];
+  const deb = (id, data, valor, x = {}) => ({ id, conta_id: 'acc1', data, valor, descricao: 'Compra de criptomoedas', status: 'POSTED', manual: false, origem_cat: 'pluggy', ...x });
+  const PRECO = { bitcoin: 500000, aave: 1000, ethereum: 20000 };
+  // Série de preços em reais (de hora em hora) no período pedido; moeda desconhecida: 404
+  const coingecko = () => simular(/api\.coingecko\.com\/api\/v3\/coins\/[^/]+\/market_chart\/range/, req => {
+    const u = new URL(req.url), id = req.url.split('/coins/')[1].split('/')[0];
+    if (!PRECO[id]) return { status: 404, json: {} };
+    const de = +u.searchParams.get('from') * 1000, ate = +u.searchParams.get('to') * 1000;
+    const prices = []; for (let t = de; t <= ate; t += 3600e3) prices.push([t, PRECO[id]]);
+    return { prices };
+  });
+  test('cada débito vira compra da moeda do plano, com a quantidade pela cotação do dia; nada em dobro', async () => {
+    novoBanco(DADOS({ crypto_plano: PLANO, crypto_tx: [], fin_tx: [
+      deb('antes', '2026-10-12', -250), // antes do início: já está no saldo lançado à mão
+      deb('a1', '2026-10-19', -250), deb('a2', '2026-10-19', -250), deb('a3', '2026-10-19', -100),
+      deb('avulsa', '2026-10-19', -1600), // valor fora do plano
+      deb('pend', '2026-10-19', -100, { status: 'PENDING' }),
+      { id: 'outra', conta_id: 'acc1', data: '2026-10-19', valor: -250, descricao: 'Supermercado', status: 'POSTED' },
+    ] }));
+    coingecko();
+    const { corpo } = await sync({ cripto: true });
+    assert.deepEqual(corpo, { lancados: 3, sem_plano: 1 }, 'a avulsa de 1600 fica de fora; a pendente espera compensar');
+    const ct = banco().t('crypto_tx');
+    assert.deepEqual(ct.map(c => [c.simbolo, c.quantidade, c.preco_brl, c.fin_tx_id, c.corretora, c.data]).sort(), [
+      ['AAVE', 0.25, 1000, 'a1', 'Nubank', '2026-10-19'], ['BTC', 0.0005, 500000, 'a2', 'Nubank', '2026-10-19'], ['ETH', 0.005, 20000, 'a3', 'Nubank', '2026-10-19']]);
+    assert.match(ct[0].obs, /Compra programada .* estimada pela cotação do dia/);
+    assert.equal(chamadasPara(/market_chart\/range/).length, 3, 'uma consulta por moeda');
+    assert.match(chamadasPara(/market_chart\/range/)[0].url, /vs_currency=brl&from=\d+&to=\d+/);
+    // rodar de novo não lança nada
+    assert.equal((await sync({ cripto: true })).corpo.lancados, 0);
+    assert.equal(banco().t('crypto_tx').length, 3);
+  });
+  test('sem cotação (limite da CoinGecko): fica para a próxima leitura; sem plano: não faz nada', async () => {
+    novoBanco(DADOS({ crypto_plano: [{ ...PLANO[0], coin_id: 'moeda-sem-preco' }], crypto_tx: [], fin_tx: [deb('a1', '2026-10-19', -250)] }));
+    coingecko();
+    assert.deepEqual((await sync({ cripto: true })).corpo, { lancados: 0, sem_plano: 0, sem_cotacao: 1 });
+    novoBanco(DADOS({ crypto_tx: [], fin_tx: [deb('a1', '2026-10-19', -250)] }));
+    assert.deepEqual((await sync({ cripto: true })).corpo, { lancados: 0, sem_plano: 0 });
+  });
+  test('limite da CoinGecko (429): espera e tenta de novo', async () => {
+    (await import('../../supabase/functions/_shared/cripto-recorrente.ts')).ajustarEspera(0);
+    novoBanco(DADOS({ crypto_plano: [PLANO[0]], crypto_tx: [], fin_tx: [deb('a1', '2026-10-19', -250)] }));
+    coingecko();
+    let vezes = 0;
+    simular(/market_chart\/range/, () => (++vezes === 1 ? { status: 429, json: {} } : { prices: [[Date.parse('2026-10-19T15:00:00Z'), 500000]] }));
+    assert.equal((await sync({ cripto: true })).corpo.lancados, 1);
+    assert.equal(vezes, 2);
+  });
+  test('a leitura normal do banco também lança as compras programadas', async () => {
+    novoBanco(DADOS({ crypto_plano: [PLANO[2]], crypto_tx: [] }));
+    pluggy({ txs: { acc1: [tx('n1', { date: '2026-10-19T12:00:00Z', description: 'Compra de criptomoedas', amount: 100 })] } });
+    coingecko();
+    const { corpo } = await sync();
+    assert.equal(corpo.cripto_compras, 1);
+    assert.equal(banco().t('crypto_tx')[0].fin_tx_id, 'n1');
+  });
+});

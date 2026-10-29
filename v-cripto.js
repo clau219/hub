@@ -704,14 +704,16 @@ function carteira() {
     </section>
   </div>
 
+  ${programadas()}
+
   <section class="block">
     <h2>Lançamentos <span class="count">${S.crypto_tx.length}</span>
       <select class="cr-filter" id="crFiltro" aria-label="Filtrar por moeda"><option value="">Todas as moedas</option>${conhecidas().filter(c => S.crypto_tx.some(t => t.coin_id === c.coin_id)).map(c => `<option value="${h(c.coin_id)}" ${filtro === c.coin_id ? 'selected' : ''}>${h(c.simbolo)}</option>`).join('')}</select></h2>
     <div class="table-wrap"><table class="table">
       <thead><tr><th>Data</th><th>Tipo</th><th>Moeda</th><th class="num">Quantidade</th><th class="num">Preço unit.</th><th class="num">Taxa</th><th class="num">Total</th><th>Corretora / carteira</th><th>Obs.</th></tr></thead>
       <tbody>${txs.map(t => `<tr data-tx="${t.id}" tabindex="0">
-        <td>${fmtDate(t.data, { year: true })}</td><td><span class="tipo t-${t.tipo}">${TIPOS[t.tipo]}</span></td><td><b>${h(t.simbolo)}</b></td>
-        <td class="num">${qtd(t.quantidade)}</td><td class="num">${t.tipo === 'transferencia' ? '' : preco(+t.preco_brl)}</td><td class="num">${+t.taxa_brl ? reais(t.taxa_brl) : ''}</td>
+        <td>${fmtDate(t.data, { year: true })}</td><td><span class="tipo t-${t.tipo}">${TIPOS[t.tipo]}</span></td><td><b>${h(t.simbolo)}</b>${t.fin_tx_id ? ' <span class="chip-static" title="Compra programada lida do extrato do banco; quantidade estimada pela cotação do dia">programada</span>' : ''}</td>
+        <td class="num">${t.fin_tx_id ? '≈ ' : ''}${qtd(t.quantidade)}</td><td class="num">${t.tipo === 'transferencia' ? '' : preco(+t.preco_brl)}</td><td class="num">${+t.taxa_brl ? reais(t.taxa_brl) : ''}</td>
         <td class="num">${t.tipo === 'transferencia' ? '' : reais(t.quantidade * t.preco_brl)}</td>
         <td>${h(t.corretora || '')}${t.tipo === 'transferencia' ? ` → ${h(t.destino || '?')}` : ''}</td><td class="muted cr-obs">${h(t.obs || '')}</td></tr>`).join('')}
       </tbody></table></div>
@@ -719,6 +721,50 @@ function carteira() {
   </section>
 
   ${vendasMes(vendas)}`;
+}
+
+// Compras programadas (crypto_plano): o extrato do banco só diz "Compra de criptomoedas" e o valor; o plano diz a moeda.
+// A leitura do banco (fin-sync) lança cada débito como compra, com a quantidade pela cotação do dia.
+function programadas() {
+  const pl = S.crypto_plano || [];
+  const lidas = S.crypto_tx.filter(t => t.fin_tx_id);
+  const porSemana = pl.filter(p => p.ativo).reduce((s, p) => s + +p.valor, 0);
+  return `<section class="block">
+    <h2>Compras programadas${porSemana ? ` <span class="count">${reais(porSemana)} por compra</span>` : ''}</h2>
+    <p class="muted small">O banco só informa "Compra de criptomoedas" e o valor. Aqui você diz qual moeda corresponde a cada valor; duas vezes por dia o Hub lê o extrato e lança cada compra na carteira, com a quantidade estimada pela cotação do dia (a real é um pouco menor por causa da diferença de preço cobrada pela corretora; lance o saldo do app de vez em quando para acertar).</p>
+    ${pl.length ? `<div class="table-wrap"><table class="table"><thead><tr><th>Moeda</th><th class="num">Valor</th><th>Corretora</th><th>Desde</th><th class="num">Lançadas</th><th></th></tr></thead><tbody>
+      ${pl.map(p => `<tr class="${p.ativo ? '' : 'fn-fora'}"><td><b>${h(p.simbolo)}</b> <span class="muted">${h(p.nome || '')}</span></td><td class="num">${reais(+p.valor)}</td><td>${h(p.corretora || '')}</td>
+        <td>${fmtDate(p.inicio, { year: true })}</td><td class="num">${lidas.filter(t => t.coin_id === p.coin_id && t.data >= p.inicio).length}</td>
+        <td class="num"><button class="mini" data-plano="${h(p.id)}">Editar</button></td></tr>`).join('')}
+    </tbody></table></div>` : '<p class="empty">Nenhuma compra programada cadastrada.</p>'}
+    <div class="row-btns"><button class="btn" id="crPlanoNovo">Adicionar moeda ao plano</button></div>
+  </section>`;
+}
+function planoForm(p = {}) {
+  const moedas = conhecidas();
+  p = { corretora: 'Nubank', inicio: today(), ativo: true, ...p };
+  modal(p.id ? 'Compra programada' : 'Nova compra programada', `
+    <div class="grid2">
+      <label>Moeda<select name="coin_id" required>${moedas.map(c => `<option value="${h(c.coin_id)}" ${c.coin_id === p.coin_id ? 'selected' : ''}>${h(c.simbolo)} · ${h(c.nome)}</option>`).join('')}</select></label>
+      <label>Valor de cada compra (R$)<input name="valor" inputmode="decimal" value="${h(p.valor != null ? String(p.valor).replace('.', ',') : '')}" required></label>
+      <label>Corretora<input name="corretora" value="${h(p.corretora)}" required></label>
+      <label>Valer a partir de<input name="inicio" type="date" value="${h(p.inicio)}" required></label>
+      <label class="span2 chk"><input type="checkbox" name="ativo" ${p.ativo ? 'checked' : ''}> Ativa</label>
+    </div>
+    <p class="muted small">Compras do extrato antes dessa data não entram (use quando o saldo dessa moeda já foi lançado à mão até ali). Para pausar sem perder o histórico, desmarque "Ativa".</p>`, {
+    extra: p.id ? '<button type="button" class="btn danger" id="crPlanoDel">Excluir</button>' : '',
+    onSubmit: async f => {
+      const c = moedas.find(x => x.coin_id === f.coin_id), valor = lerNumero(f.valor);
+      if (!c) throw new Error('Escolha a moeda.');
+      if (!(valor > 0)) throw new Error('Informe o valor de cada compra.');
+      await save('crypto_plano', { coin_id: c.coin_id, simbolo: c.simbolo, nome: c.nome, valor, corretora: f.corretora.trim(), inicio: f.inicio, ativo: !!f.ativo }, p.id);
+      toast('Compra programada salva');
+    },
+  });
+  dlg().querySelector('#crPlanoDel')?.addEventListener('click', async ev => {
+    if (!confirmInline(ev.target)) return;
+    await del('crypto_plano', p.id); closeModal(); toast('Compra programada excluída');
+  });
 }
 
 const csvBtns = () => `<div class="row-btns">
@@ -819,6 +865,8 @@ function vendasMes(vendas) {
 }
 
 function bindCarteira(el) {
+  el.querySelector('#crPlanoNovo')?.addEventListener('click', () => planoForm());
+  el.querySelectorAll('[data-plano]').forEach(b => b.onclick = () => planoForm((S.crypto_plano || []).find(p => p.id === b.dataset.plano)));
   el.querySelectorAll('[data-aloc]').forEach(b => b.onclick = () => { alocPor = b.dataset.aloc; render(el); });
   el.querySelector('#crFiltro')?.addEventListener('change', e => { filtro = e.target.value; render(el); });
   el.querySelectorAll('[data-tx]').forEach(r => {

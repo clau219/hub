@@ -28,7 +28,7 @@ describe('carga', () => {
     await semear({ properties: CASAS, contacts: [{ id: 'c1', nome: 'Ana' }] });
     assert.equal(S.contacts.length, 1);
     assert.ok(n >= 1);
-    assert.deepEqual(store.TABLES, ['contacts', 'deals', 'quotes', 'tasks', 'properties', 'bookings', 'events', 'calendar_sources', 'habits', 'habit_logs', 'crypto_watch', 'crypto_tx', 'crypto_snap']);
+    assert.deepEqual(store.TABLES, ['contacts', 'deals', 'quotes', 'tasks', 'properties', 'bookings', 'events', 'calendar_sources', 'habits', 'habit_logs', 'crypto_watch', 'crypto_tx', 'crypto_snap', 'crypto_plano']);
   });
   test('modo local não grava a cópia hub:snap (só com Supabase)', async () => {
     await semear({ properties: CASAS });

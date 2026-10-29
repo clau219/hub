@@ -10,7 +10,7 @@ before(async () => {
   db = await hub('db.js');
   store = await hub('store.js');
 });
-const TODAS = ['contacts', 'deals', 'quotes', 'tasks', 'properties', 'bookings', 'events', 'calendar_sources', 'habits', 'habit_logs', 'crypto_watch', 'crypto_tx', 'crypto_snap'];
+const TODAS = ['contacts', 'deals', 'quotes', 'tasks', 'properties', 'bookings', 'events', 'calendar_sources', 'habits', 'habit_logs', 'crypto_watch', 'crypto_tx', 'crypto_snap', 'crypto_plano'];
 
 describe('primeira carga sem rede usa a cópia guardada', () => {
   test('tudo falha na 1ª carga: lê hub:snap e marca offline', async () => {

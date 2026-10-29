@@ -332,3 +332,20 @@ describe('Sinais', () => {
     assert.match(texto('.sg-resumo'), /Uma moeda tem 3 ou mais sinais de preço descontado: BTC/);
   });
 });
+
+describe('Compras programadas', () => {
+  before(async () => { await irPara('carteira'); });
+  test('compras programadas: plano com o que já foi lançado do extrato; selo e ≈ nos lançamentos; editar o plano', async () => {
+    await trocarDados(DADOS({
+      crypto_plano: [{ id: 'pl1', coin_id: 'bitcoin', simbolo: 'BTC', nome: 'Bitcoin', valor: 250, corretora: 'Nubank', inicio: '2026-10-19', ativo: true }],
+      crypto_tx: [...TX, { id: 'x9', data: '2026-10-19', tipo: 'compra', coin_id: 'bitcoin', simbolo: 'BTC', nome: 'Bitcoin', quantidade: 0.0005, preco_brl: 500000, taxa_brl: 0, corretora: 'Nubank', fin_tx_id: 'f1', obs: 'Compra programada' }],
+    }), { supabase: true });
+    V.render(el); await esperar(10);
+    assert.match(nb(textoSep('.block:has(#crPlanoNovo) tbody')), /BTC Bitcoin R\$ 250,00 Nubank 19 out 26 1 Editar/);
+    assert.match(textoSep('tr[data-tx=x9]'), /BTC programada ≈ 0,0005/);
+    await clicar('[data-plano=pl1]');
+    preencher($('#modal'), { valor: '300' });
+    await enviarModal(); await esperar(10);
+    assert.equal(banco().t('crypto_plano')[0].valor, 300);
+  });
+});

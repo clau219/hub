@@ -10,10 +10,12 @@
 //   - No fim, foto do dia: contas/faturas (fin_snap) e valor de cada investimento, inclusive os manuais (fin_invest_hist).
 // Corpo: {} sincroniza tudo · {item: "<id>", nome?} cadastra uma conexão e sincroniza · {dias: N} relê N dias
 //        · {connect: true} devolve {connectToken} para abrir a janela da Pluggy (Pluggy Connect) no Hub.
+//        · {cripto: true} só transforma as compras programadas de cripto do extrato em compras na carteira cripto.
 // Chamada pelo cron (x-hub-cron, 2x por dia) e pelo botão da tela Finanças.
 // Segredos: PLUGGY_CLIENT_ID, PLUGGY_CLIENT_SECRET (e ANTHROPIC_API_KEY para a IA da categorização).
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
 import { classificarPendentes } from '../_shared/fin-classificar.ts';
+import { criptoRecorrente } from '../_shared/cripto-recorrente.ts';
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-hub-cron' };
 const API = 'https://api.pluggy.ai';
@@ -41,6 +43,9 @@ Deno.serve(async req => {
     } catch (e) {
       return json({ erro: (e as Error).message });
     }
+  }
+  if (body.cripto) {
+    try { return json(await criptoRecorrente(sb)); } catch (e) { return json({ erro: (e as Error).message }); }
   }
   let res: Record<string, unknown>;
   try {
@@ -114,6 +119,11 @@ async function sincronizar(sb: any, key: string, so: string[] | null, dias: numb
     cat = { classificados: c.classificados, revisar: c.revisar, ...(c.restantes ? { a_classificar: c.restantes } : {}) };
     if ((c as any).erro_ia) erros.push(`IA da categorização: ${(c as any).erro_ia}`);
   } catch (e) { erros.push(`categorização: ${(e as Error).message}`); }
+  // Compras programadas de cripto (extrato → carteira cripto)
+  try {
+    const c = await criptoRecorrente(sb);
+    if (c.lancados) cat.cripto_compras = c.lancados;
+  } catch (e) { erros.push(`compras de cripto: ${(e as Error).message}`); }
   return { contas, novos, atualizados, apagados, invest, ...cat, ...(erros.length ? { erro: erros.join(' · ') } : {}) };
 }
 
