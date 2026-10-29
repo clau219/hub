@@ -31,6 +31,8 @@ Deno.serve(async req => {
 async function vigiarConexao(sb: SB, avisos: any[]) {
   const inst = Deno.env.get('ZAPI_INSTANCE');
   if (!inst) return { ignorado: 'Z-API não configurada' };
+  // Conversas pela API oficial: a Z-API não importa mais (a coexistência derruba a sessão dela)
+  if (Deno.env.get('WA_CANAL') === 'meta') return { ignorado: 'canal é a Meta' };
   let st: { ok: boolean; motivo: string; celular?: boolean };
   try {
     const r = await fetch(`https://api.z-api.io/instances/${inst}/token/${Deno.env.get('ZAPI_TOKEN')}/status`, {

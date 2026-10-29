@@ -4,12 +4,12 @@
 // Cron 'dono-lembretes' (a cada minuto): { "lembretes": true } manda os avisos de tarefa com hora que venceram.
 // As mensagens do dono para o número das casas são tratadas no wa-webhook (_shared/dono.ts).
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
-import { enviarZapi, enviarMeta } from '../_shared/wa.ts';
+import { enviarZapi, enviarMeta, canalWa } from '../_shared/wa.ts';
 import { donoWa, resumoDoDia, enviarLembretes } from '../_shared/dono.ts';
 
-// Mensagem que parte do Hub (resumo, lembrete): pela Z-API enquanto existir; senão pela Meta, que só entrega se você
-// escreveu para o número das casas nas últimas 24 h
-const temZapi = () => !!Deno.env.get('ZAPI_INSTANCE');
+// Mensagem que parte do Hub (resumo, lembrete): pelo canal que está valendo. Pela Meta só entrega se você escreveu
+// para o número das casas nas últimas 24 h
+const temZapi = () => canalWa() === 'zapi';
 const configurado = () => temZapi() || !!Deno.env.get('WA_TOKEN');
 const enviarAoDono = (to: string, t: string) => (temZapi() ? enviarZapi(to, t, { digitando: 0 }) : enviarMeta(to, t));
 
