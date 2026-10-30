@@ -115,6 +115,8 @@ export function lerHospedesCru(txt, orgao = orgaoGeral(txt)) {
   for (let l of (txt || '').split('\n')) {
     l = l.trim()
       .replace(/^\[[^\]]{4,30}\]\s*[^:]{1,40}:\s*/, '') // [10:32, 20/10/2026] Fulano:
+      .replace(/[*_~]/g, '') // formatação do WhatsApp: *negrito*, _itálico_, ~riscado~
+      .trim()
       .replace(/^\d{1,2}\/\d{1,2}\/\d{2,4},?\s+\d{1,2}:\d{2}\s+-\s+[^:]{1,40}:\s*/, '') // 20/10/2026 10:32 - Fulano:
       .replace(/^(?:\d{1,2}\s*[)º°]\s*|\d{1,2}\s*[.\-–]\s+|[•*·–-]\s+)/, '') // 1) 1. 1 - • -
       .trim();

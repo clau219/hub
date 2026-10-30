@@ -163,6 +163,26 @@ todos os RGs são SSP/PE`), [
       { nome: 'Beatriz', doc: 'RG 6.666.666 SSP/PE' },
     ]);
   });
+  test('formatação do WhatsApp (*negrito*), RG colado no rótulo e data de nascimento ignorada', () => {
+    assert.deepEqual(H.lerHospedesCru(`*Hóspede 01*
+*Nome Completo:* Ana Carneiro de Souza
+*CPF:* 111.222.333-44
+*RG:* 4.507.736
+*Data de nascimento:* 12/03/2005
+
+*Hóspede 02*
+*Nome Completo:* Pedro Marinho da Costa
+*RG:*3.395.297
+*Data de Nascimento:* 20/11/2004
+
+_Hóspede 03_
+*Nome Completo:* Lia ~Souza~ Lima
+*RG:* 10560548`), [
+      { nome: 'Ana Carneiro de Souza', doc: 'CPF 111.222.333-44' },
+      { nome: 'Pedro Marinho da Costa', doc: 'RG 3.395.297' },
+      { nome: 'Lia Souza Lima', doc: 'RG 10560548' },
+    ]);
+  });
   test('nome com número solto e passaporte; frases da conversa ficam de fora', () => {
     assert.deepEqual(H.lerHospedesCru('Bom dia! Somos 3 pessoas\nPedro Henrique Alves 12.345.678\nLucas Martins passaporte fx123456\nSegue a lista dos hóspedes'), [
       { nome: 'Pedro Henrique Alves', doc: '12.345.678' },
