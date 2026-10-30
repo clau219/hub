@@ -433,7 +433,7 @@ function boasVindas(conv) {
   return { texto: `Olá, ${primeiro}! 😊 Que alegria receber você na ${nomeCasa}!
 
 🏡 ${nomeCasa.toUpperCase()} ${casa}
-${g.endereco?.trim() || 'Condomínio Pipa Natureza – Praia da Pipa, Tibau do Sul/RN'}
+Condomínio Pipa Natureza – Praia da Pipa, Tibau do Sul/RN
 📍 Localização: ${v('localizacao')}
 Na portaria, informe seu nome e a casa. Seu acesso já estará liberado.
 

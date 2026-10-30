@@ -292,7 +292,7 @@ describe('WhatsApp: Boas-vindas', () => {
     await abrirCom(comCasas({ QS40: AZUL }));
     $('[data-pronta=boasvindas]').click();
     const t = tx().value;
-    assert.match(t, /^Olá, Ana! 😊 Que alegria receber você na Casa Azul!\n\n🏡 CASA AZUL QS40\nCond\. Pipa Natureza\n📍 Localização: https:\/\/maps\.app\.goo\.gl\/azul\n/);
+    assert.match(t, /^Olá, Ana! 😊 Que alegria receber você na Casa Azul!\n\n🏡 CASA AZUL QS40\nCondomínio Pipa Natureza – Praia da Pipa, Tibau do Sul\/RN\n📍 Localização: https:\/\/maps\.app\.goo\.gl\/azul\n/);
     assert.match(t, /📅 CHECK-IN\n17\/11\/2026, a partir das 14h\n🔑 Ao chegarem, a chave estará no cofre da frente\.\nSenha do cofre: 1111\n/);
     assert.match(t, /📅 CHECK-OUT\n20\/11\/2026, até as 10h\n/);
     assert.match(t, /📶 WI-FI\nRede: REDE-TESTE\nSenha: senha-teste\n/);
