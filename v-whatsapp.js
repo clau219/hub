@@ -14,7 +14,7 @@ const CASA = { QS39: 'Casa Frida', QS40: 'Casa Azul', QS50: 'Casa Terracota' };
 const ATUALIZA = 10e3;
 // Mesma regra de supabase/functions/_shared/wa.ts (campoAPreencher)
 const CAMPO_A_PREENCHER = /\[[^\]\n]{1,60}\]|\{\{?[^}\n]{0,60}\}?\}|\bX{2,}\b|_{3,}|<[^>\n]{1,40}>|\(\s*(?:nome|data|valor|n[uú]mero)\b[^)\n]{0,40}\)/i;
-const PRONTAS = [['pix', 'Pix do sinal'], ['local', 'Localização'], ['horarios', 'Check-in/out'], ['regras', 'Regras'], ['pets', 'Pets']];
+const PRONTAS = [['boasvindas', 'Boas-vindas'], ['pix', 'Pix do sinal'], ['local', 'Localização'], ['horarios', 'Check-in/out'], ['regras', 'Regras'], ['pets', 'Pets']];
 
 let D = { contatos: [], msgs: [], cfg: null, zapi: null, base: {}, at: 0, erro: '', assinatura: '' };
 let filtro = 'todas';
@@ -290,6 +290,7 @@ function ligarConversa(el, conv) {
 
   el.querySelectorAll('[data-pronta]').forEach(b => b.onclick = () => {
     const r = pronta(b.dataset.pronta, atual());
+    if (r.aviso) return toast(r.aviso, 5000);
     if (r.falta) { toast(`Preencha “${r.falta}” em Informações das casas`, 4000); return baseForm(); }
     inserir(r.texto);
   });
@@ -401,9 +402,63 @@ function pronta(tipo, conv) {
     if (!g.checkin?.trim() || !g.checkout?.trim()) return falta(!g.checkin?.trim() ? 'Horário de check-in' : 'Horário de check-out');
     return { texto: `O check-in é a partir das ${g.checkin.trim()} e o check-out até as ${g.checkout.trim()}.` };
   }
+  if (tipo === 'boasvindas') return boasVindas(conv);
   if (tipo === 'regras') return g.regras?.trim() ? { texto: g.regras.trim() } : falta('Regras da casa');
   if (tipo === 'pets') return g.pets?.trim() ? { texto: g.pets.trim() } : falta('Pets');
   return falta(tipo);
+}
+
+// Boas-vindas (perto da chegada): localização, horários, cofre, Wi-Fi e regras da casa da reserva.
+// Reserva = a próxima no nome da pessoa (de preferência na casa da conversa); sem reserva, a casa da conversa com
+// as datas em [colchetes], que o Enviar não deixa sair sem preencher.
+function boasVindas(conv) {
+  const g = D.base.geral || {};
+  const nome = conv.contato?.nome || conv.nome || '';
+  const casaConv = casaDaConversa(conv);
+  const proximas = nome ? S.bookings.filter(b => b.status !== 'cancelada' && b.checkout >= today() && mesmoNome(b.hospede, nome)).sort((a, b) => a.checkin.localeCompare(b.checkin)) : [];
+  const b = proximas.find(x => x.property_id === casaConv) || proximas[0];
+  const casa = b?.property_id || casaConv;
+  if (!casa) return { aviso: 'Não achei reserva nem casa nesta conversa: lance a reserva no nome da pessoa ou diga a casa na oportunidade.' };
+  const nomeCasa = casasDaBase().find(c => c.id === casa)?.nome || CASA[casa] || casa;
+  const x = D.base.casas?.[casa] || {};
+  const v = k => String(x[k] || '').trim();
+  if (!g.checkin?.trim() || !g.checkout?.trim()) return { falta: !g.checkin?.trim() ? 'Horário de check-in' : 'Horário de check-out' };
+  for (const [k, rot] of [['localizacao', 'Link da localização'], ['cofre_senha', 'Senha do cofre'], ['wifi_rede', 'Wi-Fi (rede)'], ['wifi_senha', 'Wi-Fi (senha)'], ['lixo', 'Onde fica o lixo']]) {
+    if (!v(k)) return { falta: `${rot} (${nomeCasa})` };
+  }
+  const data = iso => iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : '[dd/mm/aaaa]';
+  const primeiro = (b?.hospede || nome).trim().split(/\s+/)[0] || '[Nome]';
+  const cap = v('capacidade').match(/\d+/)?.[0];
+  const pets = v('pets') || g.pets?.trim();
+  return { texto: `Olá, ${primeiro}! 😊 Que alegria receber você na ${nomeCasa}!
+
+🏡 ${nomeCasa.toUpperCase()} ${casa}
+${g.endereco?.trim() || 'Condomínio Pipa Natureza – Praia da Pipa, Tibau do Sul/RN'}
+📍 Localização: ${v('localizacao')}
+Na portaria, informe seu nome e a casa. Seu acesso já estará liberado.
+
+📅 CHECK-IN
+${data(b?.checkin)}, a partir das ${g.checkin.trim()}
+🔑 Ao chegarem, a chave estará no cofre da frente.
+Senha do cofre: ${v('cofre_senha')}
+Me avise o horário previsto de chegada, por favor.
+
+📅 CHECK-OUT
+${data(b?.checkout)}, até as ${g.checkout.trim()}
+Deixe a chave de volta no cofre e confira se portas e janelas ficaram fechadas.
+
+📶 WI-FI
+Rede: ${v('wifi_rede')}
+Senha: ${v('wifi_senha')}
+
+📋 REGRAS DA CASA
+${[cap ? `• Até ${cap} hóspedes. Visitas só com aviso prévio, porque o condomínio exige autorização na portaria` : '• Visitas só com aviso prévio, porque o condomínio exige autorização na portaria',
+  '• Silêncio a partir das 22h', '• Proibido fumar dentro da casa', '• Festas e eventos não são permitidos',
+  pets ? `• ${pets}` : '', '• Ao sair, desligue o ar-condicionado e as luzes', `• Lixo: ${v('lixo')}`,
+  '• Danos a móveis e utensílios serão cobrados'].filter(Boolean).join('\n')}
+
+Qualquer dúvida, é só me chamar por aqui. Boa estadia! 🌴
+Claudio` };
 }
 
 // ---------- base de informações das casas (app_config 'wa_base') ----------
@@ -422,7 +477,10 @@ const GERAL_LONGO = [
 const POR_CASA = [
   ['localizacao', 'Link da localização — vai nas respostas prontas e no rascunho, nunca pelo robô', 'https://maps.app.goo.gl/…'], ['capacidade', 'Capacidade', '8 pessoas'], ['quartos', 'Quartos e camas', '3 suítes: 2 casal + 1 com 2 solteiro'],
   ['comodidades', 'Comodidades', 'Piscina, churrasqueira, ar-condicionado nos quartos…'], ['wifi_rede', 'Wi-Fi (rede)', ''],
-  ['wifi_senha', 'Wi-Fi (senha) — só vai no rascunho da IA, nunca pelo robô', ''], ['observacoes', 'Observações', ''],
+  ['wifi_senha', 'Wi-Fi (senha) — só vai no rascunho da IA, nunca pelo robô', ''],
+  ['cofre_senha', 'Senha do cofre da chave — só vai nas Boas-vindas, nunca pelo robô nem pela IA', ''],
+  ['lixo', 'Onde fica o lixo', 'Ao lado da vaga da garagem'], ['pets', 'Pets nesta casa (vai nas Boas-vindas)', 'Pets são bem-vindos… / Não aceitamos pets'],
+  ['observacoes', 'Observações', ''],
 ];
 function baseForm() {
   const b = D.base || {}; const g = b.geral || {};

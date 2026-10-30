@@ -278,6 +278,65 @@ describe('WhatsApp: responder pelo Hub', () => {
   });
 });
 
+describe('WhatsApp: Boas-vindas', () => {
+  const AZUL = { localizacao: 'https://maps.app.goo.gl/azul', capacidade: '6 pessoas', cofre_senha: '1111', wifi_rede: 'REDE-TESTE', wifi_senha: 'senha-teste', lixo: 'ao lado da vaga da garagem', pets: 'Não aceitamos pets' };
+  const comCasas = (casas, mexer = () => {}) => {
+    const d = comBase();
+    d.app_config = [{ key: 'wa_base', value: JSON.stringify({ ...BASE, geral: { ...BASE.geral, checkout: '10h' }, casas }) }];
+    mexer(d);
+    return d;
+  };
+  const abrirCom = async d => { await trocarDados(d, { supabase: true }); await abrir(`#/whatsapp?c=${ANA}`); digitar(''); };
+
+  test('monta a mensagem com a reserva da pessoa: nome, casa, datas, cofre, Wi-Fi e regras da casa', async () => {
+    await abrirCom(comCasas({ QS40: AZUL }));
+    $('[data-pronta=boasvindas]').click();
+    const t = tx().value;
+    assert.match(t, /^Olá, Ana! 😊 Que alegria receber você na Casa Azul!\n\n🏡 CASA AZUL QS40\nCond\. Pipa Natureza\n📍 Localização: https:\/\/maps\.app\.goo\.gl\/azul\n/);
+    assert.match(t, /📅 CHECK-IN\n17\/11\/2026, a partir das 14h\n🔑 Ao chegarem, a chave estará no cofre da frente\.\nSenha do cofre: 1111\n/);
+    assert.match(t, /📅 CHECK-OUT\n20\/11\/2026, até as 10h\n/);
+    assert.match(t, /📶 WI-FI\nRede: REDE-TESTE\nSenha: senha-teste\n/);
+    assert.match(t, /• Até 6 hóspedes\. Visitas só com aviso prévio/);
+    assert.match(t, /• Não aceitamos pets\n/);
+    assert.match(t, /• Lixo: ao lado da vaga da garagem\n/);
+    assert.match(t, /Boa estadia! 🌴\nClaudio$/);
+    assert.ok(!/\[[^\]]+\]/.test(t), 'nada a preencher');
+  });
+  test('sem reserva no nome: usa a casa da conversa e deixa as datas em colchetes (o Enviar barra)', async () => {
+    await abrirCom(comCasas({ QS40: AZUL }, d => { d.bookings = []; }));
+    $('[data-pronta=boasvindas]').click();
+    assert.match(tx().value, /📅 CHECK-IN\n\[dd\/mm\/aaaa\], a partir das 14h/);
+    banco().funcoes['wa-responder'] = async () => ({ ok: true });
+    $('#wzEnviar').click(); await esperar(10);
+    assert.match(texto('#toast'), /Complete \[dd\/mm\/aaaa\] antes de enviar/);
+  });
+  test('reserva já encerrada não conta', async () => {
+    await abrirCom(comCasas({ QS40: AZUL }, d => { d.bookings[0] = { ...d.bookings[0], checkin: '2026-09-01', checkout: '2026-09-03' }; }));
+    $('[data-pronta=boasvindas]').click();
+    assert.match(tx().value, /\[dd\/mm\/aaaa\]/);
+  });
+  test('a reserva manda na casa, mesmo que a conversa fale de outra', async () => {
+    const FRIDA = { ...AZUL, localizacao: 'https://maps.app.goo.gl/frida', cofre_senha: '2222', wifi_rede: 'REDE-FRIDA-TESTE', pets: 'Pets são bem-vindos' };
+    await abrirCom(comCasas({ QS40: AZUL, QS39: FRIDA }, d => { d.bookings = [{ ...d.bookings[0], property_id: 'QS39' }]; }));
+    $('[data-pronta=boasvindas]').click();
+    assert.match(tx().value, /na Casa Frida!/);
+    assert.match(tx().value, /Senha do cofre: 2222/);
+  });
+  test('falta a senha do cofre da casa: avisa e abre a base', async () => {
+    await abrirCom(comCasas({ QS40: { ...AZUL, cofre_senha: '' } }));
+    $('[data-pronta=boasvindas]').click(); await esperar();
+    assert.match(texto('#toast'), /Preencha “Senha do cofre \(Casa Azul\)”/);
+    assert.equal(texto('#modalTitle'), 'Informações das casas');
+    $('#modal').close();
+  });
+  test('sem reserva e sem casa na conversa: só avisa', async () => {
+    await abrirCom(comCasas({ QS40: AZUL }, d => { d.bookings = []; for (const m of d.wa_messages) if (m.extracao) m.extracao.casa = 'qualquer'; }));
+    $('[data-pronta=boasvindas]').click(); await esperar();
+    assert.match(texto('#toast'), /Não achei reserva nem casa/);
+    assert.equal(tx().value, '');
+  });
+});
+
 describe('WhatsApp: painel ao lado da conversa', () => {
   beforeEach(async () => { await trocarDados(comBase(), { supabase: true }); await abrir(`#/whatsapp?c=${ANA}`); digitar(''); });
   test('oportunidade com etapa, valor e quanto falta', () => {
