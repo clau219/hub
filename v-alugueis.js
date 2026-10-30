@@ -1,6 +1,6 @@
 import { S, prop, ocupacao, save } from './store.js';
 import { h, today, addDays, fmtDate, weekdayShort, brl, diffDays, relDate } from './util.js';
-import { bookingForm, modal, toast } from './ui.js';
+import { bookingForm, modal, toast, confirmInline, closeModal } from './ui.js';
 import * as db from './db.js';
 import { progresso, acompanhada, prazo, alternar, parseHospedes, hospedesTxt, juntarHospedes, parseVeiculos, veiculosTxt, juntarVeiculos, emailPortaria } from './hospedagem.js';
 
@@ -103,7 +103,9 @@ export function portariaForm(b0) {
     <p class="muted small" id="ptAviso" aria-live="polite"></p>
     <label>Assunto<input name="assunto" readonly></label>
     <label>E-mail<textarea name="corpo" rows="10" readonly></textarea></label>
-    <div class="row-btns"><button type="button" class="btn" id="ptCopA">Copiar assunto</button><button type="button" class="btn" id="ptCopC">Copiar e-mail</button></div>`, {
+    <div class="row-btns"><button type="button" class="btn" id="ptCopA">Copiar assunto</button><button type="button" class="btn" id="ptCopC">Copiar e-mail</button></div>
+    <label>Para<input name="para" type="text" inputmode="email" value="${h(paraPortaria())}" placeholder="${PARA_PORTARIA}"></label>
+    <div class="row-btns"><button type="button" class="btn primary" id="ptEnviar">Enviar para a administração</button></div>`, {
     submit: 'Salvar na reserva e marcar enviada',
     onSubmit: async f => {
       const b = S.bookings.find(x => x.id === f.bk);
@@ -201,9 +203,35 @@ export function portariaForm(b0) {
   };
   $('#ptCopA').onclick = () => copiar('assunto', 'Assunto copiado');
   $('#ptCopC').onclick = () => copiar('corpo', 'E-mail copiado');
+  // Envio pelo Gmail (função portaria-enviar), em 2 cliques; com reserva escolhida, grava a lista e marca a portaria
+  $('#ptEnviar').onclick = async ev => {
+    const btn = ev.target, aviso = $('#ptAviso');
+    const para = campo('para').value.trim(), assunto = campo('assunto').value, corpo = campo('corpo').value;
+    const hospedes = parseHospedes(campo('hospedes').value), veiculos = parseVeiculos(campo('veiculos').value);
+    if (!assunto || !hospedes.length) { aviso.textContent = 'Preencha as datas e os hóspedes antes de enviar.'; return; }
+    if (!para) { aviso.textContent = 'Preencha o e-mail da administração.'; return; }
+    if (db.mode !== 'supabase') { aviso.textContent = 'O envio precisa do Hub conectado ao Supabase.'; return; }
+    if (!confirmInline(btn)) return;
+    btn.disabled = true; btn.textContent = 'Enviando…';
+    try {
+      const { data, error } = await db.client().functions.invoke('portaria-enviar', { body: { para, assunto, corpo } });
+      if (error || data?.error) throw new Error(data?.error || error.message);
+      try { localStorage.setItem('hub:portaria-para', para); } catch { /* sem armazenamento: usa o padrão */ }
+      const b = S.bookings.find(x => x.id === campo('bk').value);
+      if (b) await save('bookings', { hospedes, veiculos, etapas: alternar({ etapas: alternar(b, 'hospedes', true) }, 'portaria', true) }, b.id);
+      closeModal();
+      toast(`E-mail enviado para ${para}${b ? ' · portaria marcada' : ''}`, 4000);
+    } catch (e) {
+      aviso.textContent = `Não consegui enviar: ${e.message}`;
+      btn.disabled = false; btn.textContent = 'Enviar para a administração';
+    }
+  };
   escolher();
   return d;
 }
+
+const PARA_PORTARIA = 'appp.acesso@gmail.com'; // administração do Condomínio Pipa Natureza
+const paraPortaria = () => { try { return localStorage.getItem('hub:portaria-para') || PARA_PORTARIA; } catch { return PARA_PORTARIA; } };
 
 // Foto vira JPEG de até 2000 px (print grande de celular passa de 5 MB e encarece a leitura); PDF vai como está
 async function prepararArquivo(f) {

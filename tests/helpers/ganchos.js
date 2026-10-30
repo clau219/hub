@@ -10,6 +10,7 @@ const MAPA = [
   [/^npm:@anthropic-ai\/sdk(@[^/]+)?$/, new URL('fake-anthropic.js', aqui).href],
   [/^npm:zod(@[^/]+)?$/, 'zod'],
   [/^npm:web-push(@[^/]+)?$/, new URL('fake-webpush.js', aqui).href],
+  [/^npm:nodemailer(@[^/]+)?$/, new URL('fake-nodemailer.js', aqui).href],
   [/^https:\/\/esm\.sh\/rrule@[^/]+$/, new URL('rrule.js', aqui).href], // adaptador: o pacote é CommonJS
 ];
 

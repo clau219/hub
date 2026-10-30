@@ -197,6 +197,54 @@ describe('E-mail da portaria: print ou foto (função portaria-ler)', () => {
   });
 });
 
+describe('E-mail da portaria: enviar para a administração (função portaria-enviar)', () => {
+  const campo = n => $(`#modal [name=${n}]`);
+  test('destinatário padrão é a administração do condomínio', () => {
+    A.portariaForm();
+    assert.equal(campo('para').value, 'appp.acesso@gmail.com');
+  });
+  test('sem hóspedes não envia', async () => {
+    const n = banco().invocacoes.length;
+    A.portariaForm(S.bookings.find(b => b.id === 'b1'));
+    preencher($('#modal'), { hospedes: '' });
+    await clicar('#ptEnviar');
+    assert.equal(texto('#ptAviso'), 'Preencha as datas e os hóspedes antes de enviar.');
+    assert.equal(banco().invocacoes.length, n);
+  });
+  test('2 cliques: manda assunto e corpo, grava a lista na reserva, marca a portaria e lembra o destinatário', async () => {
+    banco().funcoes['portaria-enviar'] = () => ({ ok: true, messageId: '<x@gmail.com>' });
+    A.portariaForm();
+    preencher($('#modal'), { bk: 'b1', hospedes: 'Ana Paula, CPF 123.456.789-00', veiculos: 'HB20, RZW5I32', para: 'appp.acesso@gmail.com, eu@me.com' });
+    const n = banco().invocacoes.length;
+    await clicar('#ptEnviar');
+    assert.equal(banco().invocacoes.length, n); // 1º clique só arma
+    assert.equal(texto('#ptEnviar'), 'Clique de novo para confirmar');
+    const assunto = campo('assunto').value, corpo = campo('corpo').value;
+    await clicar('#ptEnviar', 15);
+    assert.deepEqual(banco().invocacoes.at(-1), { nome: 'portaria-enviar', body: { para: 'appp.acesso@gmail.com, eu@me.com', assunto, corpo } });
+    const b = S.bookings.find(x => x.id === 'b1');
+    assert.deepEqual(b.hospedes, [{ nome: 'Ana Paula', doc: 'CPF 123.456.789-00' }]);
+    assert.deepEqual(b.veiculos, [{ modelo: 'HB20', placa: 'RZW5I32' }]);
+    assert.equal(b.etapas.portaria, '2026-10-19');
+    assert.equal($('#modal').open, false);
+    assert.equal(texto('#toast'), 'E-mail enviado para appp.acesso@gmail.com, eu@me.com · portaria marcada');
+    A.portariaForm();
+    assert.equal(campo('para').value, 'appp.acesso@gmail.com, eu@me.com');
+    localStorage.removeItem('hub:portaria-para');
+  });
+  test('erro do Gmail aparece, nada é marcado e o botão volta', async () => {
+    banco().funcoes['portaria-enviar'] = () => ({ error: 'o Gmail recusou o login (confira a senha de app)' });
+    A.portariaForm(S.bookings.find(b => b.id === 'b2'));
+    const antes = JSON.stringify(S.bookings.find(b => b.id === 'b2').etapas);
+    preencher($('#modal'), { hospedes: 'Bia Lima, CPF 111.222.333-44' });
+    await clicar('#ptEnviar'); await clicar('#ptEnviar', 15);
+    assert.equal(texto('#ptAviso'), 'Não consegui enviar: o Gmail recusou o login (confira a senha de app)');
+    assert.equal(JSON.stringify(S.bookings.find(b => b.id === 'b2').etapas), antes);
+    assert.equal($('#modal').open, true);
+    assert.deepEqual([$('#ptEnviar').disabled, texto('#ptEnviar')], [false, 'Enviar para a administração']);
+  });
+});
+
 describe('Consultar Airbnb', () => {
   const RESPOSTA = {
     checkin: '2026-11-10', checkout: '2026-11-13', noites: 3, adultos: 4,
