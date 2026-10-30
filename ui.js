@@ -2,6 +2,7 @@ import { h, today, addDays, fluxo, AREAS, ABERTAS, etapa, hhmm, localDate, relDa
 import { S, save, del, ensureContact, byId, contactName, contatoPorNome, prop } from './store.js';
 import { checklistHtml, bindChecklist, lerChecklist, alternar, ETAPAS_HOSP } from './hospedagem.js';
 import * as db from './db.js';
+import { textoBoasVindas, lerBase as lerBaseCasas } from './boasvindas.js';
 
 const dlg = () => document.getElementById('modal');
 export const MOTIVOS_PERDA = ['Preço', 'Data já ocupada', 'Parou de responder', 'Escolheu outro', 'Evento cancelado', 'Fora do perfil', 'Outro'];
@@ -336,7 +337,7 @@ export function bookingForm(b = {}) {
     </div>
     ${checklistHtml(b)}
     <label>Notas<textarea name="notas" rows="2">${h(b.notas)}</textarea></label>`, {
-    extra: b.id ? `<button type="button" class="btn danger" id="delBk">Excluir</button>` : '',
+    extra: b.id ? `${b.status === 'confirmada' ? '<button type="button" class="btn" id="bvBk" title="Mensagem com localização, cofre, Wi-Fi e regras, para colar no chat do Airbnb ou no WhatsApp">Copiar boas-vindas</button>' : ''}<button type="button" class="btn danger" id="delBk">Excluir</button>` : '',
     onSubmit: async f => {
       Object.assign(f, lerChecklist(f, b));
       if (f.checkout <= f.checkin) throw new Error('O check-out precisa ser depois do check-in.');
@@ -347,6 +348,15 @@ export function bookingForm(b = {}) {
     },
   });
   bindChecklist(dlg(), () => prop(dlg().querySelector('[name=property_id]').value), b);
+  // Boas-vindas da reserva salva (casa, datas e nome; "Hóspede Airbnb" fica sem nome) para colar no chat
+  dlg().querySelector('#bvBk')?.addEventListener('click', async () => {
+    try {
+      const r = textoBoasVindas({ base: await lerBaseCasas(), casa: b.property_id, nomeCasa: prop(b.property_id)?.nome, checkin: b.checkin, checkout: b.checkout, nome: b.hospede });
+      if (r.falta) return toast(`Preencha “${r.falta}” em WhatsApp → Informações das casas`, 5000);
+      await navigator.clipboard.writeText(r.texto);
+      toast('Boas-vindas copiada: cole no chat do hóspede');
+    } catch (e) { toast('Não foi possível copiar: ' + (e.message || e), 5000); }
+  });
   dlg().querySelector('#delBk')?.addEventListener('click', async ev => {
     if (!confirmInline(ev.target)) return;
     await del('bookings', b.id); closeModal(); toast('Reserva excluída');

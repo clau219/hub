@@ -7,6 +7,7 @@ import { S } from './store.js';
 import * as db from './db.js';
 import { h, today, localDate, hhmm, waLink, fmtDate, etapa, recebido, saldoDeal } from './util.js';
 import { dealForm, bookingForm, modal, toast } from './ui.js';
+import { textoBoasVindas } from './boasvindas.js';
 
 const QUEM = { cliente: 'Cliente', robo: 'Robô', claudio: 'Você' };
 const ASSUNTO = { disponibilidade_preco: 'Disponibilidade e valor', confirmar_reserva: 'Quer reservar / pagar', duvida: 'Dúvida respondida pela base', saudacao: 'Cumprimento', outro: 'Outro assunto' };
@@ -408,57 +409,17 @@ function pronta(tipo, conv) {
   return falta(tipo);
 }
 
-// Boas-vindas (perto da chegada): localização, horários, cofre, Wi-Fi e regras da casa da reserva.
-// Reserva = a próxima no nome da pessoa (de preferência na casa da conversa); sem reserva, a casa da conversa com
-// as datas em [colchetes], que o Enviar não deixa sair sem preencher.
+// Boas-vindas (texto em boasvindas.js) com a reserva = a próxima no nome da pessoa (de preferência na casa da
+// conversa); sem reserva, a casa da conversa com as datas em [colchetes], que o Enviar não deixa sair sem preencher.
 function boasVindas(conv) {
-  const g = D.base.geral || {};
   const nome = conv.contato?.nome || conv.nome || '';
   const casaConv = casaDaConversa(conv);
   const proximas = nome ? S.bookings.filter(b => b.status !== 'cancelada' && b.checkout >= today() && mesmoNome(b.hospede, nome)).sort((a, b) => a.checkin.localeCompare(b.checkin)) : [];
   const b = proximas.find(x => x.property_id === casaConv) || proximas[0];
   const casa = b?.property_id || casaConv;
   if (!casa) return { aviso: 'Não achei reserva nem casa nesta conversa: lance a reserva no nome da pessoa ou diga a casa na oportunidade.' };
-  const nomeCasa = casasDaBase().find(c => c.id === casa)?.nome || CASA[casa] || casa;
-  const x = D.base.casas?.[casa] || {};
-  const v = k => String(x[k] || '').trim();
-  if (!g.checkin?.trim() || !g.checkout?.trim()) return { falta: !g.checkin?.trim() ? 'Horário de check-in' : 'Horário de check-out' };
-  for (const [k, rot] of [['localizacao', 'Link da localização'], ['cofre_senha', 'Senha do cofre'], ['wifi_rede', 'Wi-Fi (rede)'], ['wifi_senha', 'Wi-Fi (senha)'], ['lixo', 'Onde fica o lixo']]) {
-    if (!v(k)) return { falta: `${rot} (${nomeCasa})` };
-  }
-  const data = iso => iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : '[dd/mm/aaaa]';
-  const primeiro = (b?.hospede || nome).trim().split(/\s+/)[0] || '[Nome]';
-  const cap = v('capacidade').match(/\d+/)?.[0];
-  const pets = v('pets') || g.pets?.trim();
-  return { texto: `Olá, ${primeiro}! 😊 Que alegria receber você na ${nomeCasa}!
-
-🏡 ${nomeCasa.toUpperCase()} ${casa}
-Condomínio Pipa Natureza – Praia da Pipa, Tibau do Sul/RN
-📍 Localização: ${v('localizacao')}
-Na portaria, informe seu nome e a casa. Seu acesso já estará liberado.
-
-📅 CHECK-IN
-${data(b?.checkin)}, a partir das ${g.checkin.trim()}
-🔑 Ao chegarem, a chave estará no cofre da frente.
-Senha do cofre: ${v('cofre_senha')}
-Me avise o horário previsto de chegada, por favor.
-
-📅 CHECK-OUT
-${data(b?.checkout)}, até as ${g.checkout.trim()}
-Deixe a chave de volta no cofre e confira se portas e janelas ficaram fechadas.
-
-📶 WI-FI
-Rede: ${v('wifi_rede')}
-Senha: ${v('wifi_senha')}
-
-📋 REGRAS DA CASA
-${[cap ? `• Até ${cap} hóspedes. Visitas só com aviso prévio, porque o condomínio exige autorização na portaria` : '• Visitas só com aviso prévio, porque o condomínio exige autorização na portaria',
-  '• Silêncio a partir das 22h', '• Proibido fumar dentro da casa', '• Festas e eventos não são permitidos',
-  pets ? `• ${pets}` : '', '• Ao sair, desligue o ar-condicionado e as luzes', `• Lixo: ${v('lixo')}`,
-  '• Danos a móveis e utensílios serão cobrados'].filter(Boolean).join('\n')}
-
-Qualquer dúvida, é só me chamar por aqui. Boa estadia! 🌴
-Claudio` };
+  const nomeCasa = casasDaBase().find(c => c.id === casa)?.nome;
+  return textoBoasVindas({ base: D.base, casa, nomeCasa, checkin: b?.checkin, checkout: b?.checkout, nome: b?.hospede || nome });
 }
 
 // ---------- base de informações das casas (app_config 'wa_base') ----------

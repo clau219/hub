@@ -313,3 +313,39 @@ describe('Consultar Airbnb', () => {
     assert.equal(banco().invocacoes.length, n + 1);
   });
 });
+
+describe('Reserva: copiar boas-vindas', () => {
+  const BASE = { geral: { checkin: '14h', checkout: '10h' },
+    casas: { QS39: { localizacao: 'https://maps.app.goo.gl/frida', capacidade: '8 pessoas', cofre_senha: '2222', wifi_rede: 'REDE-TESTE', wifi_senha: 'senha-teste', lixo: 'ao lado da vaga da garagem', pets: 'Pets são bem-vindos' } } };
+  const comBase = base => { const t = banco().t('app_config'); t.splice(0, t.length, { key: 'wa_base', value: JSON.stringify(base) }); };
+  const abrirReserva = id => { A.render(el); clicar(`tbody tr[data-bk=${id}]`); };
+
+  test('copia a mensagem com casa, datas, cofre e Wi-Fi da reserva', async () => {
+    comBase(BASE); abrirReserva('b1');
+    clicar('#bvBk'); await esperar(10);
+    const t = await navigator.clipboard.readText();
+    assert.match(t, /^Olá, Ana! 😊 Que alegria receber você na Casa Frida!\n\n🏡 CASA FRIDA QS39\n/);
+    assert.match(t, /📅 CHECK-IN\n20\/10\/2026, a partir das 14h\n/);
+    assert.match(t, /📅 CHECK-OUT\n23\/10\/2026, até as 10h\n/);
+    assert.match(t, /Senha do cofre: 2222\n/);
+    assert.match(t, /• Até 8 hóspedes\./);
+    assert.match(texto('#toast'), /Boas-vindas copiada/);
+  });
+  test('reserva do Airbnb sem nome ("Hóspede Airbnb"): cumprimenta sem nome', async () => {
+    comBase(BASE); S.bookings.find(b => b.id === 'b1').hospede = 'Hóspede Airbnb'; abrirReserva('b1');
+    clicar('#bvBk'); await esperar(10);
+    assert.match(await navigator.clipboard.readText(), /^Olá! 😊 Que alegria receber você na Casa Frida!/);
+    S.bookings.find(b => b.id === 'b1').hospede = 'Ana';
+  });
+  test('falta a senha do cofre: avisa onde preencher e não copia', async () => {
+    await navigator.clipboard.writeText('antes');
+    comBase({ ...BASE, casas: { QS39: { ...BASE.casas.QS39, cofre_senha: '' } } }); abrirReserva('b1');
+    clicar('#bvBk'); await esperar(10);
+    assert.match(texto('#toast'), /Preencha “Senha do cofre \(Casa Frida\)” em WhatsApp → Informações das casas/);
+    assert.equal(await navigator.clipboard.readText(), 'antes');
+  });
+  test('bloqueio não tem o botão', () => {
+    A.render(el); clicar('.bar[data-bk=b3]');
+    assert.equal($('#bvBk'), null);
+  });
+});
