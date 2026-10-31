@@ -29,3 +29,7 @@ insert into crypto_plano (coin_id, simbolo, nome, valor, inicio)
 select * from (values ('bitcoin', 'BTC', 'Bitcoin', 250, date '2026-10-19'), ('aave', 'AAVE', 'Aave', 250, date '2026-10-19'),
                       ('ethereum', 'ETH', 'Ethereum', 100, date '2026-10-19'), ('uniswap', 'UNI', 'Uniswap', 100, date '2026-10-19')) v
 where not exists (select 1 from crypto_plano);
+
+-- 31/10/2026: a corretora cobra acima do preço de mercado; medido pelo app do Nubank nas compras de 19 e 26/10: ~3,5%
+alter table crypto_plano add column if not exists spread_pct numeric not null default 0;
+update crypto_plano set spread_pct = 3.5 where corretora = 'Nubank' and spread_pct = 0;

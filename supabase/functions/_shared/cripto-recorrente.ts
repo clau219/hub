@@ -70,13 +70,15 @@ export async function criptoRecorrente(sb: SB, { hoje }: { hoje?: string } = {})
   }
   const linhas: any[] = [];
   for (const { t, p } of pares) {
-    const preco = precoNoDia(serie.get(p.coin_id) || [], t.data);
-    if (!preco) continue;
+    const mercado = precoNoDia(serie.get(p.coin_id) || [], t.data);
+    if (!mercado) continue;
+    // A corretora cobra uma diferença sobre o preço de mercado (medida no app: Nubank ~3,5%)
+    const preco = mercado * (1 + (+p.spread_pct || 0) / 100);
     const valor = Math.abs(+t.valor);
     linhas.push({
       coin_id: p.coin_id, simbolo: p.simbolo, nome: p.nome || p.simbolo, tipo: 'compra', data: t.data,
       quantidade: +(valor / preco).toPrecision(10), preco_brl: +preco.toFixed(8), taxa_brl: 0, corretora: p.corretora || 'Nubank',
-      obs: `Compra programada (R$ ${valor.toFixed(2).replace('.', ',')}); quantidade estimada pela cotação do dia`, fin_tx_id: t.id,
+      obs: `Compra programada (R$ ${valor.toFixed(2).replace('.', ',')}); quantidade estimada pela cotação do dia${+p.spread_pct ? ` + ${String(p.spread_pct).replace('.', ',')}% da corretora` : ''}`, fin_tx_id: t.id,
     });
   }
   if (linhas.length) {

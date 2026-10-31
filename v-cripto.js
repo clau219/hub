@@ -732,8 +732,8 @@ function programadas() {
   return `<section class="block">
     <h2>Compras programadas${porSemana ? ` <span class="count">${reais(porSemana)} por compra</span>` : ''}</h2>
     <p class="muted small">O banco só informa "Compra de criptomoedas" e o valor. Aqui você diz qual moeda corresponde a cada valor; duas vezes por dia o Hub lê o extrato e lança cada compra na carteira, com a quantidade estimada pela cotação do dia (a real é um pouco menor por causa da diferença de preço cobrada pela corretora; lance o saldo do app de vez em quando para acertar).</p>
-    ${pl.length ? `<div class="table-wrap"><table class="table"><thead><tr><th>Moeda</th><th class="num">Valor</th><th>Corretora</th><th>Desde</th><th class="num">Lançadas</th><th></th></tr></thead><tbody>
-      ${pl.map(p => `<tr class="${p.ativo ? '' : 'fn-fora'}"><td><b>${h(p.simbolo)}</b> <span class="muted">${h(p.nome || '')}</span></td><td class="num">${reais(+p.valor)}</td><td>${h(p.corretora || '')}</td>
+    ${pl.length ? `<div class="table-wrap"><table class="table"><thead><tr><th>Moeda</th><th class="num">Valor</th><th>Corretora</th><th class="num">Diferença</th><th>Desde</th><th class="num">Lançadas</th><th></th></tr></thead><tbody>
+      ${pl.map(p => `<tr class="${p.ativo ? '' : 'fn-fora'}"><td><b>${h(p.simbolo)}</b> <span class="muted">${h(p.nome || '')}</span></td><td class="num">${reais(+p.valor)}</td><td>${h(p.corretora || '')}</td><td class="num">${+p.spread_pct ? String(p.spread_pct).replace('.', ',') + '%' : '–'}</td>
         <td>${fmtDate(p.inicio, { year: true })}</td><td class="num">${lidas.filter(t => t.coin_id === p.coin_id && t.data >= p.inicio).length}</td>
         <td class="num"><button class="mini" data-plano="${h(p.id)}">Editar</button></td></tr>`).join('')}
     </tbody></table></div>` : '<p class="empty">Nenhuma compra programada cadastrada.</p>'}
@@ -749,15 +749,18 @@ function planoForm(p = {}) {
       <label>Valor de cada compra (R$)<input name="valor" inputmode="decimal" value="${h(p.valor != null ? String(p.valor).replace('.', ',') : '')}" required></label>
       <label>Corretora<input name="corretora" value="${h(p.corretora)}" required></label>
       <label>Valer a partir de<input name="inicio" type="date" value="${h(p.inicio)}" required></label>
+      <label>Diferença de preço da corretora (%)<input name="spread_pct" inputmode="decimal" value="${h(String(p.spread_pct ?? 0).replace('.', ','))}"></label>
       <label class="span2 chk"><input type="checkbox" name="ativo" ${p.ativo ? 'checked' : ''}> Ativa</label>
     </div>
-    <p class="muted small">Compras do extrato antes dessa data não entram (use quando o saldo dessa moeda já foi lançado à mão até ali). Para pausar sem perder o histórico, desmarque "Ativa".</p>`, {
+    <p class="muted small">A diferença de preço é o quanto a corretora cobra acima da cotação de mercado; ela deixa a quantidade estimada mais perto da real (no Nubank, medido em 31/10/2026: ~3,5%). Compras do extrato antes dessa data não entram (use quando o saldo dessa moeda já foi lançado à mão até ali). Para pausar sem perder o histórico, desmarque "Ativa".</p>`, {
     extra: p.id ? '<button type="button" class="btn danger" id="crPlanoDel">Excluir</button>' : '',
     onSubmit: async f => {
       const c = moedas.find(x => x.coin_id === f.coin_id), valor = lerNumero(f.valor);
       if (!c) throw new Error('Escolha a moeda.');
       if (!(valor > 0)) throw new Error('Informe o valor de cada compra.');
-      await save('crypto_plano', { coin_id: c.coin_id, simbolo: c.simbolo, nome: c.nome, valor, corretora: f.corretora.trim(), inicio: f.inicio, ativo: !!f.ativo }, p.id);
+      const spread_pct = lerNumero(f.spread_pct) ?? 0;
+      if (spread_pct < 0 || spread_pct > 20) throw new Error('A diferença de preço deve ficar entre 0 e 20%.');
+      await save('crypto_plano', { coin_id: c.coin_id, simbolo: c.simbolo, nome: c.nome, valor, corretora: f.corretora.trim(), inicio: f.inicio, ativo: !!f.ativo, spread_pct }, p.id);
       toast('Compra programada salva');
     },
   });

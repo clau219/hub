@@ -267,6 +267,14 @@ describe('fin-sync: compras programadas de cripto → carteira cripto', () => {
     novoBanco(DADOS({ crypto_tx: [], fin_tx: [deb('a1', '2026-10-19', -250)] }));
     assert.deepEqual((await sync({ cripto: true })).corpo, { lancados: 0, sem_plano: 0 });
   });
+  test('diferença de preço da corretora: a quantidade sai menor', async () => {
+    novoBanco(DADOS({ crypto_plano: [{ ...PLANO[2], spread_pct: 4 }], crypto_tx: [], fin_tx: [deb('a1', '2026-10-19', -100)] }));
+    coingecko();
+    await sync({ cripto: true });
+    const c = banco().t('crypto_tx')[0];
+    assert.deepEqual([c.preco_brl, +c.quantidade.toFixed(8)], [20800, 0.00480769]);
+    assert.match(c.obs, /\+ 4% da corretora/);
+  });
   test('limite da CoinGecko (429): espera e tenta de novo', async () => {
     (await import('../../supabase/functions/_shared/cripto-recorrente.ts')).ajustarEspera(0);
     novoBanco(DADOS({ crypto_plano: [PLANO[0]], crypto_tx: [], fin_tx: [deb('a1', '2026-10-19', -250)] }));
