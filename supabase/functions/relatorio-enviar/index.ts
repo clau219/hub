@@ -1,5 +1,6 @@
 // Envia o relatório mensal da casa ao proprietário pelo Gmail do Claudio, com o PDF anexo, só com o login dele.
 //   POST {para, assunto, corpo, pdf: base64, arquivo: "Relatorio Casa Frida 2026-10.pdf"} → {ok, messageId, para}
+//   {teste: true, ...} manda para o próprio GMAIL_USER, com "[Teste]" no assunto (o Hub não marca o mês como enviado)
 // O PDF é montado no Hub (relatorio-pdf.js), onde o Claudio revisa antes; quem grava "enviado" na casa é o Hub.
 // Mesmos segredos e mesmo SMTP da portaria-enviar: GMAIL_USER e GMAIL_APP_PASSWORD, porta 465 (o Supabase bloqueia a 587).
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
@@ -20,7 +21,8 @@ Deno.serve(async req => {
   if (!user || !senha) return json({ error: 'Gmail não configurado: cadastre GMAIL_USER e GMAIL_APP_PASSWORD nos segredos do Supabase' }, 500);
 
   const b = await req.json().catch(() => ({}));
-  const para = String(b.para || '').split(/[,;]/).map(s => s.trim()).filter(Boolean);
+  const teste = b.teste === true;
+  const para = teste ? [user] : String(b.para || '').split(/[,;]/).map(s => s.trim()).filter(Boolean);
   const assunto = String(b.assunto || '').trim(), corpo = String(b.corpo || '').trim();
   const pdf = String(b.pdf || '').replace(/\s+/g, ''), arquivo = String(b.arquivo || 'Relatorio.pdf').trim();
   if (!para.length || para.length > 3 || !para.every(e => EMAIL.test(e))) return json({ error: 'destinatário inválido' }, 400);
@@ -32,7 +34,7 @@ Deno.serve(async req => {
 
   try {
     const t = nodemailer.createTransport({ host: 'smtp.gmail.com', port: 465, secure: true, auth: { user, pass: senha } });
-    const r = await t.sendMail({ from: `"Claudio Braga" <${user}>`, to: para.join(', '), subject: assunto, text: corpo,
+    const r = await t.sendMail({ from: `"Claudio Braga" <${user}>`, to: para.join(', '), subject: teste ? `[Teste] ${assunto}` : assunto, text: corpo,
       attachments: [{ filename: arquivo, content: pdf, encoding: 'base64', contentType: 'application/pdf' }] });
     return json({ ok: true, messageId: r.messageId, para });
   } catch (e) {

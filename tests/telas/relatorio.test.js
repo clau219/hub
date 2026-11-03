@@ -24,6 +24,8 @@ before(async () => {
       { id: 't2', data: '2026-09-15', descricao: 'Cosern', valor: -230.45, negocio: 'alugueis', casa: 'QS39' },
       { id: 't3', data: '2026-09-15', descricao: 'Material de limpeza', valor: -80, negocio: 'alugueis', casa: null },
       { id: 't4', data: '2026-09-15', descricao: 'Mercado', valor: -300, negocio: 'pessoal', casa: null },
+      { id: 'r1', data: '2026-09-06', descricao: 'Airbnb Payments', valor: 1500, categoria: 'Airbnb', negocio: 'alugueis', casa: null },
+      { id: 'p1', data: '2026-10-05', descricao: 'PIX Maria Souza', valor: -1769.55, categoria: null, negocio: null, casa: null },
     ],
   } }));
   V = await hub('v-relatorio.js');
@@ -148,5 +150,80 @@ describe('Escapando', () => {
     await ui.openItem(itens[0]);
     await esperar(10);
     assert.equal(texto('#modalTitle'), 'Relatório de setembro/2026 · Casa Frida');
+  });
+});
+
+describe('melhorias: repasse do Airbnb, teste, mudou depois do envio, repasse pago', () => {
+  const tabela = n => banco().tabelas[n];
+  async function relSet(rel) { tabela('bookings').find(b => b.id === 'b1').valor = null; Object.assign(tabela('properties').find(p => p.id === 'QS39'), { relatorios: rel, dono: DONO }); await store.load(); }
+  const ENVIADO = { enviado_em: '2026-10-02T12:00:00Z', para: 'maria@exemplo.com', repasse: 1769.55, ajustes: [], excluidas: [],
+    totais: { receita: 2500, totalDespesas: 230.45, comissao: 500, repasse: 1769.55 } };
+
+  test('sugere o valor do Airbnb pelo repasse em Finanças; ao salvar, o repasse ganha a casa', async () => {
+    await relSet({});
+    await V.relatorioCasa('QS39', '2026-09');
+    assert.equal(nb(texto('[data-sug=b1]')), 'Usar R$ 1.500,00');
+    assert.equal($('[data-sug=b2]'), null); // reserva direta com valor: sem sugestão
+    await clicar('[data-sug=b1]');
+    assert.deepEqual([$('[name="v:b1"]').value, $('[data-sug=b1]')], ['1500', null]);
+    assert.match(nb(texto('#relResumo')), /^ReceitaR\$ 4\.000,00/);
+    await enviarModal();
+    assert.equal(tabela('bookings').find(b => b.id === 'b1').valor, 1500);
+    assert.deepEqual([tabela('fin_tx').find(t => t.id === 'r1').casa, tabela('fin_tx').find(t => t.id === 'r1').manual], ['QS39', true]);
+    // volta para os outros testes
+    tabela('bookings').find(b => b.id === 'b1').valor = null; Object.assign(tabela('fin_tx').find(t => t.id === 'r1'), { casa: null, manual: undefined });
+    await relSet({});
+  });
+  test('valor digitado diferente da sugestão não vincula o repasse', async () => {
+    await V.relatorioCasa('QS39', '2026-09');
+    await clicar('[data-sug=b1]');
+    preencher($('#modal'), { 'v:b1': '1400' });
+    await enviarModal();
+    assert.equal(tabela('fin_tx').find(t => t.id === 'r1').casa, null);
+    tabela('bookings').find(b => b.id === 'b1').valor = null;
+    await relSet({});
+  });
+  test('teste vai para o próprio Gmail e não marca o mês como enviado', async () => {
+    banco().funcoes['relatorio-enviar'] = () => ({ ok: true, para: ['claudiorsbraga@gmail.com'] });
+    await V.relatorioCasa('QS39', '2026-09');
+    await clicar('#relTeste', 15);
+    const { nome, body } = banco().invocacoes.at(-1);
+    assert.deepEqual([nome, body.teste, body.para, body.assunto], ['relatorio-enviar', true, undefined, 'Relatório de setembro/2026 — Casa Frida']);
+    assert.equal(texto('#toast'), 'Teste enviado para claudiorsbraga@gmail.com');
+    assert.equal(S.properties.find(p => p.id === 'QS39').relatorios['2026-09'], undefined);
+    assert.equal($('#modal').open, true);
+  });
+  test('reabrindo um mês enviado: diz o que mudou desde o envio (e a lista marca)', async () => {
+    await relSet({ '2026-09': ENVIADO });
+    await V.relatorioCasa('QS39', '2026-09');
+    assert.ok($('#relEnv').classList.contains('mudou'));
+    assert.equal(nb(texto('#relEnv')), 'Mudou desde o envio em 02/10/2026 para maria@exemplo.com: Despesas R$ 230,45 → R$ 380,45; Repasse R$ 1.769,55 → R$ 1.619,55. Enviar de novo manda a versão corrigida.');
+    $('[name="tx:t1"]').checked = false; $('[name="tx:t1"]').dispatchEvent(new Event('input', { bubbles: true }));
+    assert.equal(texto('#relEnv'), 'Enviado em 02/10/2026 para maria@exemplo.com. Nada mudou desde então.');
+    V.relatoriosForm('2026-09');
+    await esperar(15);
+    assert.match(texto($$('#relCasas li')[0]), /repasse a pagarmudou depois do envio$/);
+  });
+  test('repasse pago: sugere a saída do extrato, marca e desfaz', async () => {
+    await relSet({ '2026-09': ENVIADO });
+    await V.relatorioCasa('QS39', '2026-09');
+    await esperar(10);
+    assert.match(nb(texto('#relPago')), /^Repasse de R\$ 1\.769,55 a pagar Marcar como pago Encontrei em Finanças: R\$ 1\.769,55 em 05\/10\/2026 \(PIX Maria Souza\)\.$/);
+    assert.equal($('#relPagoData').value, '2026-10-05');
+    assert.ok(store.atencao().some(i => i.kind === 'relatorio' && i.motivo === 'repasse'));
+    await clicar('#relPagar', 15);
+    assert.deepEqual(S.properties.find(p => p.id === 'QS39').relatorios['2026-09'], { ...ENVIADO, pago_em: '2026-10-05', pago_valor: 1769.55, pago_tx: 'p1' });
+    assert.equal(nb(texto('#relPago')), '✓ Repasse de R$ 1.769,55 pago em 05/10/2026desfazer');
+    assert.ok(!store.atencao().some(i => i.kind === 'relatorio' && i.motivo === 'repasse'));
+    await clicar('#relDespagar', 15);
+    assert.deepEqual(S.properties.find(p => p.id === 'QS39').relatorios['2026-09'], ENVIADO);
+  });
+  test('Escapando: repasse a pagar 5 dias depois do envio', async () => {
+    await relSet({ '2026-09': ENVIADO });
+    const it = store.atencao().find(i => i.motivo === 'repasse');
+    assert.deepEqual([it.title, nb(it.sub), it.date, it.mes], ['Repasse de setembro/2026 · Casa Frida', 'R$ 1.769,55 para Maria Souza: marque quando pagar', '2026-10-07', '2026-09']);
+    await relSet({ '2026-09': { ...ENVIADO, enviado_em: '2026-10-17T12:00:00Z' } });
+    assert.ok(!store.atencao().some(i => i.motivo === 'repasse')); // só 2 dias
+    await relSet({});
   });
 });

@@ -84,3 +84,40 @@ export function emailRelatorio(r) {
   const arquivo = `Relatorio ${r.casa.nome} ${r.mes}.pdf`.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w .-]/g, '');
   return { assunto, corpo, arquivo };
 }
+
+// ---------- Repasse do Airbnb → valor da reserva ----------
+// O repasse entra em Finanças (Pluggy) sem casa, cerca de 1 dia depois do check-in. Sugere o valor só quando o par
+// reserva × repasse é único nos dois sentidos (duas casas com entrada no mesmo dia ficam para você decidir).
+export const ehRepasseAirbnb = t => +t.valor > 0 && !t.casa && (t.categoria === 'Airbnb' || /airbnb/i.test(`${t.descricao || ''} ${t.contraparte || ''}`));
+export function sugerirRepasses(bookings, tx, janela = 3) {
+  const reservas = bookings.filter(b => b.origem === 'airbnb' && b.status === 'confirmada' && (b.valor == null || b.valor === ''));
+  const pagos = tx.filter(ehRepasseAirbnb);
+  const cand = r => pagos.filter(t => { const d = diffDays(r.checkin, t.data); return d >= 0 && d <= janela; });
+  const out = {};
+  for (const r of reservas) {
+    const c = cand(r);
+    if (c.length !== 1 || reservas.filter(o => cand(o).includes(c[0])).length !== 1) continue;
+    out[r.id] = { tx_id: c[0].id, valor: centavos(c[0].valor), data: c[0].data };
+  }
+  return out;
+}
+
+// ---------- Depois do envio ----------
+// Totais guardados no envio; ao reabrir, o que mudou desde então (reserva ou despesa editada depois)
+const TOTAIS = [['receita', 'Receita'], ['totalDespesas', 'Despesas'], ['comissao', 'Comissão'], ['repasse', 'Repasse']];
+export const totaisEnviados = r => Object.fromEntries(TOTAIS.map(([k]) => [k, r[k]]));
+export function mudouDesdeEnvio(r, salvo = {}) {
+  if (!salvo.enviado_em) return [];
+  const antes = salvo.totais || (salvo.repasse != null ? { repasse: salvo.repasse } : {});
+  return TOTAIS.filter(([k]) => k in antes && Math.abs(antes[k] - r[k]) >= 0.01).map(([k, nome]) => ({ nome, antes: antes[k], agora: r[k] }));
+}
+export const textoMudancas = l => l.map(m => `${m.nome} ${brl2(m.antes)} → ${brl2(m.agora)}`).join('; ');
+
+// Saída da sua conta com o valor exato do repasse, de 2 dias antes a 20 dias depois do envio: provável pagamento ao dono
+export function sugerirPagamento(salvo = {}, tx = []) {
+  if (!salvo.enviado_em || !(salvo.repasse > 0)) return null;
+  const env = salvo.enviado_em.slice(0, 10), ini = addDays(env, -2), fim = addDays(env, 20);
+  return tx.filter(t => +t.valor < 0 && Math.abs(-t.valor - salvo.repasse) < 0.01 && t.data >= ini && t.data <= fim)
+    .sort((a, b) => a.data.localeCompare(b.data))[0] || null;
+}
+export const janelaPagamento = salvo => ({ ini: addDays(salvo.enviado_em.slice(0, 10), -2), fim: addDays(salvo.enviado_em.slice(0, 10), 20) });

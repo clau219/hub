@@ -41,6 +41,13 @@ describe('relatorio-enviar', () => {
     assert.match((await chamar({ ...OK, assunto: 'a\nBcc: x@y.com' })).corpo.error, /assunto/);
     assert.match((await chamar({ ...OK, corpo: ' ' })).corpo.error, /vazio/);
   });
+  test('teste: vai para o próprio Gmail com [Teste] no assunto, mesmo sem destinatário', async () => {
+    const { status, corpo } = await chamar({ ...OK, para: '', teste: true });
+    assert.deepEqual([status, corpo.para], [200, ['claudiorsbraga@gmail.com']]);
+    assert.deepEqual([globalThis.__email.enviados[0].to, globalThis.__email.enviados[0].subject], ['claudiorsbraga@gmail.com', '[Teste] ' + OK.assunto]);
+    await chamar({ ...OK, teste: 'sim' }); // só true liga o teste
+    assert.equal(globalThis.__email.enviados[1].to, 'maria@exemplo.com');
+  });
   test('senha recusada pelo Gmail vira mensagem clara', async () => {
     globalThis.__email.falhar = 'Invalid login: 535-5.7.8 Username and Password not accepted';
     assert.deepEqual(await chamar(OK), { status: 502, corpo: { error: 'o Gmail recusou o login (confira a senha de app)' } });

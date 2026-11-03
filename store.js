@@ -3,7 +3,7 @@ import * as db from './db.js';
 import { today, addDays, diffDays, localDate, hhmm, ABERTAS, abertasDe, etapa, brl, recebido, saldoDeal } from './util.js';
 import { CONFIG } from './config.js';
 import { acompanhada, pendentes, prazo } from './hospedagem.js';
-import { mesAnterior, rotuloMes } from './relatorio.js';
+import { mesAnterior, rotuloMes, brl2 } from './relatorio.js';
 
 export const TABLES = ['contacts', 'deals', 'quotes', 'tasks', 'properties', 'bookings', 'events', 'calendar_sources', 'habits', 'habit_logs',
   'crypto_watch', 'crypto_tx', 'crypto_snap', 'crypto_plano'];
@@ -171,6 +171,13 @@ export function atencao() {
   for (const p of S.properties) if (p.dono?.email && !p.relatorios?.[mesPassado]?.enviado_em)
     out.push({ kind: 'relatorio', motivo: 'enviar', mes: mesPassado, date: hoje.slice(0, 8) + '01', area: 'alugueis', ref: p,
       title: `Relatório de ${rotuloMes(mesPassado)} · ${p.nome}`, sub: `Conferir e enviar para ${p.dono.nome || p.dono.email}` });
+  // Repasse ao dono ainda não marcado como pago 5 dias depois do envio do relatório
+  for (const p of S.properties) for (const [mes, r] of Object.entries(p.relatorios || {})) {
+    if (!r?.enviado_em || !(r.repasse > 0) || r.pago_em) continue;
+    const prazo = addDays(localDate(r.enviado_em), 5);
+    if (prazo <= hoje) out.push({ kind: 'relatorio', motivo: 'repasse', mes, date: prazo, area: 'alugueis', ref: p,
+      title: `Repasse de ${rotuloMes(mes)} · ${p.nome}`, sub: `${brl2(r.repasse)} para ${p.dono?.nome || r.para}: marque quando pagar` });
+  }
   // Hospedagem: só a etapa atrasada mais antiga de cada reserva, para não poluir
   for (const b of S.bookings) {
     if (!acompanhada(b)) continue;

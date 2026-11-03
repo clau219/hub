@@ -154,3 +154,47 @@ describe('PDF', () => {
     assert.deepEqual(['—', '•', 'ç', ' ', '😀'].map(P.codigo), [0x97, 0x95, 0xe7, 0xa0, 63]);
   });
 });
+
+describe('repasse do Airbnb sugere o valor da reserva', () => {
+  const air = (id, casa, checkin, x = {}) => ({ id, property_id: casa, origem: 'airbnb', status: 'confirmada', checkin, checkout: '2026-10-28', valor: null, ...x });
+  const rep = (id, data, valor, x = {}) => ({ id, data, valor, descricao: 'Airbnb Payments', categoria: 'Airbnb', negocio: 'alugueis', casa: null, ...x });
+  test('repasse até 3 dias depois do check-in, único nos dois sentidos', () => {
+    const s = R.sugerirRepasses([air('a', 'QS39', '2026-10-03'), air('b', 'QS40', '2026-10-20')], [rep('r1', '2026-10-04', 1850.4), rep('r2', '2026-10-21', 990)]);
+    assert.deepEqual(s, { a: { tx_id: 'r1', valor: 1850.4, data: '2026-10-04' }, b: { tx_id: 'r2', valor: 990, data: '2026-10-21' } });
+  });
+  test('duas reservas no mesmo dia ou dois repasses na janela: não sugere', () => {
+    assert.deepEqual(R.sugerirRepasses([air('a', 'QS39', '2026-10-03'), air('b', 'QS40', '2026-10-03')], [rep('r1', '2026-10-04', 1000)]), {});
+    assert.deepEqual(R.sugerirRepasses([air('a', 'QS39', '2026-10-03')], [rep('r1', '2026-10-04', 1000), rep('r2', '2026-10-05', 900)]), {});
+  });
+  test('ignora: reserva com valor, direta, repasse antes do check-in ou longe demais, já com casa, saída', () => {
+    const tx = [rep('r1', '2026-10-02', 1000), rep('r2', '2026-10-10', 1000), rep('r3', '2026-10-04', 1000, { casa: 'QS39' }), rep('r4', '2026-10-04', -1000)];
+    assert.deepEqual(R.sugerirRepasses([air('a', 'QS39', '2026-10-03')], tx), {});
+    assert.deepEqual(R.sugerirRepasses([air('a', 'QS39', '2026-10-03', { valor: 500 }), air('b', 'QS39', '2026-10-03', { origem: 'direto' })], [rep('r1', '2026-10-04', 1000)]), {});
+  });
+  test('reconhece o repasse pela descrição mesmo sem categoria', () => {
+    assert.ok(R.ehRepasseAirbnb({ valor: 900, descricao: 'PIX recebido AIRBNB PAYMENTS UK', categoria: null, casa: null }));
+  });
+});
+
+describe('depois do envio', () => {
+  const r = { receita: 4000, totalDespesas: 380.45, comissao: 800, repasse: 2819.55 };
+  test('nada mudou / o que mudou, com antes e agora', () => {
+    const salvo = { enviado_em: '2026-11-02T12:00:00Z', totais: R.totaisEnviados(r) };
+    assert.deepEqual(R.mudouDesdeEnvio(r, salvo), []);
+    const m = R.mudouDesdeEnvio({ ...r, totalDespesas: 530.45, repasse: 2669.55 }, salvo);
+    assert.deepEqual(m.map(x => x.nome), ['Despesas', 'Repasse']);
+    assert.equal(R.textoMudancas(m).replace(/\u00a0/g, ' '), 'Despesas R$ 380,45 → R$ 530,45; Repasse R$ 2.819,55 → R$ 2.669,55');
+  });
+  test('envio antigo sem os totais compara só o repasse; não enviado não compara', () => {
+    assert.deepEqual(R.mudouDesdeEnvio({ ...r, receita: 1 }, { enviado_em: 'x', repasse: 2819.55 }), []);
+    assert.equal(R.mudouDesdeEnvio({ ...r, repasse: 1 }, { enviado_em: 'x', repasse: 2819.55 }).length, 1);
+    assert.deepEqual(R.mudouDesdeEnvio(r, { totais: R.totaisEnviados({ ...r, repasse: 0 }) }), []);
+  });
+  test('pagamento provável: saída com o valor exato, de 2 dias antes a 20 dias depois do envio', () => {
+    const salvo = { enviado_em: '2026-11-02T12:00:00Z', repasse: 2819.55 };
+    const tx = [{ id: 'p0', data: '2026-10-30', valor: -2819.55 }, { id: 'p1', data: '2026-11-05', valor: -2819.55 }, { id: 'p2', data: '2026-11-03', valor: -2819 }, { id: 'p3', data: '2026-11-04', valor: 2819.55 }];
+    assert.equal(R.sugerirPagamento(salvo, tx).id, 'p1');
+    assert.equal(R.sugerirPagamento(salvo, [{ id: 'p4', data: '2026-11-23', valor: -2819.55 }]), null);
+    assert.equal(R.sugerirPagamento({ ...salvo, repasse: -10 }, tx), null);
+  });
+});
