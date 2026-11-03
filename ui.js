@@ -411,5 +411,6 @@ export function openItem(it) {
   if (it.kind === 'checkin' || it.kind === 'checkout' || it.kind === 'etapa') return bookingForm(it.ref);
   if (it.kind === 'evento') return eventForm(it.ref);
   if (it.kind === 'conflito' && it.ref.property_id) return bookingForm(it.ref); // reserva dupla
+  if (it.kind === 'relatorio') return import('./v-relatorio.js').then(m => m.relatorioCasa(it.ref.id, it.mes));
   return dealForm(it.ref);
 }

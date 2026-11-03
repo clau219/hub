@@ -12,7 +12,7 @@ const LIMITE = 5;
 // Escapando em 3 grupos, do que custa dinheiro ao que é só seu
 const GRUPOS = [
   ['dinheiro', 'Dinheiro em jogo', it => it.kind === 'acao'],
-  ['terceiros', 'Compromissos com outras pessoas', it => it.kind === 'etapa' || it.kind === 'conflito'],
+  ['terceiros', 'Compromissos com outras pessoas', it => it.kind === 'etapa' || it.kind === 'conflito' || it.kind === 'relatorio'],
   ['pessoal', 'Tarefas', it => it.kind === 'tarefa'],
 ];
 function escapando(att) {
@@ -30,7 +30,7 @@ function row(it, { late } = {}) {
   const idx = bound.push(it) - 1;
   const done = it.kind === 'tarefa' || it.kind === 'acao' || it.kind === 'etapa' || it.kind === 'conflito';
   const canSnooze = it.kind === 'tarefa' || it.kind === 'acao';
-  const icon = { acao: '●', tarefa: '○', gig: '♪', checkin: '↘', checkout: '↗', evento: '▪' }[it.kind];
+  const icon = { acao: '●', tarefa: '○', gig: '♪', checkin: '↘', checkout: '↗', evento: '▪', relatorio: '✉' }[it.kind];
   const wa = it.kind === 'acao' ? dealWa(it.ref) : null;
   const dica = it.kind === 'acao' ? 'Feito, definir próximo passo' : it.kind === 'etapa' ? 'Marcar etapa como feita' : it.kind === 'conflito' ? 'Ciente, já está combinado' : 'Concluir';
   const lbl = it.motivo === 'atrasada' || it.motivo === 'conflito' ? relDate(it.date) : it.motivo;

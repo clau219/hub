@@ -2,6 +2,7 @@ import { S, prop, ocupacao, save } from './store.js';
 import { h, today, addDays, fmtDate, weekdayShort, brl, diffDays, relDate } from './util.js';
 import { bookingForm, modal, toast, confirmInline, closeModal } from './ui.js';
 import * as db from './db.js';
+import { relatoriosForm } from './v-relatorio.js';
 import { progresso, acompanhada, prazo, alternar, parseHospedes, hospedesTxt, juntarHospedes, parseVeiculos, veiculosTxt, juntarVeiculos, emailPortaria } from './hospedagem.js';
 
 const ATRAS = 30; // dias passados no começo do Gantt
@@ -20,6 +21,7 @@ export function render(el) {
   el.innerHTML = `
   <div class="view-head">
     <h1>Aluguéis</h1>
+    <button class="btn" id="abRelatorio">Relatórios dos donos</button>
     <button class="btn" id="abPortaria">E-mail da portaria</button>
     <button class="btn" id="abQuote">Consultar Airbnb</button>
     <button class="btn primary" id="bkNew">Nova reserva</button>
@@ -63,6 +65,7 @@ export function render(el) {
   el.querySelector('#bkNew').onclick = () => bookingForm();
   el.querySelector('#abQuote').onclick = () => consultaAirbnb();
   el.querySelector('#abPortaria').onclick = () => portariaForm();
+  el.querySelector('#abRelatorio').onclick = () => relatoriosForm();
   el.querySelectorAll('[data-bk]').forEach(b => b.onclick = () => bookingForm(S.bookings.find(x => x.id === b.dataset.bk)));
 }
 

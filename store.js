@@ -3,6 +3,7 @@ import * as db from './db.js';
 import { today, addDays, diffDays, localDate, hhmm, ABERTAS, abertasDe, etapa, brl, recebido, saldoDeal } from './util.js';
 import { CONFIG } from './config.js';
 import { acompanhada, pendentes, prazo } from './hospedagem.js';
+import { mesAnterior, rotuloMes } from './relatorio.js';
 
 export const TABLES = ['contacts', 'deals', 'quotes', 'tasks', 'properties', 'bookings', 'events', 'calendar_sources', 'habits', 'habit_logs',
   'crypto_watch', 'crypto_tx', 'crypto_snap', 'crypto_plano'];
@@ -165,6 +166,11 @@ export function atencao() {
   for (const t of S.tasks) if (!t.feito && t.prazo && t.prazo < hoje)
     out.push({ kind: 'tarefa', motivo: 'atrasada', date: t.prazo, area: t.area, title: t.titulo, ref: t });
   out.push(...conflitos(), ...reservasDuplas());
+  // Relatório do mês passado ainda não enviado ao proprietário (só casa com o e-mail do dono cadastrado)
+  const mesPassado = mesAnterior(hoje);
+  for (const p of S.properties) if (p.dono?.email && !p.relatorios?.[mesPassado]?.enviado_em)
+    out.push({ kind: 'relatorio', motivo: 'enviar', mes: mesPassado, date: hoje.slice(0, 8) + '01', area: 'alugueis', ref: p,
+      title: `Relatório de ${rotuloMes(mesPassado)} · ${p.nome}`, sub: `Conferir e enviar para ${p.dono.nome || p.dono.email}` });
   // Hospedagem: só a etapa atrasada mais antiga de cada reserva, para não poluir
   for (const b of S.bookings) {
     if (!acompanhada(b)) continue;
