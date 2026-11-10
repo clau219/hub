@@ -103,10 +103,10 @@ async function gravarMensagens(sb: SB, lista: any[]) {
     linhas.set(m.chat_id + '|' + m.id, {
       chat_id: String(m.chat_id), id: String(m.id), de_mim: !!m.de_mim,
       autor: limpar(m.autor) || null, tipo: String(m.tipo || 'texto').slice(0, 30),
-      texto: m.texto ? String(m.texto).slice(0, 8000) : null,
+      texto: m.texto ? corta(m.texto, 8000) : null,
       segundos: Number.isFinite(m.segundos) ? Math.round(m.segundos) : null,
       menciona_me: !!m.menciona_me, responde_a_mim: !!m.responde_a_mim,
-      cita: m.cita ? String(m.cita).slice(0, 300) : null,
+      cita: m.cita ? corta(m.cita, 300) : null,
       enviado_em: new Date(m.enviado_em).toISOString(),
     });
   }
@@ -158,7 +158,9 @@ async function transcreverAudios(sb: SB, lista: any[]) {
   return feitos;
 }
 
-const limpar = (s: unknown) => (typeof s === 'string' ? s.replace(/\s+/g, ' ').trim().slice(0, 120) : '');
+const limpar = (s: unknown) => (typeof s === 'string' ? corta(s.replace(/\s+/g, ' ').trim(), 120) : '');
+// Corta sem partir emoji ao meio (metade solta de um par UTF-16 quebra o JSON depois)
+const corta = (s: unknown, n: number) => String(s).slice(0, n).replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '');
 function maisRecente(a?: string | null, b?: string | null) {
   const ta = a ? Date.parse(a) : NaN, tb = b ? Date.parse(b) : NaN;
   if (isNaN(ta)) return isNaN(tb) ? null : new Date(tb).toISOString();

@@ -215,7 +215,7 @@ ${blocos.join('\n\n') || '(nenhuma mensagem nova)'}`;
 
   const modelo = Deno.env.get('WP_MODELO') || 'claude-haiku-5-5';
   const cli = new Anthropic();
-  const params: any = { model: modelo, max_tokens: 16000, system, messages: [{ role: 'user', content: user }], output_config: { effort: 'medium', format: zodOutputFormat(Resumo) } };
+  const params: any = { model: modelo, max_tokens: 16000, system: inteiro(system), messages: [{ role: 'user', content: inteiro(user) }], output_config: { effort: 'medium', format: zodOutputFormat(Resumo) } };
   // Opus/Sonnet: se o filtro de segurança recusar, a API refaz no modelo reserva na mesma chamada
   const r: any = /haiku/.test(modelo) ? await cli.messages.parse(params)
     : await cli.beta.messages.parse({ ...params, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' });
@@ -228,16 +228,20 @@ ${blocos.join('\n\n') || '(nenhuma mensagem nova)'}`;
 function linha(m: any, c: any) {
   const quem = m.de_mim ? 'Você' : c?.grupo ? (m.autor || 'alguém') : (m.autor || nomeDe(c));
   const marca = m.menciona_me ? ' [te marcou]' : m.responde_a_mim ? ' [respondendo a você]' : '';
-  const cita = m.cita ? ` (respondendo a: “${m.cita.slice(0, 120)}”)` : '';
+  const cita = m.cita ? ` (respondendo a: “${corta(m.cita, 120)}”)` : '';
   return `[${dataHora(new Date(m.enviado_em))}] ${quem}${marca}: ${conteudo(m)}${cita}`;
 }
 function conteudo(m: any) {
-  const t = (m.texto || '').replace(/\s+/g, ' ').trim().slice(0, 1500);
+  const t = corta((m.texto || '').replace(/\s+/g, ' ').trim(), 1500);
   if (m.tipo === 'texto') return t || '(vazia)';
   if (m.tipo === 'audio') return t ? `(áudio transcrito) ${t}` : `(áudio de ${m.segundos || '?'} s, sem transcrição)`;
   return `(${m.tipo})${t ? ' ' + t : ''}`;
 }
-const trecho = (m: any) => conteudo(m).slice(0, 160);
+const trecho = (m: any) => corta(conteudo(m), 160);
+// Tira metades soltas de emoji (par UTF-16 partido): a API recusa o JSON com elas
+export const inteiro = (s: string) => s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '');
+// Corta o texto sem partir emoji ao meio
+export const corta = (s: string, n: number) => inteiro(String(s).slice(0, n));
 const soAgradecimento = (t: string | null, tipo: string) => tipo === 'figurinha'
   || (!!t && /^[\s\p{Extended_Pictographic}\p{Emoji_Component}]*$/u.test(t))
   || (!!t && /^\s*(ok(ay)?|blz|beleza|obrigad[oa]s?|obg|valeu|vlw|show|top|perfeito|combinado|certo|tá bom|ta bom|👍|🙏)[\s!.]*$/i.test(t));
@@ -261,11 +265,11 @@ function quando(iso: string) {
 async function avisar(sb: SB, periodo: string, conteudo: any, novos: any[], abertos: number) {
   const altas = novos.filter(a => a.urgencia === 'alta');
   const titulo = `WhatsApp: resumo da ${periodo === 'manha' ? 'manhã' : periodo === 'noite' ? 'noite' : 'hora'}`;
-  const corpo = [
+  const corpo = corta([
     conteudo.avisos?.[0],
     conteudo.manchete,
     abertos ? `${abertos} ${abertos === 1 ? 'coisa' : 'coisas'} para não deixar passar${altas.length ? `, ${altas.length} urgente${altas.length > 1 ? 's' : ''}` : ''}: ${(altas.length ? altas : novos).slice(0, 2).map(a => a.titulo).join('; ')}` : '',
-  ].filter(Boolean).join('\n').slice(0, 400);
+  ].filter(Boolean).join('\n'), 400);
   const { data } = await sb.from('app_secrets').select('key,value').in('key', ['vapid_public', 'vapid_private']);
   const k = Object.fromEntries((data || []).map((r: any) => [r.key, r.value]));
   if (!k.vapid_public || !k.vapid_private) return 0;
