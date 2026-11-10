@@ -13,12 +13,13 @@ import * as saude from './v-saude.js';
 import * as financas from './v-financas.js';
 import * as ajustes from './v-ajustes.js';
 import * as whatsapp from './v-whatsapp.js';
+import * as pessoal from './v-pessoal.js';
 import * as paleta from './palette.js';
 
-const VIEWS = { hoje, pipeline, agenda, alugueis, tarefas, contatos, cripto, saude, financas, ajustes, whatsapp };
+const VIEWS = { hoje, pipeline, agenda, alugueis, tarefas, contatos, cripto, saude, financas, ajustes, whatsapp, pessoal };
 const $ = s => document.querySelector(s);
 const route = () => (location.hash.replace(/^#\//, '') || 'hoje').split('?')[0];
-const NO_MAIS = ['alugueis', 'whatsapp', 'tarefas', 'contatos', 'cripto', 'saude', 'financas', 'ajustes'];
+const NO_MAIS = ['alugueis', 'pessoal', 'whatsapp', 'tarefas', 'contatos', 'cripto', 'saude', 'financas', 'ajustes'];
 
 function render() {
   const r = VIEWS[route()] ? route() : 'hoje';
@@ -32,6 +33,7 @@ function render() {
   VIEWS[r].render(el);
   window.scrollTo(0, y);
   whatsapp.selo().catch(() => {});
+  pessoal.selo().catch(() => {});
 }
 
 async function start() {
