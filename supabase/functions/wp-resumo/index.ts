@@ -3,7 +3,7 @@
 // e a lista do que está ficando para trás, grava em wp_resumos / wp_alertas e avisa por push.
 // Nada é enviado no WhatsApp.
 // Auth: x-hub-cron ou JWT do usuário. Corpo: {periodo?: 'manha'|'noite'|'agora', teste?: true (não grava nem avisa)}.
-// Modelo: WP_MODELO (padrão claude-opus-5-5; claude-haiku-5-5 custa ~40x menos).
+// Modelo: WP_MODELO (padrão claude-haiku-5-5, centavos por mês; claude-opus-5-5 resume melhor e custa ~40x mais).
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
 import Anthropic from 'npm:@anthropic-ai/sdk@0.134.0';
 import { zodOutputFormat } from 'npm:@anthropic-ai/sdk@0.134.0/helpers/zod';
@@ -213,7 +213,7 @@ ${abertos}
 Conversas do período (“Você” = Claudio):
 ${blocos.join('\n\n') || '(nenhuma mensagem nova)'}`;
 
-  const modelo = Deno.env.get('WP_MODELO') || 'claude-opus-5-5';
+  const modelo = Deno.env.get('WP_MODELO') || 'claude-haiku-5-5';
   const cli = new Anthropic();
   const params: any = { model: modelo, max_tokens: 16000, system, messages: [{ role: 'user', content: user }], output_config: { effort: 'medium', format: zodOutputFormat(Resumo) } };
   // Opus/Sonnet: se o filtro de segurança recusar, a API refaz no modelo reserva na mesma chamada
