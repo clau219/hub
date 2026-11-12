@@ -26,7 +26,7 @@ export function relatoriosForm(mes = mesAnterior(today())) {
   const d = modal('Relatórios dos proprietários', `
     <label>Mês<select name="mes">${mesesRecentes().map(m => `<option value="${m}" ${m === mes ? 'selected' : ''}>${h(rotuloMes(m))}</option>`).join('')}</select></label>
     <ul class="list rel-casas" id="relCasas"></ul>
-    <p class="muted small">Receita pela data de entrada. O valor das reservas do Airbnb é sugerido pelo repasse que entrou em Finanças; confira na revisão de cada casa.</p>`);
+    <p class="muted small">Receita pela data de entrada. Valor total e taxa do canal vêm do e-mail da Stays (sem o e-mail, o repasse que entrou em Finanças é sugerido); confira na revisão de cada casa.</p>`);
   const sel = d.querySelector('[name=mes]'), ul = d.querySelector('#relCasas');
   let vez = 0;
   const lista = async () => {

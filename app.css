@@ -1128,7 +1128,9 @@ button.fn-hist-col:hover { background: var(--sunk); }
 .rel-dono { display: grid; grid-template-columns: 1.3fr 1.5fr .7fr; gap: 12px 14px; }
 .modal-body h3.rel-h { margin: 4px 0 -6px; font-size: 14px; }
 .rel-res td { vertical-align: middle; }
-.rel-res input { max-width: 120px; min-height: 34px; text-align: right; }
+.rel-res input { max-width: 120px; min-width: 92px; min-height: 34px; text-align: right; }
+.modal:has(.rel-res) { width: min(860px, calc(100vw - 32px)); }
+.rel-res td[data-liq] { white-space: nowrap; }
 .rel-tx { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
 .rel-tx li, .rel-tx .chk { display: flex; align-items: center; gap: 8px; }
 .rel-tx .chk { flex: 1; }
