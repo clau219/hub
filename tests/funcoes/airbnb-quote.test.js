@@ -186,4 +186,18 @@ describe('airbnb-quote: consulta', () => {
     assert.equal((await cotar({ checkin: '2026-11-10', checkout: '2026-11-13', adultos: '3.6' })).corpo.adultos, 4);
     assert.equal((await cotar({ checkin: '2026-11-10', checkout: '2026-11-13', adultos: -5 })).corpo.adultos, 1);
   });
+  // Por último: muda o hash guardado no módulo
+  test('consulta aposentada pelo Airbnb: acha o hash novo nos .js do anúncio, guarda e cota (só procura uma vez)', async () => {
+    const NOVO = 'c0ffee'.padEnd(64, '0');
+    airbnb();
+    simular(req => /StaysPdpBookItQuery\//.test(req) && !req.includes(NOVO), { status: 400, json: { error_code: 400, error_type: 'deprecated_web_operation' } });
+    simular('https://www.airbnb.com.br/rooms/', '<html><script src="https://a0.muscache.com/a.js"></script><script src="https://a0.muscache.com/b.js"></script></html>');
+    simular('https://a0.muscache.com/a.js', 'var x={name:"OutraQuery",operationId:"' + 'a'.repeat(64) + '"}');
+    simular('https://a0.muscache.com/b.js', "e.default={name:'StaysPdpBookItQuery',type:'query',operationId:'" + NOVO + "',product:'stays'}"); // aspas simples, como no site
+    const { corpo } = await cotar({ checkin: '2026-11-10', checkout: '2026-11-13' });
+    assert.deepEqual(corpo.casas.map(c => c.status), ['livre', 'livre', 'livre']);
+    assert.equal(chamadasPara('https://www.airbnb.com.br/rooms/').length, 1, 'as 3 casas esperam a mesma busca');
+    const { banco } = await import('../helpers/fake-supabase.js');
+    assert.equal(banco().t('app_config').find(c => c.key === 'airbnb_hash_preco').value, NOVO);
+  });
 });

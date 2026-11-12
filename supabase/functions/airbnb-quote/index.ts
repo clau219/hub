@@ -9,14 +9,22 @@ const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers
 const API = 'https://www.airbnb.com.br/api/v3';
 const KEY = 'd306zoyjsyarp7ifhu67rjxn52tv0t20'; // chave pública que o próprio site usa
 // Hashes das consultas do site. Se mudarem, achar nos .js da página do anúncio (operationId de StaysPdpBookItQuery / PdpAvailabilityCalendar).
-const H_PRECO = '8c9165db910115bff8003e61f847ed907c9c51509ba043fa0610853d7c4de080';
+const H_PRECO = 'b4e68e2374e453d598e4cdf9dad60447bd1b64372e8d6deb80df3cd11d3e84db'; // 12/11/2026 (o anterior, 8c9165db…, foi aposentado)
 const H_CAL = '8f08e03c7bd16fcad3c92a3592c19a8b559a0d0855a84028d1163d4733ed9ade';
 const BUSCA_ALT = 14; // procura datas livres até N dias antes/depois
+// Quando o Airbnb aposenta a consulta ("deprecated_web_operation"), o hash novo é procurado nos .js da página do anúncio
+// e guardado em app_config 'airbnb_hash_preco' (vale para as próximas chamadas). Ver descobrirHashPreco().
+let SB: any = null, hashPreco: string | null = null, descobrindo: Promise<string | null> | null = null;
 
 Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   const sb = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
   if (!(await autorizado(req, sb))) return json({ error: 'não autorizado' }, 401);
+  SB = sb;
+  if (!hashPreco) {
+    const { data: h } = await sb.from('app_config').select('value').eq('key', 'airbnb_hash_preco').maybeSingle();
+    hashPreco = /^[0-9a-f]{64}$/.test(h?.value || '') ? h.value : H_PRECO;
+  }
 
   let p: any;
   try { p = await req.json(); } catch { return json({ error: 'corpo inválido' }, 400); }
@@ -84,7 +92,16 @@ async function cotar(listing: string, ci: string, co: string, adultos: number, p
     includeOverviewMerchandisingTipsFragment: true, includeStaysPdpPriceHeatmapFragment: false,
     priceHeatmapDateRange: { startDate: ci, endDate: co }, selectedCancellationPolicyId: null, causeId: null, selectedGuestOptionId: null,
   };
-  const j = await gql('StaysPdpBookItQuery', H_PRECO, v);
+  let j;
+  const usado = hashPreco || H_PRECO;
+  try { j = await gql('StaysPdpBookItQuery', usado, v); }
+  catch (e) {
+    if (!(e as any).aposentada) throw e;
+    const novo = await (descobrindo ||= descobrirHashPreco(listing).finally(() => { descobrindo = null; }));
+    if (!novo || novo === usado) throw new Error('o Airbnb mudou a consulta de preço e não achei a nova');
+    hashPreco = novo;
+    j = await gql('StaysPdpBookItQuery', novo, v);
+  }
   const b = j?.data?.node?.pdpPresentation?.bookIt;
   if (!b?.availability) throw new Error('resposta do Airbnb mudou (preço)');
   if (!b.availability.isAvailable) return { livre: false, motivo: b.availability.unavailabilityReason as string };
@@ -127,10 +144,42 @@ async function gql(op: string, hash: string, variables: unknown) {
   u.searchParams.set('variables', JSON.stringify(variables));
   u.searchParams.set('extensions', JSON.stringify({ persistedQuery: { version: 1, sha256Hash: hash } }));
   const r = await fetch(u, { headers: { 'X-Airbnb-API-Key': KEY, 'User-Agent': 'Mozilla/5.0', 'Accept-Language': 'pt-BR' }, signal: AbortSignal.timeout(15000) });
-  if (!r.ok) throw new Error(`Airbnb respondeu ${r.status}`);
+  if (!r.ok) {
+    const txt = await r.text().catch(() => '');
+    throw Object.assign(new Error(`Airbnb respondeu ${r.status}`), { aposentada: /deprecated_web_operation/.test(txt) });
+  }
   const j = await r.json();
   if (j.errors?.length && !j.data) throw new Error('Airbnb recusou a consulta: ' + (j.errors[0].message || '').slice(0, 80));
   return j;
+}
+
+// Hash atual da StaysPdpBookItQuery: está nos .js que a página do anúncio carrega, perto do nome da consulta
+async function descobrirHashPreco(listing: string): Promise<string | null> {
+  try {
+    const html = await fetch(`https://www.airbnb.com.br/rooms/${listing}`, { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept-Language': 'pt-BR' }, signal: AbortSignal.timeout(15000) }).then(r => r.text());
+    const srcs = [...new Set([...html.matchAll(/src="(https:\/\/[^"]+\.js)"/g)].map(m => m[1]))].slice(0, 250);
+    const ini = Date.now();
+    for (const s of srcs) {
+      if (Date.now() - ini > 60000) break;
+      const js = await fetch(s, { signal: AbortSignal.timeout(10000) }).then(r => r.text()).catch(() => '');
+      const h = acharHash(js, 'StaysPdpBookItQuery');
+      if (h) {
+        await SB?.from('app_config').upsert({ key: 'airbnb_hash_preco', value: h }, { onConflict: 'key' });
+        return h;
+      }
+    }
+  } catch (e) { console.error('descobrirHashPreco', (e as Error).message); }
+  return null;
+}
+// O operationId de 64 hex mais perto do nome da consulta (até 400 caracteres antes ou depois)
+export function acharHash(js: string, nome: string) {
+  // O bundle de hoje traz {name:'StaysPdpBookItQuery',type:'query',operationId:'…'}: aspas simples ou duplas
+  let melhor: string | null = null, dist = Infinity;
+  for (const n of js.matchAll(new RegExp(`["']${nome}["']`, 'g'))) {
+    const i = n.index!, ini = Math.max(0, i - 400), trecho = js.slice(ini, i + 400);
+    for (const h of trecho.matchAll(/[0-9a-f]{64}/g)) { const d = Math.abs(ini + h.index! - i); if (d < dist) { dist = d; melhor = h[0]; } }
+  }
+  return melhor;
 }
 
 // ---------- texto pronto para o WhatsApp ----------
