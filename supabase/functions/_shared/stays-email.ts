@@ -88,6 +88,8 @@ export async function aplicarEmailsStays(sb: any) {
     }
     const patch: Record<string, unknown> = {};
     if (e.valor != null && (b.valor == null || b.valor === '' || (e.valor_aplicado != null && Number(b.valor) === Number(e.valor_aplicado))) && Number(b.valor) !== Number(e.valor)) patch.valor = e.valor;
+    // Taxa do canal (comissão do Airbnb...) acompanha o valor total que veio do e-mail; a digitada à mão fica
+    if (e.comissao != null && (b.taxa_canal == null || b.taxa_canal === '' || 'valor' in patch) && Number(b.taxa_canal) !== Number(e.comissao)) patch.taxa_canal = e.comissao;
     if (e.hospede && (!b.hospede || GENERICOS.test(String(b.hospede).trim()) || b.hospede === e.hospede_aplicado) && b.hospede !== e.hospede) patch.hospede = e.hospede;
     const origem = CANAL_ORIGEM[semAcento(e.canal || '')];
     if (origem && b.origem === 'outro') patch.origem = origem;

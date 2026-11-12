@@ -7,11 +7,10 @@ import { S, save } from './store.js';
 import { h, today, addDays } from './util.js';
 import { modal, toast, confirmInline, closeModal } from './ui.js';
 import * as db from './db.js';
-import { deCanal, mesAnterior, rotuloMes, limitesMes, montarRelatorio, emailRelatorio, despesasSemCasa, lerAjustes, ajustesTxt, brl2, dataBr,
+import { deCanal, canalDe, mesAnterior, rotuloMes, limitesMes, montarRelatorio, emailRelatorio, despesasSemCasa, lerAjustes, ajustesTxt, brl2, dataBr,
   sugerirRepasses, totaisEnviados, mudouDesdeEnvio, textoMudancas, sugerirPagamento, janelaPagamento } from './relatorio.js';
 import { pdfRelatorio } from './relatorio-pdf.js';
 
-const ORIGEM = { airbnb: 'Airbnb', direto: 'Direta', booking: 'Booking', outro: 'Outra' };
 const JANELA_AIRBNB = 3; // dias entre o check-in e o repasse do Airbnb
 
 // Mês atual e os 11 anteriores, do mais recente para o mais antigo
@@ -96,9 +95,10 @@ export async function relatorioCasa(casaId, mes = mesAnterior(today())) {
 
   const celulaValor = b => {
     const s = (b.valor == null || b.valor === '') && sugestoes[b.id];
-    return `<input name="v:${h(b.id)}" type="number" min="0" step="0.01" inputmode="decimal" value="${h(b.valor ?? '')}" placeholder="${deCanal(b) ? 'repasse' : 'valor'}" aria-label="Valor da reserva de ${h(b.hospede || 'hóspede')}">
-      ${s ? `<button type="button" class="chip rel-sug" data-sug="${h(b.id)}" title="Repasse do Airbnb de ${dataBr(s.data)} em Finanças">Usar ${brl2(s.valor)}</button>` : ''}`;
+    return `<input name="v:${h(b.id)}" type="number" min="0" step="0.01" inputmode="decimal" value="${h(b.valor ?? '')}" placeholder="${deCanal(b) ? 'total' : 'valor'}" aria-label="Valor total da reserva de ${h(b.hospede || 'hóspede')}">
+      ${s ? `<button type="button" class="chip rel-sug" data-sug="${h(b.id)}" title="Repasse do Airbnb de ${dataBr(s.data)} em Finanças (já sem a taxa do Airbnb: deixe a taxa vazia)">Usar repasse ${brl2(s.valor)}</button>` : ''}`;
   };
+  const celulaTaxa = b => `<input name="t:${h(b.id)}" type="number" min="0" step="0.01" inputmode="decimal" value="${h(b.taxa_canal ?? '')}" placeholder="—" aria-label="Taxa do canal na reserva de ${h(b.hospede || 'hóspede')}">`;
   const nSug = doMes.filter(b => (b.valor == null || b.valor === '') && sugestoes[b.id]).length;
   const d = modal(`Relatório de ${rotuloMes(mes)} · ${casa.nome}`, `
     <p class="rel-env" id="relEnv" hidden></p>
@@ -109,10 +109,11 @@ export async function relatorioCasa(casaId, mes = mesAnterior(today())) {
       <label>Comissão (%)<input name="comissao_pct" type="number" min="0" max="100" step="0.5" value="${h(dono.comissao_pct ?? '')}" placeholder="0"></label>
     </div>
     <h3 class="rel-h">Reservas com entrada no mês${nSug > 1 ? ` <button type="button" class="chip" id="relSugTodas">Usar os ${nSug} repasses encontrados</button>` : ''}</h3>
-    ${doMes.length ? `<table class="table rel-res"><thead><tr><th>Hóspede</th><th>Datas</th><th>Origem</th><th class="num">Valor (R$)</th></tr></thead><tbody>
-      ${doMes.map(b => `<tr><td>${h(b.hospede || 'Hóspede')}</td><td>${dataBr(b.checkin).slice(0, 5)} a ${dataBr(b.checkout).slice(0, 5)}</td><td>${h(ORIGEM[b.origem] || b.origem)}</td>
-        <td class="num">${celulaValor(b)}</td></tr>`).join('')}
-    </tbody></table>` : '<p class="empty">Nenhuma reserva confirmada com entrada no mês.</p>'}
+    ${doMes.length ? `<table class="table rel-res"><thead><tr><th>Hóspede</th><th>Datas</th><th>Canal</th><th class="num">Valor total (R$)</th><th class="num">Taxa do canal (R$)</th><th class="num">Líquido</th></tr></thead><tbody>
+      ${doMes.map(b => `<tr><td>${h(b.hospede || 'Hóspede')}</td><td>${dataBr(b.checkin).slice(0, 5)} a ${dataBr(b.checkout).slice(0, 5)}</td><td>${h(canalDe(b))}</td>
+        <td class="num">${celulaValor(b)}</td><td class="num">${celulaTaxa(b)}</td><td class="num" data-liq="${h(b.id)}"></td></tr>`).join('')}
+    </tbody></table>
+    <p class="muted small">Valor total = o que o hóspede pagou (vem do e-mail da Stays). Taxa do canal = comissão do Airbnb, Booking ou Decolar. Sua comissão de administração é calculada sobre o líquido.</p>` : '<p class="empty">Nenhuma reserva confirmada com entrada no mês.</p>'}
     <h3 class="rel-h">Despesas da casa <small class="muted">(Finanças · Aluguéis · ${h(casa.nome)})</small></h3>
     <div id="relDesp"></div>
     <label>Outras despesas <small class="muted">(uma por linha: descrição e valor)</small><textarea name="ajustes" rows="3" placeholder="Faxina extra 150&#10;Lâmpadas 42,90">${h(ajustesTxt(salvo.ajustes))}</textarea></label>
@@ -143,22 +144,26 @@ export async function relatorioCasa(casaId, mes = mesAnterior(today())) {
     for (const c of d.querySelectorAll('input[name^="tx:"]')) c.checked ? excluidas.delete(c.name.slice(3)) : excluidas.add(c.name.slice(3));
     const valores = {};
     for (const i of d.querySelectorAll('input[name^="v:"]')) valores[i.name.slice(2)] = i.value === '' ? null : +i.value;
+    const taxas = {};
+    for (const i of d.querySelectorAll('input[name^="t:"]')) taxas[i.name.slice(2)] = i.value === '' ? null : +i.value;
     return {
       dono: { nome: campo('dono_nome').value.trim(), email: campo('dono_email').value.trim(), comissao_pct: +campo('comissao_pct').value || 0 },
-      valores, excluidas: [...excluidas], ajustes: lerAjustes(campo('ajustes').value),
+      valores, taxas, excluidas: [...excluidas], ajustes: lerAjustes(campo('ajustes').value),
     };
   }
   const calcular = st => montarRelatorio({ casa, mes, tx, dono: st.dono, ajustes: st.ajustes, excluidas: st.excluidas,
-    bookings: S.bookings.map(b => b.id in st.valores ? { ...b, valor: st.valores[b.id] } : b) });
+    bookings: S.bookings.map(b => b.id in st.valores ? { ...b, valor: st.valores[b.id], taxa_canal: st.taxas[b.id] ?? null } : b) });
 
   function resumo() {
     const r = calcular(estado());
     $('#relResumo').innerHTML = `
-      <div><dt>Receita${r.semValor ? `<br><small class="late-lbl">${r.semValor} ${r.semValor === 1 ? 'reserva sem valor' : 'reservas sem valor'}</small>` : ''}</dt><dd>${brl2(r.receita)}</dd></div>
+      ${r.taxasCanal ? `<div><dt>Total das reservas</dt><dd>${brl2(r.receitaBruta)}</dd></div><div><dt>Taxas dos canais</dt><dd>${brl2(r.taxasCanal)}</dd></div>` : ''}
+      <div><dt>Receita${r.taxasCanal ? ' líquida' : ''}${r.semValor ? `<br><small class="late-lbl">${r.semValor} ${r.semValor === 1 ? 'reserva sem valor' : 'reservas sem valor'}</small>` : ''}</dt><dd>${brl2(r.receita)}</dd></div>
       <div><dt>Despesas</dt><dd>${brl2(r.totalDespesas)}</dd></div>
       <div><dt>Comissão${r.comissaoPct ? ` (${String(r.comissaoPct).replace('.', ',')}%)` : ''}</dt><dd>${brl2(r.comissao)}</dd></div>
       <div><dt>${r.repasse < 0 ? 'Saldo negativo' : 'A repassar'}<br><small>ocupação ${r.ocupacao}% · ${r.noites} noites</small></dt><dd>${brl2(Math.abs(r.repasse))}</dd></div>`;
     // Já enviado: diz se o que está na tela ainda é o que o dono recebeu
+    for (const x of r.reservas) { const c = d.querySelector(`[data-liq="${x.id}"]`); if (c) c.textContent = x.liquido == null ? '—' : brl2(x.liquido); }
     const rel = relAtual(), env = $('#relEnv');
     env.hidden = !rel.enviado_em;
     if (rel.enviado_em) {
@@ -200,7 +205,8 @@ export async function relatorioCasa(casaId, mes = mesAnterior(today())) {
   async function gravar(st, extra = {}) {
     for (const [id, valor] of Object.entries(st.valores)) {
       const b = S.bookings.find(x => x.id === id);
-      if (b && (b.valor ?? null) !== valor) await db.update('bookings', id, { valor });
+      const taxa_canal = st.taxas?.[id] ?? null;
+      if (b && ((b.valor ?? null) !== valor || (b.taxa_canal ?? null) !== taxa_canal)) await db.update('bookings', id, { valor, taxa_canal });
       const s = vincular[id];
       if (s && valor === s.valor) { await db.update('fin_tx', s.tx_id, { casa: casa.id, manual: true }); delete vincular[id]; }
     }

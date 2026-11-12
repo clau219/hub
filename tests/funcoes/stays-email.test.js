@@ -40,7 +40,7 @@ describe('stays-email', () => {
     base([{ id: 'b1', property_id: 'QS40', checkin: '2026-11-20', checkout: '2026-11-23', status: 'confirmada', origem: 'outro', hospede: 'Hóspede (Stays)', valor: null, uid_externo: 'fs:abc', notas: 'Stays RG01J' }]);
     await enviar([msg('m1', { cod: 'RG01J', nome: 'Renata Lima', contato: '+55 84 99999-0000', pessoas: 4, de: '20 nov 2026', ate: '23 nov 2026', valor: 'R$ 2.345,67', casa: 'Casa Azul - Pipa Natureza', canal: 'Airbnb', comissao: 'R$ 351,85' })]);
     const b = bk('b1');
-    assert.deepEqual([b.valor, b.hospede, b.origem], [2345.67, 'Renata Lima', 'airbnb']);
+    assert.deepEqual([b.valor, b.hospede, b.origem, b.taxa_canal], [2345.67, 'Renata Lima', 'airbnb', 351.85]);
     assert.equal(b.notas, 'Stays RG01J\nE-mail Stays: canal Airbnb · 4 hóspedes · contato +55 84 99999-0000 · comissão do canal R$ 351,85');
     assert.equal(linha('RG01J').booking_id, 'b1');
   });

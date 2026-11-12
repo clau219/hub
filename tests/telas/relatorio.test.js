@@ -56,7 +56,7 @@ describe('revisão de uma casa', () => {
     assert.equal(texto('#modalTitle'), 'Relatório de setembro/2026 · Casa Frida');
     assert.deepEqual(['dono_nome', 'dono_email', 'comissao_pct'].map(n => $(`#modal [name=${n}]`).value), ['Maria Souza', 'maria@exemplo.com', '20']);
     assert.deepEqual($$('.rel-res tbody tr').map(r => texto(r.cells[0])), ['Hóspede Airbnb', 'Bia']);
-    assert.deepEqual([$('[name="v:b1"]').value, $('[name="v:b1"]').placeholder, $('[name="v:b2"]').value], ['', 'repasse', '2500']);
+    assert.deepEqual([$('[name="v:b1"]').value, $('[name="v:b1"]').placeholder, $('[name="v:b2"]').value], ['', 'total', '2500']);
     assert.deepEqual($$('#relDesp .chk').map(l => nb(texto(l))), ['03/09 · Faxina MariaR$ 150,00', '15/09 · CosernR$ 230,45']);
     assert.match(texto('.rel-sem summary'), /^1 despesa de Aluguéis sem casa definida$/);
     assert.match(nb(texto('#relResumo')), /Receita1 reserva sem valorR\$ 2\.500,00/);
@@ -162,7 +162,7 @@ describe('melhorias: repasse do Airbnb, teste, mudou depois do envio, repasse pa
   test('sugere o valor do Airbnb pelo repasse em Finanças; ao salvar, o repasse ganha a casa', async () => {
     await relSet({});
     await V.relatorioCasa('QS39', '2026-09');
-    assert.equal(nb(texto('[data-sug=b1]')), 'Usar R$ 1.500,00');
+    assert.equal(nb(texto('[data-sug=b1]')), 'Usar repasse R$ 1.500,00');
     assert.equal($('[data-sug=b2]'), null); // reserva direta com valor: sem sugestão
     await clicar('[data-sug=b1]');
     assert.deepEqual([$('[name="v:b1"]').value, $('[data-sug=b1]')], ['1500', null]);

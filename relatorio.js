@@ -1,11 +1,21 @@
 // Relatório mensal de cada casa para o proprietário: reservas, ocupação, receita, despesas, comissão e repasse.
 // Funções puras: a tela (v-relatorio.js) junta os dados, deixa revisar e envia; o PDF sai de relatorio-pdf.js.
-// Regras: receita = reservas confirmadas com ENTRADA no mês (o valor que ficou para a casa; no Airbnb, o repasse, já sem a
-// taxa dele); ocupação = noites ocupadas dentro do mês; despesas = lançamentos de Finanças do negócio Aluguéis marcados com
-// a casa, menos os desmarcados na revisão, mais as "outras despesas" digitadas; comissão = % sobre a receita.
+// Regras: reservas confirmadas com ENTRADA no mês. Cada uma tem o valor TOTAL (o que o hóspede pagou, como vem no e-mail
+// da Stays) e a taxa do canal (comissão do Airbnb/Booking/Decolar); líquido = total − taxa. Sem taxa informada (ex.: valor
+// lançado pelo repasse do banco, que já é líquido), o líquido é o próprio valor. receita = soma dos líquidos;
+// ocupação = noites ocupadas dentro do mês; despesas = lançamentos de Finanças do negócio Aluguéis marcados com a casa,
+// menos os desmarcados na revisão, mais as "outras despesas" digitadas; comissão de administração = % sobre a receita líquida.
 import { addDays, diffDays, mesNome } from './util.js';
 
 export const centavos = v => Math.round((+v || 0) * 100) / 100;
+const ORIGEM = { airbnb: 'Airbnb', direto: 'Direta', booking: 'Booking', outro: 'Outra' };
+// Nome do canal: o que veio no e-mail da Stays ("E-mail Stays: canal Decolar · ..."), senão a origem da reserva
+export function canalDe(b) {
+  const m = String(b.notas || '').match(/^E-mail Stays: (?:canal ([^·\n]+?)\s*(?:·|$)|reserva manual)/m);
+  if (m) return m[1] ? m[1].trim() : 'Direta';
+  return ORIGEM[b.origem] || b.origem || '—';
+}
+const ou = v => v == null || v === '' ? null : centavos(v);
 export const brl2 = v => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 export const dataBr = iso => iso ? iso.slice(0, 10).split('-').reverse().join('/') : '';
 
@@ -41,8 +51,11 @@ export function montarRelatorio({ casa, mes, bookings = [], tx = [], dono = {}, 
   const { ini, fim, dias } = limitesMes(mes);
   const daCasa = bookings.filter(b => b.property_id === casa.id && b.status === 'confirmada');
   const reservas = daCasa.filter(b => b.checkin >= ini && b.checkin < fim).sort((a, b) => a.checkin.localeCompare(b.checkin))
-    .map(b => ({ id: b.id, hospede: b.hospede || 'Hóspede', origem: b.origem, checkin: b.checkin, checkout: b.checkout,
-      noites: diffDays(b.checkin, b.checkout), valor: b.valor == null || b.valor === '' ? null : centavos(b.valor) })); // 0 vale (estadia do próprio dono)
+    .map(b => {
+      const valor = ou(b.valor), taxa = ou(b.taxa_canal); // 0 vale (estadia do próprio dono)
+      return { id: b.id, hospede: b.hospede || 'Hóspede', origem: b.origem, canal: canalDe(b), checkin: b.checkin, checkout: b.checkout,
+        noites: diffDays(b.checkin, b.checkout), valor, taxa, liquido: valor == null ? null : centavos(valor - (taxa || 0)) };
+    });
   const noites = daCasa.reduce((s, b) => s + Math.max(0, diffDays(b.checkin > ini ? b.checkin : ini, b.checkout < fim ? b.checkout : fim)), 0);
   const fora = new Set(excluidas);
   const despesas = [
@@ -50,7 +63,9 @@ export function montarRelatorio({ casa, mes, bookings = [], tx = [], dono = {}, 
       .map(t => ({ id: t.id, data: t.data, descricao: t.descricao || t.categoria || 'Despesa', valor: centavos(-t.valor) })),
     ...ajustes.map(a => ({ data: null, descricao: a.descricao, valor: centavos(a.valor) })),
   ].sort((a, b) => (a.data || '9').localeCompare(b.data || '9'));
-  const receita = centavos(reservas.reduce((s, r) => s + (r.valor || 0), 0));
+  const receitaBruta = centavos(reservas.reduce((s, r) => s + (r.valor || 0), 0));
+  const taxasCanal = centavos(reservas.reduce((s, r) => s + (r.valor == null ? 0 : r.taxa || 0), 0));
+  const receita = centavos(receitaBruta - taxasCanal); // líquida: o que ficou para a casa
   const totalDespesas = centavos(despesas.reduce((s, d) => s + d.valor, 0));
   const comissaoPct = +dono.comissao_pct || 0;
   const comissao = centavos(receita * comissaoPct / 100);
@@ -60,7 +75,7 @@ export function montarRelatorio({ casa, mes, bookings = [], tx = [], dono = {}, 
   return {
     casa: { id: casa.id, nome: casa.nome, cor: casa.cor }, mes, dono: { nome: dono.nome || '', email: dono.email || '' },
     reservas, semValor: reservas.filter(r => r.valor == null).length, noites, dias, ocupacao: Math.round(noites / dias * 100),
-    despesas, receita, totalDespesas, comissaoPct, comissao, repasse: centavos(receita - comissao - totalDespesas), proximas,
+    despesas, receitaBruta, taxasCanal, receita, totalDespesas, comissaoPct, comissao, repasse: centavos(receita - comissao - totalDespesas), proximas,
   };
 }
 
@@ -73,9 +88,13 @@ export function emailRelatorio(r) {
     `Segue em anexo o relatório de ${rotuloMes(r.mes)} da ${r.casa.nome}.`, '',
     'Resumo:',
     `• Reservas: ${r.reservas.length} (${r.noites} ${r.noites === 1 ? 'noite ocupada' : 'noites ocupadas'}, ocupação de ${r.ocupacao}%)`,
-    `• Receita: ${brl2(r.receita)}`,
-    `• Despesas: ${brl2(r.totalDespesas)}`,
-    ...(r.comissaoPct ? [`• Comissão de administração (${String(r.comissaoPct).replace('.', ',')}%): ${brl2(r.comissao)}`] : []),
+    ...(r.taxasCanal ? [
+      `• Valor total das reservas (pago pelos hóspedes): ${brl2(r.receitaBruta)}`,
+      `• (–) Taxas dos canais (Airbnb, Booking, Decolar): ${brl2(r.taxasCanal)}`,
+      `• Receita líquida: ${brl2(r.receita)}`,
+    ] : [`• Receita: ${brl2(r.receita)}`]),
+    ...(r.comissaoPct ? [`• (–) Comissão de administração (${String(r.comissaoPct).replace('.', ',')}% da receita líquida): ${brl2(r.comissao)}`] : []),
+    `• (–) Despesas da casa: ${brl2(r.totalDespesas)}`,
     `• ${r.repasse < 0 ? 'Saldo negativo do mês' : 'Valor a repassar'}: ${brl2(Math.abs(r.repasse))}`, '',
     'Qualquer dúvida, fico à disposição.', '',
     'Atenciosamente,', 'Claudio Braga',

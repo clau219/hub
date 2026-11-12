@@ -118,7 +118,7 @@ export function pdfRelatorio(r, { hoje = today() } = {}) {
 
   // Quadros de resumo
   y = 112;
-  const cards = [['Receita', brl2(r.receita)], ['Despesas', brl2(r.totalDespesas)],
+  const cards = [[r.taxasCanal ? 'Receita líquida' : 'Receita', brl2(r.receita)], ['Despesas', brl2(r.totalDespesas)],
     [r.comissaoPct ? `Comissão (${String(r.comissaoPct).replace('.', ',')}%)` : 'Comissão', brl2(r.comissao)],
     [r.repasse < 0 ? 'Saldo negativo' : 'A repassar', brl2(Math.abs(r.repasse))]];
   const cw = (larg - 3 * 10) / 4;
@@ -132,10 +132,12 @@ export function pdfRelatorio(r, { hoje = today() } = {}) {
   pdf.texto(M, y, `Ocupação: ${r.noites} de ${r.dias} noites (${r.ocupacao}%) · ${r.reservas.length} ${r.reservas.length === 1 ? 'reserva' : 'reservas'} com entrada no mês`, { tam: 10 });
 
   secao('Reservas com entrada no mês');
+  const vl = v => v == null ? '—' : brl2(v);
   if (r.reservas.length) tabela(
-    [{ t: 'Hóspede', w: 159.28 }, { t: 'Origem', w: 60 }, { t: 'Entrada', w: 70 }, { t: 'Saída', w: 70 }, { t: 'Noites', w: 50, dir: true }, { t: 'Valor', w: 90, dir: true }],
-    r.reservas.map(b => [b.hospede, ORIGEM[b.origem] || b.origem, dataBr(b.checkin), dataBr(b.checkout), b.noites, b.valor == null ? '—' : brl2(b.valor)]),
-    { total: ['Total', '', '', '', '', brl2(r.receita)] });
+    [{ t: 'Hóspede', w: 131.28 }, { t: 'Canal', w: 52 }, { t: 'Entrada', w: 44 }, { t: 'Saída', w: 44 }, { t: 'Noites', w: 36, dir: true },
+      { t: 'Valor total', w: 66, dir: true }, { t: 'Taxa canal', w: 60, dir: true }, { t: 'Líquido', w: 66, dir: true }],
+    r.reservas.map(b => [b.hospede, b.canal, dataBr(b.checkin).slice(0, 5), dataBr(b.checkout).slice(0, 5), b.noites, vl(b.valor), b.taxa == null ? '—' : brl2(b.taxa), vl(b.liquido)]),
+    { total: ['Total', '', '', '', '', brl2(r.receitaBruta), brl2(r.taxasCanal), brl2(r.receita)] });
   else { y += 16; pdf.texto(M, y, 'Nenhuma reserva com entrada no mês.', { tam: 9, cor: CINZA }); }
 
   secao('Despesas da casa');
@@ -146,8 +148,11 @@ export function pdfRelatorio(r, { hoje = today() } = {}) {
   else { y += 16; pdf.texto(M, y, 'Nenhuma despesa no mês.', { tam: 9, cor: CINZA }); }
 
   secao('Fechamento');
-  const fech = [['Receita das reservas', brl2(r.receita)],
-    ...(r.comissaoPct ? [[`(–) Comissão de administração (${String(r.comissaoPct).replace('.', ',')}%)`, brl2(r.comissao)]] : []),
+  const fech = [
+    ...(r.taxasCanal ? [['Valor total das reservas (pago pelos hóspedes)', brl2(r.receitaBruta)],
+      ['(–) Taxas dos canais (Airbnb, Booking, Decolar)', brl2(r.taxasCanal)], ['= Receita líquida', brl2(r.receita)]]
+      : [['Receita das reservas', brl2(r.receita)]]),
+    ...(r.comissaoPct ? [[`(–) Comissão de administração (${String(r.comissaoPct).replace('.', ',')}% da receita líquida)`, brl2(r.comissao)]] : []),
     ['(–) Despesas da casa', brl2(r.totalDespesas)]];
   garantir(18 * (fech.length + 1) + 8);
   for (const [t, v] of fech) { y += 18; pdf.texto(M, y, t, { tam: 10 }); pdf.texto(W - M, y, v, { tam: 10, alinhar: 'dir' }); }
@@ -167,7 +172,7 @@ export function pdfRelatorio(r, { hoje = today() } = {}) {
   for (let i = 0; i < total; i++) {
     pdf.naPagina(i);
     pdf.linha(M, H - 44, W - M, H - 44);
-    pdf.texto(M, H - 30, `Gerado pelo Hub em ${dataBr(hoje)} · Receita pela data de entrada; reservas do Airbnb pelo valor repassado.`, { tam: 7.5, cor: CINZA });
+    pdf.texto(M, H - 30, `Gerado pelo Hub em ${dataBr(hoje)} · Reservas pela data de entrada · Taxa do canal = comissão do Airbnb/Booking/Decolar.`, { tam: 7.5, cor: CINZA });
     pdf.texto(W - M, H - 30, `${i + 1}/${total}`, { tam: 7.5, cor: CINZA, alinhar: 'dir' });
   }
   return pdf.bytes();

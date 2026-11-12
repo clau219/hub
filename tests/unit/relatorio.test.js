@@ -95,9 +95,26 @@ describe('e-mail', () => {
     const nb = s => s.replace(/ /g, ' ');
     assert.equal(nb(e.corpo), [
       'Olá, Maria!', '', 'Segue em anexo o relatório de outubro/2026 da Casa Frida.', '', 'Resumo:',
-      '• Reservas: 2 (8 noites ocupadas, ocupação de 26%)', '• Receita: R$ 4.000,00', '• Despesas: R$ 380,45',
-      '• Comissão de administração (20%): R$ 800,00', '• Valor a repassar: R$ 2.819,55', '',
+      '• Reservas: 2 (8 noites ocupadas, ocupação de 26%)', '• Receita: R$ 4.000,00',
+      '• (–) Comissão de administração (20% da receita líquida): R$ 800,00', '• (–) Despesas da casa: R$ 380,45', '• Valor a repassar: R$ 2.819,55', '',
       'Qualquer dúvida, fico à disposição.', '', 'Atenciosamente,', 'Claudio Braga'].join('\n'));
+  });
+  test('com taxa do canal: total, taxas, receita líquida; comissão sobre o líquido; canal pelo e-mail da Stays', () => {
+    const bks = [
+      { id: 'x', property_id: 'QS39', status: 'confirmada', origem: 'airbnb', hospede: 'Renata', checkin: '2026-10-05', checkout: '2026-10-08', valor: 2000, taxa_canal: 310,
+        notas: 'Stays RG01J\nE-mail Stays: canal Airbnb · 4 hóspedes' },
+      { id: 'y', property_id: 'QS39', status: 'confirmada', origem: 'outro', hospede: 'Davi', checkin: '2026-10-12', checkout: '2026-10-14', valor: 1000, taxa_canal: 150,
+        notas: 'Stays QY01J\nE-mail Stays: canal Decolar · 2 hóspedes' },
+      { id: 'z', property_id: 'QS39', status: 'confirmada', origem: 'direto', hospede: 'Ana', checkin: '2026-10-20', checkout: '2026-10-22', valor: 900, taxa_canal: null },
+    ];
+    const r = R.montarRelatorio({ casa: FRIDA, mes: '2026-10', bookings: bks, tx: [], dono: { nome: 'Maria', comissao_pct: 20 } });
+    assert.deepEqual(r.reservas.map(b => [b.canal, b.valor, b.taxa, b.liquido]), [['Airbnb', 2000, 310, 1690], ['Decolar', 1000, 150, 850], ['Direta', 900, null, 900]]);
+    assert.deepEqual([r.receitaBruta, r.taxasCanal, r.receita, r.comissao, r.repasse], [3900, 460, 3440, 688, 2752]);
+    const nb = s => s.replace(/ /g, ' ');
+    const corpo = nb(R.emailRelatorio(r).corpo);
+    for (const l of ['• Valor total das reservas (pago pelos hóspedes): R$ 3.900,00', '• (–) Taxas dos canais (Airbnb, Booking, Decolar): R$ 460,00',
+      '• Receita líquida: R$ 3.440,00', '• (–) Comissão de administração (20% da receita líquida): R$ 688,00', '• Valor a repassar: R$ 2.752,00']) assert.ok(corpo.includes(l), l);
+    assert.equal(R.canalDe({ notas: 'Stays YY01J\nE-mail Stays: reserva manual · 1 hóspede', origem: 'outro' }), 'Direta');
   });
   test('saldo negativo e sem comissão', () => {
     const r = R.montarRelatorio({ casa: FRIDA, mes: '2026-10', bookings: [], tx: TX, dono: {} });
