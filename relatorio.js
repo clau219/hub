@@ -89,8 +89,11 @@ export function emailRelatorio(r) {
 // O repasse entra em Finanças (Pluggy) sem casa, cerca de 1 dia depois do check-in. Sugere o valor só quando o par
 // reserva × repasse é único nos dois sentidos (duas casas com entrada no mesmo dia ficam para você decidir).
 export const ehRepasseAirbnb = t => +t.valor > 0 && !t.casa && (t.categoria === 'Airbnb' || /airbnb/i.test(`${t.descricao || ''} ${t.contraparte || ''}`));
+// Reserva de canal (Airbnb, Decolar, Booking): a do iCal antigo do Airbnb ou a que chega pela Stays (origem 'outro' com
+// uid de calendário). As diretas do Hub não têm uid_externo.
+export const deCanal = b => b.origem === 'airbnb' || (b.origem === 'outro' && !!b.uid_externo);
 export function sugerirRepasses(bookings, tx, janela = 3) {
-  const reservas = bookings.filter(b => b.origem === 'airbnb' && b.status === 'confirmada' && (b.valor == null || b.valor === ''));
+  const reservas = bookings.filter(b => deCanal(b) && b.status === 'confirmada' && (b.valor == null || b.valor === ''));
   const pagos = tx.filter(ehRepasseAirbnb);
   const cand = r => pagos.filter(t => { const d = diffDays(r.checkin, t.data); return d >= 0 && d <= janela; });
   const out = {};

@@ -7,7 +7,7 @@ import { S, save } from './store.js';
 import { h, today, addDays } from './util.js';
 import { modal, toast, confirmInline, closeModal } from './ui.js';
 import * as db from './db.js';
-import { mesAnterior, rotuloMes, limitesMes, montarRelatorio, emailRelatorio, despesasSemCasa, lerAjustes, ajustesTxt, brl2, dataBr,
+import { deCanal, mesAnterior, rotuloMes, limitesMes, montarRelatorio, emailRelatorio, despesasSemCasa, lerAjustes, ajustesTxt, brl2, dataBr,
   sugerirRepasses, totaisEnviados, mudouDesdeEnvio, textoMudancas, sugerirPagamento, janelaPagamento } from './relatorio.js';
 import { pdfRelatorio } from './relatorio-pdf.js';
 
@@ -96,7 +96,7 @@ export async function relatorioCasa(casaId, mes = mesAnterior(today())) {
 
   const celulaValor = b => {
     const s = (b.valor == null || b.valor === '') && sugestoes[b.id];
-    return `<input name="v:${h(b.id)}" type="number" min="0" step="0.01" inputmode="decimal" value="${h(b.valor ?? '')}" placeholder="${b.origem === 'airbnb' ? 'repasse' : 'valor'}" aria-label="Valor da reserva de ${h(b.hospede || 'hóspede')}">
+    return `<input name="v:${h(b.id)}" type="number" min="0" step="0.01" inputmode="decimal" value="${h(b.valor ?? '')}" placeholder="${deCanal(b) ? 'repasse' : 'valor'}" aria-label="Valor da reserva de ${h(b.hospede || 'hóspede')}">
       ${s ? `<button type="button" class="chip rel-sug" data-sug="${h(b.id)}" title="Repasse do Airbnb de ${dataBr(s.data)} em Finanças">Usar ${brl2(s.valor)}</button>` : ''}`;
   };
   const nSug = doMes.filter(b => (b.valor == null || b.valor === '') && sugestoes[b.id]).length;

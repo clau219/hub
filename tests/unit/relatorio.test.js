@@ -171,6 +171,12 @@ describe('repasse do Airbnb sugere o valor da reserva', () => {
     assert.deepEqual(R.sugerirRepasses([air('a', 'QS39', '2026-10-03')], tx), {});
     assert.deepEqual(R.sugerirRepasses([air('a', 'QS39', '2026-10-03', { valor: 500 }), air('b', 'QS39', '2026-10-03', { origem: 'direto' })], [rep('r1', '2026-10-04', 1000)]), {});
   });
+  test('reserva que chega pela Stays ("Hóspede (Stays)", origem outro com uid de calendário) também recebe a sugestão; direta do Hub não', () => {
+    const stays = air('s', 'QS40', '2026-10-12', { origem: 'outro', hospede: 'Hóspede (Stays)', uid_externo: 'fs:6af4' });
+    const direta = air('d', 'QS39', '2026-10-20', { origem: 'outro', uid_externo: null });
+    assert.deepEqual(R.sugerirRepasses([stays, direta], [rep('r1', '2026-10-13', 1450), rep('r2', '2026-10-21', 800)]), { s: { tx_id: 'r1', valor: 1450, data: '2026-10-13' } });
+    assert.deepEqual([R.deCanal(stays), R.deCanal(direta), R.deCanal({ origem: 'airbnb' })], [true, false, true]);
+  });
   test('reconhece o repasse pela descrição mesmo sem categoria', () => {
     assert.ok(R.ehRepasseAirbnb({ valor: 900, descricao: 'PIX recebido AIRBNB PAYMENTS UK', categoria: null, casa: null }));
   });
