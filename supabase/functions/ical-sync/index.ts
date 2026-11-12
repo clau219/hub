@@ -3,6 +3,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
 import { RRule } from 'https://esm.sh/rrule@2.8.1';
 import { avisarPush } from '../_shared/wa.ts';
+import { aplicarEmailsStays } from '../_shared/stays-email.ts';
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' };
 
@@ -94,6 +95,11 @@ Deno.serve(async req => {
     } catch (e) {
       erros.push(`${f.nome || f.url}: ${(e as Error).message}`);
     }
+  }
+  // Reserva nova da Stays que já tinha e-mail guardado (o e-mail chega antes do iCal): completa valor, nome e canal
+  if (casasStays.size) {
+    try { const n = await aplicarEmailsStays(sb); if (n) avisos.push(`${n} reserva(s) completada(s) pelo e-mail da Stays`); }
+    catch (e) { erros.push(`e-mails da Stays: ${(e as Error).message}`); }
   }
   // Resultado da leitura fica guardado para aparecer em Ajustes (a leitura de hora em hora não tem quem veja o erro)
   await sb.from('app_config').upsert({ key: 'ical_status', value: JSON.stringify({ em: new Date().toISOString(), eventos, reservas, erros, avisos }) }, { onConflict: 'key' });
