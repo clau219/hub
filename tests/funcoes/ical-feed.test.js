@@ -68,12 +68,26 @@ describe('ical-feed', () => {
       ['dir-b3@hub', 'Bloqueio (Hub)'],
       ['dir-b4@hub', 'Reserva (Hub)'],
       ['dir-b8@hub', 'Direta: Saiu (Hub)'],
+      ['sentinela-QS39@hub', 'Marcador do Hub (Hub)'],
     ]);
     assert.ok(ev.every(e => !e.DESCRIPTION), 'nada de notas ou documentos no feed que vai para o Airbnb');
   });
+  test('diretas: o que veio do iCal da Stays não volta para a Stays', async () => {
+    const d = DADOS();
+    novoBanco({ ...d, calendar_sources: [{ id: 'fs', tipo: 'outro', property_id: 'QS39', url: 'https://cbraga.stays.net/apartment/CO03J/ical' }],
+      bookings: [...d.bookings, { id: 'b9', property_id: 'QS39', origem: 'outro', status: 'bloqueio', checkin: '2026-12-01', checkout: '2026-12-05', uid_externo: 'fs:6af3' }] });
+    const ev = eventos(await (await get('cal=diretas&casa=QS39&token=segredo')).text());
+    assert.deepEqual(ev.map(e => e.UID), ['dir-b2@hub', 'dir-b3@hub', 'dir-b4@hub', 'dir-b8@hub', 'sentinela-QS39@hub']);
+  });
   test('diretas de outra casa: Booking aparece', async () => {
     const ev = eventos(await (await get('cal=diretas&casa=QS40&token=segredo')).text());
-    assert.deepEqual(ev.map(e => e.SUMMARY), ['Booking: Pedro (Hub)']);
+    assert.deepEqual(ev.map(e => e.SUMMARY), ['Booking: Pedro (Hub)', 'Marcador do Hub (Hub)']);
+  });
+  test('diretas: casa sem nenhuma reserva direta ainda manda o sentinela, 400 dias à frente (a Stays ignora iCal sem evento futuro)', async () => {
+    const ev = eventos(await (await get('cal=diretas&casa=QS50&token=segredo')).text());
+    assert.equal(ev.length, 1);
+    assert.deepEqual([ev[0].UID, ev[0]['DTSTART;VALUE=DATE'], ev[0]['DTEND;VALUE=DATE']], ['sentinela-QS50@hub', '20271123', '20271124']);
+    assert.ok(ev[0]['DTSTART;VALUE=DATE'] > '20271019', 'além da janela de venda de 365 dias da Stays');
   });
   test('dj: gigs fechadas/realizadas/pagas, com horário de Pipa e virada da meia-noite', async () => {
     const txt = await (await get('cal=dj&token=segredo')).text();

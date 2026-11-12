@@ -27,16 +27,28 @@ Deno.serve(async req => {
   } else if (cal === 'diretas') {
     const casa = u.searchParams.get('casa');
     if (!casa) return new Response('informe ?casa=', { status: 400 });
-    const { data: bks } = await sb.from('bookings').select('id,checkin,checkout,status,origem,hospede')
-      .eq('property_id', casa).neq('status', 'cancelada').or('origem.is.null,origem.neq.airbnb')
-      .gte('checkout', new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10));
-    // Título para reconhecer no Airbnb: origem + primeiro nome ("Direta: Marina (Hub)"). Sobrenome e documento não saem do Hub.
+    const [{ data: bks }, { data: fontes }] = await Promise.all([
+      sb.from('bookings').select('id,checkin,checkout,status,origem,hospede,uid_externo')
+        .eq('property_id', casa).neq('status', 'cancelada').or('origem.is.null,origem.neq.airbnb')
+        .gte('checkout', new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10)),
+      sb.from('calendar_sources').select('id,url,tipo'),
+    ]);
+    // O que veio do iCal da Stays já está na Stays: não volta para ela (este feed é importado lá)
+    const daStays = (fontes || []).filter(f => f.tipo === 'stays' || /\.stays\.net\/apartment\/[^/]+\/ical/i.test(String(f.url || ''))).map(f => `${f.id}:`);
+    // Título para reconhecer no Airbnb/Stays: origem + primeiro nome ("Direta: Marina (Hub)"). Sobrenome e documento não saem do Hub.
     const ORIGEM: Record<string, string> = { direto: 'Direta', booking: 'Booking', outro: 'Reserva' };
     for (const b of bks || []) {
+      if (daStays.some(p => String(b.uid_externo || '').startsWith(p))) continue;
       const nome = String(b.hospede || '').trim().split(/\s+/)[0];
       const titulo = b.status === 'bloqueio' ? 'Bloqueio (Hub)' : `${ORIGEM[b.origem] || 'Reserva'}${nome ? ': ' + nome : ''} (Hub)`;
       evs.push(vevent(`dir-${b.id}`, stamp, titulo, `DTSTART;VALUE=DATE:${b.checkin.replace(/-/g, '')}`, `DTEND;VALUE=DATE:${b.checkout.replace(/-/g, '')}`));
     }
+    // Sentinela: a Stays IGNORA um iCal importado sem nenhum evento FUTURO (não remove nada; medido nos logs dela em
+    // 11/11/2026 — um evento no passado não bastou), então, quando a última reserva direta da casa é apagada, o bloqueio
+    // ficaria preso. Este evento fica SENTINELA_DIAS à frente: além da janela de venda da Stays (365 dias), onde nada é
+    // vendido. O ical-sync ignora o que a Stays devolve tão longe.
+    const dia = (n: number) => new Date(Date.now() - 3 * 3600e3 + n * 864e5).toISOString().slice(0, 10).replace(/-/g, '');
+    evs.push(vevent(`sentinela-${casa}`, stamp, 'Marcador do Hub (Hub)', `DTSTART;VALUE=DATE:${dia(SENTINELA_DIAS)}`, `DTEND;VALUE=DATE:${dia(SENTINELA_DIAS + 1)}`));
   } else if (cal === 'dj') {
     const { data: deals } = await sb.from('deals').select('*, contacts(nome)').eq('negocio', 'dj').in('etapa', ['fechado', 'realizado', 'pago']).not('data_evento', 'is', null);
     for (const d of deals || []) {
@@ -58,6 +70,7 @@ Deno.serve(async req => {
   return new Response(body, { headers: { 'Content-Type': 'text/calendar; charset=utf-8', 'Cache-Control': 'max-age=900' } });
 });
 
+const SENTINELA_DIAS = 400; // a janela de venda da Stays é de 365 dias; o ical-sync ignora a partir de 380
 const fmtUtc = (iso: string) => iso.replace(/[-:]/g, '').replace(/\.\d{3}/, '');
 const esc = (s: string) => s.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/([,;])/g, '\\$1');
 function vevent(uid: string, stamp: string, summary: string, dtstart: string, dtend: string, desc?: string | null, loc?: string | null) {

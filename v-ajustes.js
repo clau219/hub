@@ -27,7 +27,7 @@ export async function render(el) {
 
   <section class="block">
     <h2>Calendários externos</h2>
-    <p class="muted">Cole aqui os links iCal. Eles são lidos a cada hora pelo servidor: o calendário de DJ do Google entra na agenda DJ, e cada link do Airbnb vira reservas da casa correspondente.</p>
+    <p class="muted">Cole aqui os links iCal. Eles são lidos a cada 15 minutos pelo servidor: o calendário de DJ do Google entra na agenda DJ, e o link de exportação da Stays de cada casa traz as reservas de todos os canais (Airbnb, Decolar, Booking) e os bloqueios. Os links do Airbnb ficam cadastrados só para o botão "Consultar Airbnb" achar o anúncio: não remova.</p>
     <table class="table"><thead><tr><th>Nome</th><th>Calendário</th><th>Tipo</th><th>Casa</th><th>Última leitura</th><th></th></tr></thead><tbody>
       ${S.calendar_sources.map(s => `<tr><td>${h(s.nome || '')}</td><td>${s.calendario === 'dj' ? 'DJ' : s.calendario === 'alugueis' ? 'Aluguéis' : 'Pessoal'}</td><td>${h(s.tipo)}</td><td>${h(s.property_id || '')}</td>
         <td>${s.ultimo_sync ? fmtDate(localDate(s.ultimo_sync)) : 'ainda não'}</td><td><button class="mini" data-del="${s.id}">Remover</button></td></tr>`).join('') || '<tr><td colspan="6" class="muted">Nenhum link cadastrado.</td></tr>'}
@@ -37,8 +37,8 @@ export async function render(el) {
   </section>
 
   <section class="block">
-    <h2>Bloquear o Airbnb com as reservas diretas</h2>
-    <p class="muted">Cada casa tem um endereço com as reservas que não vieram do Airbnb (diretas, Booking, bloqueios feitos no Hub). Importe no anúncio: Airbnb › Calendário › Disponibilidade › Conectar calendários › Importar calendário. Assim o Airbnb fecha essas datas sozinho e não aceita reserva dupla. Ele relê de algumas em algumas horas: num fechamento de última hora, bloqueie também à mão.</p>
+    <h2>Bloquear os canais com as reservas diretas</h2>
+    <p class="muted">Cada casa tem um endereço com as reservas diretas e os bloqueios feitos no Hub. Ele está importado na Stays (anúncio › Distribuição › iCal › "HUB - reservas diretas"), que fecha essas datas no Airbnb, na Decolar e na Booking em 10 a 25 minutos e libera de novo quando a reserva é cancelada ou muda de data. Se algo não chegar ou ficar preso na Stays, o Hub avisa por push e cria uma tarefa em Aluguéis. Num fechamento de última hora, bloqueie também à mão na Stays.</p>
     ${fn ? S.properties.map(p => `<p><b>${h(p.nome)}</b><br><code class="sel">${fn}/ical-feed?cal=diretas&casa=${encodeURIComponent(p.id)}&token=${feed}</code></p>`).join('') : '<p class="muted">Disponível depois de conectar o Supabase.</p>'}
   </section>
 

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { carregarFuncao, pedido, lerJson, comCron } from '../helpers/funcao.js';
 import { novoBanco, banco } from '../helpers/fake-supabase.js';
 import { simular, limparRede, chamadasPara } from '../helpers/rede.js';
+import { relogio } from '../helpers/ambiente.js';
 
 let fn;
 const AIRBNB = 'https://www.airbnb.com.br/calendar/ical/45895549.ics?s=x';
@@ -158,5 +159,163 @@ describe('Google → agenda', () => {
     const n = banco().t('events').length;
     await ler();
     assert.equal(banco().t('events').length, n);
+  });
+});
+
+describe('Stays → reservas (link de exportação do anúncio)', () => {
+  const STAYS = 'https://cbraga.stays.net/apartment/CO03J/ical';
+  const FS = { id: 'fs', nome: 'Stays Frida', tipo: 'outro', calendario: 'alugueis', property_id: 'QS39', url: STAYS };
+  const ev = (uid, ini, fim, resumo, id = 'RG01J', iurl = '') => [`DTSTAMP:20261019T150000Z`, `UID:${uid}`, `SUMMARY:${resumo}`,
+    `DESCRIPTION:ID: ${id}\nIDEX: cbraga-${id}\nDT: 2026-10-19\nIURL: ${iurl}\nIURLC: c`, ` bragaCO03J`, `DTSTART:${ini}`, `DTEND:${fim}`];
+  const FEED_STAYS = cal(
+    ev('aaa1', '20261025T140000Z', '20261028T100000Z', ''), // reserva (Airbnb, Decolar...): sem nome
+    ev('aaa2', '20261101T140000Z', '20261110T100000Z', 'REFORMA', 'QW01J'), // bloqueio manual
+    ev('aaa3', '20261028T230000Z', '20261029T010000Z', 'fake_blocked', ''), // tempo de preparação
+    ev('aaa4', '20261120T140000Z', '20261122T100000Z', 'Direta: Marina (Hub)', 'ZZ01J', 'https://projeto.supabase.co/functions/v1/ical-feed?cal=diretas'), // eco do Hub
+    ev('aaa5', '20260901T140000Z', '20260905T100000Z', ''), // passado
+    ev('aaa6', '20271019T140000Z', '20291019T100000Z', 'fake_blocked', ''), // fim da janela de venda
+  );
+  const lerStays = (feed = FEED_STAYS) => { simular(STAYS, feed); simular(AIRBNB, FEED_AIRBNB); simular(/gcal-sync/, {}); return ler(); };
+
+  test('reserva direta do Hub que também foi bloqueada à mão na Stays não duplica; o espelho dela no Airbnb sai', async () => {
+    novoBanco(comCron({ calendar_sources: [FONTES[0], FS], bookings: [
+      { id: 'd1', uid_externo: null, property_id: 'QS39', checkin: '2026-11-01', checkout: '2026-11-10', status: 'confirmada', origem: 'direto', hospede: 'Nelsinho', valor: 1500 },
+      { id: 'e1', uid_externo: 'fa:espelho@airbnb.com', property_id: 'QS39', checkin: '2026-11-01', checkout: '2026-11-10', status: 'bloqueio', origem: 'airbnb' },
+    ] }));
+    await lerStays();
+    assert.equal(banco().t('bookings').filter(x => x.checkin === '2026-11-01' && x.status !== 'cancelada').length, 1);
+    assert.equal(banco().t('bookings').find(x => x.id === 'e1').status, 'cancelada');
+  });
+  test('cópia da Stays que já tinha entrado ao lado da reserva direta é cancelada na leitura seguinte', async () => {
+    novoBanco(comCron({ calendar_sources: [FS], bookings: [
+      { id: 'd1', uid_externo: null, property_id: 'QS39', checkin: '2026-11-01', checkout: '2026-11-10', status: 'confirmada', origem: 'direto', hospede: 'Nelsinho' },
+      { id: 'c1', uid_externo: 'fs:aaa2', property_id: 'QS39', checkin: '2026-11-01', checkout: '2026-11-10', status: 'bloqueio', origem: 'airbnb' },
+    ] }));
+    await lerStays();
+    await lerStays();
+    assert.deepEqual([banco().t('bookings').find(x => x.id === 'c1').status, banco().t('bookings').find(x => x.id === 'd1').status], ['cancelada', 'confirmada']);
+    assert.equal(banco().t('bookings').length, 3); // d1, c1 (cancelada) e a reserva aaa1
+    assert.deepEqual([banco().t('bookings').find(x => x.id === 'd1').status, banco().t('bookings').find(x => x.id === 'd1').uid_externo], ['confirmada', null]);
+  });
+  test('reserva sem nome, bloqueio com a anotação; preparação, eco do Hub e passado ficam de fora', async () => {
+    novoBanco(comCron({ calendar_sources: [FS] }));
+    const { corpo } = await lerStays();
+    assert.deepEqual([corpo.reservas, corpo.erros], [2, []]);
+    const b = Object.fromEntries(banco().t('bookings').map(x => [x.uid_externo, x]));
+    assert.deepEqual(Object.keys(b).sort(), ['fs:aaa1', 'fs:aaa2']);
+    assert.deepEqual([b['fs:aaa1'].checkin, b['fs:aaa1'].checkout, b['fs:aaa1'].status, b['fs:aaa1'].hospede, b['fs:aaa1'].notas],
+      ['2026-10-25', '2026-10-28', 'confirmada', 'Hóspede (Stays)', 'Stays RG01J']);
+    assert.deepEqual([b['fs:aaa2'].checkin, b['fs:aaa2'].checkout, b['fs:aaa2'].status, b['fs:aaa2'].hospede, b['fs:aaa2'].notas],
+      ['2026-11-01', '2026-11-10', 'bloqueio', null, 'Stays QW01J\nREFORMA']);
+  });
+  test('com link da Stays, o iCal do Airbnb da mesma casa não é lido; a reserva que veio dele passa para a Stays sem perder nome e valor', async () => {
+    novoBanco(comCron({ calendar_sources: [FONTES[0], FS], bookings: [
+      { id: 'b1', uid_externo: 'fa:res1@airbnb.com', property_id: 'QS39', checkin: '2026-10-25', checkout: '2026-10-28', status: 'confirmada', origem: 'airbnb', hospede: 'Marina', valor: 1800 },
+      { id: 'b2', uid_externo: 'fa:blk1@airbnb.com', property_id: 'QS39', checkin: '2026-12-01', checkout: '2026-12-03', status: 'bloqueio', origem: 'airbnb' },
+      { id: 'b3', uid_externo: 'fa:res9@airbnb.com', property_id: 'QS39', checkin: '2026-12-10', checkout: '2026-12-12', status: 'confirmada', origem: 'airbnb', hospede: 'Sem par' },
+    ] }));
+    const { corpo } = await lerStays();
+    assert.equal(chamadasPara(AIRBNB).length, 0);
+    const b1 = banco().t('bookings').find(x => x.id === 'b1');
+    assert.deepEqual([b1.uid_externo, b1.hospede, b1.valor, b1.origem], ['fs:aaa1', 'Marina', 1800, 'airbnb']);
+    assert.equal(banco().t('bookings').filter(x => x.checkin === '2026-10-25').length, 1);
+    assert.equal(banco().t('bookings').find(x => x.id === 'b2').status, 'cancelada');
+    assert.equal(banco().t('bookings').find(x => x.id === 'b3').status, 'confirmada');
+    assert.deepEqual(corpo.avisos, ['QS39: 1 reserva(s) do Airbnb sem par na Stays (entrada 2026-12-10): confira', 'QS39: 1 reserva(s) do Airbnb passaram a vir da Stays']);
+  });
+  test('eco de reserva direta apagada no Hub não vira "Hóspede (Stays)" enquanto a Stays não tira; depois é esquecido', async () => {
+    // a Stays devolve a reserva direta sem nome e sem IURL (como uma reserva de verdade): aaa1 = eco da d1
+    novoBanco(comCron({ calendar_sources: [FS], bookings: [
+      { id: 'd1', uid_externo: null, property_id: 'QS39', checkin: '2026-10-25', checkout: '2026-10-28', status: 'confirmada', origem: 'direto', hospede: 'TESTE' },
+    ] }));
+    await lerStays();
+    const ecos = () => JSON.parse(banco().t('app_config').find(c => c.key === 'stays_ecos')?.value || '{}');
+    assert.deepEqual(Object.keys(ecos()), ['fs:aaa1']);
+    assert.equal(ecos()['fs:aaa1'].bk, 'd1');
+    // reserva direta apagada; a Stays ainda manda o eco
+    banco().t('bookings').splice(banco().t('bookings').findIndex(x => x.id === 'd1'), 1);
+    await lerStays();
+    assert.equal(banco().t('bookings').filter(x => x.checkin === '2026-10-25').length, 0);
+    // a Stays tirou o eco: a lembrança some
+    await lerStays(cal(ev('aaa2', '20261101T140000Z', '20261110T100000Z', 'REFORMA', 'QW01J')));
+    assert.deepEqual(Object.keys(ecos()), []);
+  });
+  test('reserva-fantasma que já tinha entrado é cancelada quando o eco é reconhecido; data mudada atualiza a lembrança', async () => {
+    novoBanco(comCron({ calendar_sources: [FS], bookings: [
+      { id: 'd1', uid_externo: null, property_id: 'QS39', checkin: '2026-10-25', checkout: '2026-10-28', status: 'confirmada', origem: 'direto', hospede: 'Ana' },
+    ] }));
+    await lerStays();
+    // datas da reserva direta mudam; a Stays ainda manda o eco nas datas antigas
+    Object.assign(banco().t('bookings').find(x => x.id === 'd1'), { checkin: '2026-10-26', checkout: '2026-10-29' });
+    await lerStays();
+    assert.equal(banco().t('bookings').filter(x => x.status !== 'cancelada' && x.checkin === '2026-10-25').length, 0);
+    // a Stays reimporta: o mesmo evento vem com as datas novas e continua sendo eco
+    await lerStays(cal(ev('aaa1', '20261026T140000Z', '20261029T100000Z', '')));
+    assert.deepEqual(banco().t('bookings').filter(x => x.status !== 'cancelada').map(x => x.id), ['d1']);
+    assert.equal(JSON.parse(banco().t('app_config').find(c => c.key === 'stays_ecos').value)['fs:aaa1'].checkin, '2026-10-26');
+  });
+  test('o sentinela do feed "diretas" que volta da Stays (400 dias à frente, sem título) não vira reserva', async () => {
+    novoBanco(comCron({ calendar_sources: [FS] }));
+    await lerStays(cal(ev('aaa1', '20261025T140000Z', '20261028T100000Z', ''), ev('sent', '20271123T140000Z', '20271124T100000Z', '', 'ZQ01J')));
+    assert.deepEqual(banco().t('bookings').map(b => b.uid_externo), ['fs:aaa1']);
+  });
+  describe('conferência Hub × Stays', () => {
+    const PUSH = { app_secrets: [{ key: 'cron_token', value: comCron({}).app_secrets[0].value }, { key: 'vapid_public', value: 'pub' }, { key: 'vapid_private', value: 'priv' }],
+      push_subscriptions: [{ id: 'p1', endpoint: 'https://push/1', p256dh: 'x', auth: 'y' }], properties: [{ id: 'QS39', nome: 'Casa Frida' }] };
+    const est = () => JSON.parse(banco().t('app_config').find(c => c.key === 'stays_conferencia')?.value || '{}');
+    beforeEach(() => { relogio.definir('2026-10-19T15:00:00Z'); globalThis.__webpush = { envios: [], vapid: null, falhar: null }; });
+    test('reserva direta que não chegou na Stays: espera o prazo, depois tarefa + push; quando chega, a tarefa é concluída', async () => {
+      novoBanco(comCron({ ...PUSH, calendar_sources: [FS], bookings: [
+        { id: 'd9', uid_externo: null, property_id: 'QS39', checkin: '2026-12-01', checkout: '2026-12-03', status: 'confirmada', origem: 'direto', hospede: 'Ana Souza' },
+      ] }));
+      await lerStays();
+      assert.deepEqual(Object.keys(est()), ['falta:d9']);
+      assert.equal(banco().t('tasks').length, 0, 'antes do prazo é o atraso normal da Stays');
+      relogio.avancar(41 * 60e3);
+      const { corpo } = await lerStays();
+      const t = banco().t('tasks');
+      assert.equal(t.length, 1);
+      assert.match(t[0].titulo, /Reserva direta de Ana \(Casa Frida, 01\/12–03\/12\) não chegou/);
+      assert.deepEqual([t[0].area, t[0].prazo, t[0].feito], ['alugueis', '2026-10-19', false]);
+      assert.equal(globalThis.__webpush.envios.length, 1);
+      assert.ok(corpo.avisos.some(a => /não chegou/.test(a)));
+      await lerStays(); // não repete o aviso
+      assert.equal(banco().t('tasks').length, 1);
+      assert.equal(globalThis.__webpush.envios.length, 1);
+      // a Stays importou (eco sem nome nas mesmas datas): resolvido
+      await lerStays(cal(ev('aaa9', '20261201T140000Z', '20261203T100000Z', '', 'QY01J')));
+      assert.equal(banco().t('tasks')[0].feito, true);
+      assert.deepEqual(est(), {});
+    });
+    test('bloqueio preso: reserva direta apagada e a Stays não liberou → tarefa com o código da Stays; some quando a Stays tira', async () => {
+      novoBanco(comCron({ ...PUSH, calendar_sources: [FS], bookings: [
+        { id: 'd1', uid_externo: null, property_id: 'QS39', checkin: '2026-10-25', checkout: '2026-10-28', status: 'confirmada', origem: 'direto', hospede: 'TESTE' },
+      ] }));
+      await lerStays();
+      assert.deepEqual(est(), {});
+      banco().t('bookings').splice(banco().t('bookings').findIndex(x => x.id === 'd1'), 1);
+      await lerStays();
+      assert.deepEqual(Object.keys(est()), ['preso:fs:aaa1']);
+      relogio.avancar(41 * 60e3);
+      await lerStays();
+      const t = banco().t('tasks');
+      assert.equal(t.length, 1);
+      assert.equal(t[0].titulo, 'Apagar na Stays o bloqueio RG01J (Casa Frida, 25/10–28/10)');
+      assert.match(globalThis.__webpush.envios[0].body, /continua bloqueando/);
+      assert.equal(banco().t('bookings').filter(x => x.checkin === '2026-10-25' && x.status !== 'cancelada').length, 0, 'e não vira reserva-fantasma');
+      await lerStays(cal(ev('aaa2', '20261101T140000Z', '20261110T100000Z', 'REFORMA', 'QW01J')));
+      assert.equal(banco().t('tasks')[0].feito, true);
+      assert.deepEqual(est(), {});
+    });
+  });
+  test('reler não duplica; o que sumiu do feed vira cancelado; feed só com fim de janela não cancela à toa', async () => {
+    novoBanco(comCron({ calendar_sources: [FS] }));
+    await lerStays();
+    await lerStays();
+    assert.equal(banco().t('bookings').length, 2);
+    limparRede();
+    await lerStays(cal(ev('aaa1', '20261025T140000Z', '20261028T100000Z', '')));
+    assert.equal(banco().t('bookings').find(x => x.uid_externo === 'fs:aaa2').status, 'cancelada');
+    assert.equal(banco().t('bookings').find(x => x.uid_externo === 'fs:aaa1').status, 'confirmada');
   });
 });
