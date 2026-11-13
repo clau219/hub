@@ -212,10 +212,13 @@ async function conferirStays(sb: any, f: any, hoje: string, naStays: Set<string>
   const { data: prop } = await sb.from('properties').select('nome').eq('id', casa).maybeSingle();
   const nomeCasa = prop?.nome || casa;
   const { data: diretas } = await sb.from('bookings').select('id,checkin,checkout,hospede,status,origem')
-    .eq('property_id', casa).is('uid_externo', null).neq('status', 'cancelada').gte('checkin', hoje);
+    .eq('property_id', casa).is('uid_externo', null).neq('status', 'cancelada').gte('checkout', hoje);
+  // Ativas = saída de hoje em diante, INCLUINDO quem já está hospedado: o bloqueio dela na Stays não está "preso"
+  // (13/11/2026: a reserva do Anderson, em andamento, virou falso "apagar o bloqueio QY01J" quando o filtro era a entrada)
   const ativas = (diretas || []).filter((b: any) => b.origem !== 'airbnb');
   const problemas: Record<string, { titulo: string; corpo: string }> = {};
   for (const b of ativas) {
+    if (b.checkin < hoje) continue; // "não chegou na Stays" só para quem ainda vai entrar
     if (naStays.has(`${b.checkin}|${b.checkout}`)) continue;
     const quem = b.status === 'bloqueio' ? 'Bloqueio do Hub' : `Reserva direta${b.hospede ? ' de ' + String(b.hospede).trim().split(/\s+/)[0] : ''}`;
     problemas[`falta:${b.id}`] = {

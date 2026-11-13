@@ -259,6 +259,20 @@ describe('Stays → reservas (link de exportação do anúncio)', () => {
     await lerStays(cal(ev('aaa1', '20261025T140000Z', '20261028T100000Z', ''), ev('sent', '20271123T140000Z', '20271124T100000Z', '', 'ZQ01J')));
     assert.deepEqual(banco().t('bookings').map(b => b.uid_externo), ['fs:aaa1']);
   });
+  test('conferência: reserva direta em andamento (entrou ontem) não vira "bloqueio preso"', async () => {
+    relogio.definir('2026-10-26T15:00:00Z'); // hóspede da d1 (25/10–28/10) está na casa
+    novoBanco(comCron({ calendar_sources: [FS], properties: [{ id: 'QS39', nome: 'Casa Frida' }], bookings: [
+      { id: 'd1', uid_externo: null, property_id: 'QS39', checkin: '2026-10-25', checkout: '2026-10-28', status: 'confirmada', origem: 'direto', hospede: 'Anderson' },
+    ] }));
+    // o eco já tinha sido reconhecido quando a reserva era futura
+    banco().t('app_config').push({ key: 'stays_ecos', value: JSON.stringify({ 'fs:aaa1': { casa: 'QS39', checkin: '2026-10-25', checkout: '2026-10-28', bk: 'd1', codigo: 'RG01J' } }) });
+    await lerStays();
+    relogio.avancar(60 * 60e3);
+    await lerStays();
+    assert.equal(JSON.parse(banco().t('app_config').find(c => c.key === 'stays_conferencia')?.value || '{}')['preso:fs:aaa1'], undefined);
+    assert.equal((banco().t('tasks') || []).length, 0);
+    relogio.definir('2026-10-19T15:00:00Z');
+  });
   describe('conferência Hub × Stays', () => {
     const PUSH = { app_secrets: [{ key: 'cron_token', value: comCron({}).app_secrets[0].value }, { key: 'vapid_public', value: 'pub' }, { key: 'vapid_private', value: 'priv' }],
       push_subscriptions: [{ id: 'p1', endpoint: 'https://push/1', p256dh: 'x', auth: 'y' }], properties: [{ id: 'QS39', nome: 'Casa Frida' }] };
